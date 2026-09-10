@@ -2,16 +2,15 @@
 
 The product tracker: what is open, what was declined, known limits, and verification debt. Shipped
 work is not tracked here — it is described as-built in `docs/ARCHITECTURE.md`. Created 2026-07-26;
-current as of v1.22.0.
+current as of v1.22.0 (updated September 2026).
 
 Items are `R<n>`, assigned once, never reused. **P1** user-visible defect or silent failure · **P2**
 real capability gap · **P3** nice to have · **P4** parity for its own sake. Nothing here is a
 commitment or a date.
 
 Keep this at tracking altitude — item, priority, blocker, and any catch an implementer would trip
-over. Design and technical rationale live in `docs/ARCHITECTURE.md` and the `AGENTS.md` architecture
-map; release history lives in `CHANGELOG.md` and git. Refer to code by **symbol, never by line number** —
-anchors rot every release.
+over. Design and technical rationale live in `docs/ARCHITECTURE.md`; release history lives in `CHANGELOG.md`
+and git. Refer to code by **symbol, never by line number** — anchors rot every release.
 
 ---
 
@@ -24,10 +23,11 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 established which invariant — is as-built and lives in `docs/ARCHITECTURE.md` § 12; a completed item's
 durable outcome moves there and its row leaves this file.
 
-The Open items sit on the same arc: R18 closes the loop on v1.21's self-update investment;
-R9 extends preset identity beyond the repo;
-R10 is the next sensor tier and the first to need a private API — which is exactly why it waits;
-R8 is parity only.
+The Open items sit on the same arc:
+- R18 closes the loop on v1.21's self-update investment (periodic discovery);
+- R9 extends preset identity beyond the repo;
+- R10 is the next sensor tier and the first to need a private API — which is exactly why it waits;
+- R8 is parity only.
 
 ## Open
 
@@ -36,8 +36,8 @@ Ordered by ROI, highest first — value against cost, not just the priority band
 | ID | Item | Pri | Blocked by |
 |---|---|---|---|
 | R18 | **Update discovery is once-per-launch.** The passive probe fires only from `applicationDidFinishLaunching` (a deliberate MVP cut, per the comment at the call site), so a start-at-login instance running for weeks never learns a release exists — the population most likely to be stale is the one the probe never reaches. `startUpdateProbe(userInitiated: false)` is already fail-silent and re-entrancy-guarded (`updatePhase`), so a periodic re-fire reuses everything. | P3 | — |
-| R9 | **Preset art is repo-only** (`gifs/presets.json`); no user art directory, no menu-bar highlight toggle. A custom GIF works per-launch only. | P4 | — |
-| R10 | **GPU power / ANE / package power readers.** The one tier needing a private, unheadered API, which every current reader avoids. Also the first needing a long-lived subscription rather than a point read — its own design pass, not an add-a-reader task. Assessed 2026-08-02: low ROI — of the three readings only ANE is a genuinely new signal (GPU power tracks the utilization reader; package power correlates with CPU/temperature, and battery mA already shows whole-system draw), against a permanent private-API maintenance surface and per-chip verification debt. Waits for a concrete user report wanting ANE/power visibility. | P4 | — |
+| R9 | **Preset art is repo-only** (`gifs/presets.json`); no user art directory (`~/.config/menubar-load-runner/presets/`), no menu-bar highlight toggle. A custom GIF works per-launch only. | P4 | — |
+| R10 | **GPU power / ANE / package power readers.** The one tier needing a private, unheadered API (`IOReport`), which every current reader avoids. Also the first needing a long-lived subscription rather than a point read — its own design pass, not an add-a-reader task. Assessed 2026-08-02: low ROI — of the three readings only ANE is a genuinely new signal (GPU power tracks the utilization reader; package power correlates with CPU/temperature, and battery mA already shows whole-system draw), against a permanent private-API maintenance surface and per-chip verification debt. Waits for a concrete user report wanting ANE/power visibility. | P4 | — |
 | R8 | **English only** — zero `NSLocalizedString`. | P4 | — |
 
 ## Declined
@@ -50,6 +50,10 @@ the behavior being missed.
 | Item | Why not |
 |---|---|
 | An `.app` bundle · notarization · Homebrew cask · Sparkle · a URL scheme / automation interface | **Decided 2026-07-26: stays a source-built, bundle-less binary.** Notarization is $99/yr forever for a free OSS utility, and Homebrew disables unsigned casks on 2026-09-01 — ad-hoc signing can't substitute, since identity churns on every recompile. Bundling would also retire the git-checkout self-update and break the CLI-first interface, which a `.app` can't take argv for. |
+| Closed-lid (clamshell) sleep prevention via `pmset disablesleep` (like Sleepless / keepresso) | **Violates the unprivileged execution and clean-teardown tenets.** Modifying global sleep policy via `pmset` requires root privileges and mutates system-wide NVRAM settings. If the process is abruptly killed, sleep remains permanently disabled on the user's Mac. Subprocess `caffeinate -di -w <pid>` guarantees clean automatic kernel reclamation upon exit without leaving system state altered. |
+| Per-process CPU/RAM breakdown table (like Stats v3 or Activity Monitor) | **Violates the self-throttling and minimal-footprint tenets.** Walking the full Mach task list and sampling per-PID metrics consumes 1–3% continuous CPU, turning the observer into the workload it measures. Users requiring per-process profiling are already served by Activity Monitor or Stats. |
+| Online community asset store / in-app GIF downloader (like RunCat Runner Gallery) | **Violates the self-contained, audit-friendly dotfile philosophy.** Introduces remote asset downloading, network attack surfaces, and untrusted image ingestion into the menu-bar runtime. Local GIF files and `gifs/presets.json` (or R9 user directories) keep the footprint transparent and git-manageable. |
+| Arbitrary external metric polling / custom JSON telemetry (like RunCat Neo Custom Metrics) | **Out of scope and over-featured.** MenuBar Load Runner is an unprivileged hardware load visualizer driven by direct kernel/Mach/SMC reads, not a general-purpose widget engine. Ingesting arbitrary external files introduces schema maintenance, file-watching complexity, and unbounded failure modes that dilute the self-contained, self-throttled core thesis. |
 | Release Keep Awake on fast user switching | Contradicts a chosen default: the window is a *time* promise, not a *task* promise — an unattended job in a background session is still running. |
 | Any transient announcement of a Keep Awake event (HUD panel, notification) | A ~2s panel is gone by the time it matters — the pause worth reporting fires overnight, on battery, unattended, which is why R7 ships a persistent paused tone instead. System notifications are independently impossible: they need a bundle, which the row above declines. |
 
@@ -62,7 +66,7 @@ the behavior being missed.
 | Clamshell sleep can't be prevented | `caffeinate` cannot inhibit it. |
 | Below 5% on battery the Mac sleeps regardless | Deliberate floor under the arm-anyway override: an explicit "anyway" is honored from 20% to 5%, not into a hard power-off. |
 | The interpreted-`swift` fallback isn't singleton-guarded | Runs only when `swiftc` fails; the guard matches the compiled binary's path. |
-| The menu-bar label may not sit adjacent to the icon on a **full** bar | macOS owns status-item placement and offers no reorder API — verified 2026-07-29 (6/6 scattered on a notched built-in display, 100% correct on a roomy external). Creation order decides *intent*; the bar decides the outcome. The v1.16.0 no-jitter guarantee is unaffected; `tests/qa.sh` §3c reports NOTE on scatter, so adjacency goes **unverified** on such a machine. Full account: `AGENTS.md` § menu-bar label. |
+| The menu-bar label may not sit adjacent to the icon on a **full** bar | macOS owns status-item placement and offers no reorder API — verified 2026-07-29 (6/6 scattered on a notched built-in display, 100% correct on a roomy external). Creation order decides *intent*; the bar decides the outcome. The v1.16.0 no-jitter guarantee is unaffected; `tests/qa.sh` §3c reports NOTE on scatter, so adjacency goes **unverified** on such a machine. Full account: `docs/ARCHITECTURE.md` § 6. |
 
 ## Verification debt
 
@@ -72,8 +76,8 @@ the behavior being missed.
 | Battery Threshold (R5) click-path residue | Code complete and mechanically verified for the flag/env/persistence halves (`qa.sh` §3a/§3b, 18 cases each). **Click-only and unverified:** apply-immediately, override-retirement, the red band's *rendering*, the mark's position (AX can't read a custom `onStateImage`), and the threshold submenu's own row list (`menu-dump` descends one level; that submenu is two deep). |
 | Per-user single-instance guard (`pgrep -U`) | Flag semantics proven in isolation; same-user rejection tested live. **Cross-user unverified** — needs a second account + fast user switching. |
 | Keep Awake radio-mark glyphs, and the `This App` header's styling | Eyes-only. `AXMenuItemMarkChar` is empty (custom `onStateImage`), so AX can't read the mark; a synthesized `CGEvent` click renders the menu for a screenshot but needs screen coordinates AX reports unreliably across displays — deliberately checked ad hoc by looking, not by a script. Menu *structure* is mechanical (`tests/menu-dump.applescript`) and the v1.19.1 two-section order verified 2026-07-31. |
-| R13 is category-first ("no other menu-bar util tells you") | Only **KeepingYouAwake 1.6.8** was inspected; Amphetamine and the standalone assertion-viewers are unchecked. The claim stays out of `README.md` and `docs/cover.html` until settled — `pmset -g assertions` is one command, so a wrong category claim is worse than none. |
-| `ThroughputScaler` hysteresis, `SemVer` / `highestTag` parsing, `Restarter`'s argv + mode mapping | **No check at all.** These have no reachable functional path yet: the scaler needs sustained synthetic net/disk load to move its ceiling; the tag parse needs a checkout whose `origin` has canned `v*` tags; `Restarter`'s launchd branch needs a real LaunchAgent job. Don't "restore coverage" by re-adding a re-ported copy of the logic — see `AGENTS.md` § Testing rules. |
+| R13 is category-first ("no other menu-bar util tells you") | **KeepingYouAwake 1.6.8** and **RunCat Neo** were inspected; Stats and standalone assertion-viewers do not inspect `IOPMCopyAssertionsByProcess` for foreign holders. Amphetamine remains unchecked. The claim stays out of `README.md` and `docs/cover.html` until settled — `pmset -g assertions` is one command, so a wrong category claim is worse than none. |
+| `ThroughputScaler` hysteresis, `SemVer` / `highestTag` parsing, `Restarter`'s argv + mode mapping | **No check at all.** These have no reachable functional path yet: the scaler needs sustained synthetic net/disk load to move its ceiling; the tag parse needs a checkout whose `origin` has canned `v*` tags; `Restarter`'s launchd branch needs a real LaunchAgent job. Don't "restore coverage" by re-adding a re-ported copy of the logic — see `CLAUDE.md` § 测试与回归约定. |
 | The in-app update sequence: pull → `Builder.precompile` → Restart | **Click-only, unverified.** The pieces the launcher owns *are* covered — `qa.sh` §6 asserts `--precompile` builds and launches nothing, that a live instance survives the rebuild (the temp+rename), and that a rejected launch doesn't compile. What no run reaches is the modal path that drives them: the `Building vX.Y.Z…` row, the build-failed wording, and the restart actually being fast afterwards. Reaching it needs a checkout whose `origin` carries a newer canned tag — the same harness the row above wants — so it is walked by hand on the *previous* version's binary: `Check for Updates…` must become `Update available: vX.Y.Z`, the app must keep running while it pulls and compiles (reopen the menu: the row reads `Building vX.Y.Z…`), and **Restart** must come back within a second or two leaving exactly one instance. `rm -rf "$(getconf DARWIN_USER_CACHE_DIR)/clang/ModuleCache"` first to exercise the cold path — the *build* should then take ~30s and the restart still shouldn't. The failure being guarded against is silent and bimodal: with a warm module cache a deferred build costs ~7s and looks fine, so a regression only shows on the cold path. |
 | Four §3e cases gated on a **quiet machine** (no display holder / no assertions at all) | §3e NOTEs each rather than faking a quiet system: R7's `tint=paused`, R16's `Nothing holding sleep`, attribution when another display holder sorts first, and the idle-only reading. Their states differ — R7's tone **is** confirmed by hand (2026-08-01: three consecutive `tint=paused` ticks, no `-w` child), so don't read its NOTE as the tone being unverified; the other three are unverified locally. The method for R7's tone, since anything holding the display masks a paused line entirely: `screencapture -x -R<x>,<y>,<w>,<h>` a strip of the bar (screen coords from `LOG_SLOTS`) and composite `bg×(1−α) + tint×α` to rank candidate alphas — a **proxy**, and where it and a direct look disagree the look decides (it did: the shipped `0.22` over the ratio's `0.30`). Don't soften any of them to make a run pass. |
 | `SMCClient` holds exactly one `io_connect_t` | **Structural only** — IOKit connections aren't visible to `lsof`/`ps`, and counting `IOServiceOpen` calls needs dtrace (root + SIP off), so *exactly one* rests on the code's shape: one `static let shared`, one `openSMC()` call site, one write to `connection`. The weaker sharing-works claim **is** covered: fan and temperature driven together in one process, both correct (2026-08-01). Don't upgrade that into connection-counting, and don't "cover" the remainder with a re-ported copy of the client. |

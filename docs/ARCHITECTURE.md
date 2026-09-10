@@ -6,6 +6,42 @@
 
 ---
 
+## 0. Document Routing & ADLC Taxonomy (Canonical Ground Truth)
+
+All repository documentation lives in `docs/`. The repository root holds only `README.md` (user entry point) and `CLAUDE.md` / `AGENTS.md` (agent instructions).
+
+**This document (`docs/ARCHITECTURE.md`) is the canonical routing umbrella and as-built architectural ground truth.** Detailed subsystem designs and invariants reside here rather than in `CLAUDE.md`.
+
+```
+   docs/
+   +-- ARCHITECTURE.md          <-- You are here: system topology, subsystem specs (§1–§12),
+   |                              telemetry algorithms, invariants, parameter reference.
+   +-- ROADMAP.md                 The standing product tracker: candidate backlog (R<n>),
+   |                              declined proposals with rationale, and verification debt.
+   +-- RESEARCH-<topic>.md        External peer surveys and ecosystem research (e.g. peer-survey.md);
+   |                              facts-only, dated evidence outside the ADLC landing chain.
+   +-- PLAN-<topic>.md            Active feature / issue design and implementation plans;
+   |                              distilled into ARCHITECTURE.md upon landing, then `git rm` deleted.
+   +-- cover.html, media/         Public landing page and visual assets.
+   +-- .claude/skills/<name>/     Agent-executable operational workflows (build-visuals, etc.).
+```
+
+### Document Taxonomy & Lifecycle Table
+
+| Document Type | Naming Convention | Lifecycle & Purpose |
+|---|---|---|
+| **Roadmap** | `docs/ROADMAP.md` | Single standing tracker for open candidate backlog (`R<n>`), declined proposals, and verification debt. Never deleted. |
+| **Plan / Proposal** | `docs/PLAN-<topic>.md` | Active feature design, options, and verification checklist. **Absorbed into `docs/ARCHITECTURE.md` upon landing, then immediately deleted (`git rm`)**. |
+| **As-Built Architecture** | `docs/ARCHITECTURE.md` | Canonical description of what the code actually is and why. Updated only after code lands and stabilizes. |
+| **External Research** | `docs/RESEARCH-<topic>.md` | Public surveys and external benchmarks. Does not enter the ADLC landing cycle; retained as dated evidence. |
+
+- **Strict Document Kinds:** No invented prefixes (`REPORT-`, `DESIGN-`, `TODO-`, `LESSONS`, `RUNBOOK-`, `JOURNAL`).
+- **One Fact, One Place:** Do not duplicate subsystem contracts across README, help text, and docs. State facts once and cross-reference.
+- **Pure ASCII Diagrams:** All system diagrams must use standard ASCII characters (`+ - | = v ^ < >`), avoiding box-drawing characters.
+- **Editing Rule:** Always use the dedicated Edit tool rather than `sed` to avoid mangling formatting.
+
+---
+
 ## 1. System Topology & Architectural Philosophy
 
 MenuBar Load Runner is a single-file, unbundled native macOS menu bar application written in Swift and AppKit. It visualizes real-time hardware telemetry by driving the playback rate of an animated status-bar GIF and providing an integrated live diagnostic dashboard with built-in sleep inhibition.
@@ -342,6 +378,15 @@ macOS orders status items right-to-left based on creation time with no reorderin
 - Two label items are allocated at launch: `labelItemRight` (before animation item) and `labelItemLeft` (after animation item).
 - The active side gets the computed reservation length; the inactive side is collapsed to `length = 0`.
 
+### 6.3 Keep Awake Window Countdown Display
+
+When Keep Awake is armed with a windowed duration (`keepAwakeDeadline != nil`):
+- **Menu Bar Presentation:** The countdown timer (`MM:SS` or `HH:MM:SS`) is rendered in the active status bar slot (`activeLabelItem`).
+  - When `labelMode == .off`: The slot dynamically reveals the countdown (e.g., `29:58`), collapsing back to length 0 upon timer expiry or disarming.
+  - When `labelMode == .value` or `.custom`: Both telemetry/custom text and the countdown are displayed together (e.g., `CPU 45%  29:58` when placed left of the icon, or `29:58  CPU 45%` when placed right), positioning the countdown immediately adjacent to the runner icon.
+- **Zero-Jitter Template Reservation:** `labelSlotWidth` accounts for the countdown template (`88:88` or `88:88:88`), ensuring that second-by-second decrements introduce $0\text{ pt}$ lateral shift.
+- **1-Second Countdown Ticker:** A unified 1-second timer (`syncKeepAwakeCountdownTicker()`) drives live updates while a windowed countdown is active on the bar, stopping when disarmed or expired to preserve the self-throttling footprint.
+
 ---
 
 ## 7. Integrated Sleep Prevention (`SleepPreventer`) & Assertion Monitor
@@ -382,6 +427,7 @@ Sleep inhibition integrates directly into the visualizer while observing system-
 - **Subprocess Execution:** Spawns `/usr/bin/caffeinate -di -w <app_pid> [-t <seconds>]`.
 - **Display + Idle Sleep:** Uses `-di` (preventing display and idle sleep).
 - **Intent vs Running State:** `SleepPreventer` maintains `isEnabled` (user intent) separately from `isRunning` (child process active). When suspended by low battery or thermal events, intent remains set, and the child respawns automatically when conditions normalize.
+- **Menu Bar Countdown Display:** Windowed assertions display a real-time seconds-resolution countdown on the active status item slot (see § 6.3).
 
 ### 7.2 Safety Floor & Configurable Thresholds
 
