@@ -290,7 +290,8 @@ private enum Restarter {
         batteryThresholdPercent: Int,
         speedMultiplierOverride: Double?,
         showAllSources: Bool,
-        keepAwakeIndefinite: Bool
+        keepAwakeIndefinite: Bool,
+        keepAwakeBoundPID: pid_t?
     ) -> [String] {
         var args: [String] = []
         if !presetOrPath.isEmpty { args.append(presetOrPath) }
@@ -302,6 +303,10 @@ private enum Restarter {
         }
         if showAllSources { args.append("--show-all-sources") }
         if keepAwakeIndefinite { args += ["--keep-awake", "on"] }
+        // A pid binding is forwarded for the mirror-image reason the persisted one is dropped: an
+        // in-app restart does not reboot the Mac, so the monitored job is still running and its pid
+        // still means what it meant a second ago.
+        if let keepAwakeBoundPID { args += ["--keep-awake-pid", String(keepAwakeBoundPID)] }
         return args
     }
 
@@ -791,6 +796,24 @@ private enum MenuTitle {
     }
     static func keepAwakePausedRow(_ reason: String) -> String { "paused — \(reason)" }
 
+    // Keep Awake bound to a process. It sits in the Duration group and reads like its siblings ("Until
+    // turned off") because that is what it is: a window whose end is an event rather than a clock.
+    // The subject is named on every surface — parent row, status row — rather than just "a process":
+    // an assertion nobody can attribute is the thing the Other Assertions section exists to fix, and
+    // this app must not become that for its own hold.
+    static let keepAwakeUntilProcessExits = "Until a process exits…"
+    // "claude (41293)" when the name resolved, the bare pid when it didn't (a process that vanished
+    // between the arm and the render, or one whose path we can't read).
+    static func keepAwakeProcessLabel(pid: pid_t, name: String?) -> String {
+        guard let name, !name.isEmpty else { return "PID \(pid)" }
+        return "\(name) (\(pid))"
+    }
+    static func keepAwakeWithProcess(_ label: String) -> String { "\(keepAwake): \(label)" }
+    static func keepAwakePausedWithProcess(_ label: String) -> String {
+        "\(keepAwake): \(label) \(keepAwakePausedSuffix)"
+    }
+    static func keepAwakeProcessRow(_ label: String) -> String { "until \(label) exits" }
+
     // "Other Assertions" — the read-only section listing OTHER processes' sleep assertions. The row is
     // owner + raw assertion type and nothing else. Rendering the type verbatim rather than glossing it
     // ("prevents idle sleep") is the whole discipline of the section: the gloss is an effect claim this
@@ -1018,6 +1041,71 @@ private enum KeepAwakeColor: Int, CaseIterable {
     }
 }
 
+// Unprivileged process identity, for Keep Awake's process binding (--keep-awake-pid). Three
+// questions, each answerable for a process the calling user owns without root, a TCC grant or a `ps`
+// fork: is this pid still running, what is it called, and which running process does a typed name mean.
+//
+// `kill(pid, 0)` is the liveness test: EPERM means "alive but not yours", so only ESRCH is death.
+// It can answer about the pid NUMBER and nothing more — a recycled pid reads as alive — which is why
+// the binding's primary signal is the kqueue exit event and this is only its fallback (see
+// startKeepAwakeProcessMonitor).
+private enum ProcessProbe {
+    static func isAlive(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    // The executable's file name ("claude", "swiftc"). proc_pidpath rather than kinfo_proc's p_comm,
+    // which truncates at 16 bytes and would show a long binary's name cut mid-word in the menu.
+    static func name(of pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        let component = (String(cString: buffer) as NSString).lastPathComponent
+        return component.isEmpty ? nil : component
+    }
+
+    // Resolve a typed name to a running process: case-insensitive substring, NEWEST match wins. Newest
+    // is the useful tie-break for the case this exists for — "keep the Mac awake for the agent I just
+    // started" — where the older shells and helpers sharing the name are exactly the wrong answer.
+    //
+    // Scoped to the calling user's own processes (KERN_PROC_UID), matching the launcher's singleton
+    // guard: the menu bar is per-session, and another user's pid is one this user can't see or kill.
+    // Both the full name and p_comm are matched, so a name typed as the truncated form still lands.
+    static func newestMatch(_ needle: String) -> (pid: pid_t, name: String)? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_UID, Int32(bitPattern: getuid())]
+        var size = 0
+        guard sysctl(&mib, UInt32(mib.count), nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        // One extra slot: the process list can grow between the sizing call and the read, and sysctl
+        // then fills what fits rather than failing.
+        var entries = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 1)
+        guard sysctl(&mib, UInt32(mib.count), &entries, &size, nil, 0) == 0 else { return nil }
+
+        let own = getpid()
+        var best: (pid: pid_t, name: String, started: timeval)?
+        for entry in entries.prefix(size / stride) {
+            let pid = entry.kp_proc.p_pid
+            guard pid > 0, pid != own else { continue }
+            var comm = entry.kp_proc.p_comm
+            let short = withUnsafePointer(to: &comm) {
+                String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self))
+            }
+            let full = name(of: pid) ?? short
+            guard full.range(of: needle, options: .caseInsensitive) != nil
+                    || short.range(of: needle, options: .caseInsensitive) != nil else { continue }
+            let started = entry.kp_proc.p_starttime
+            if let best,
+               (best.started.tv_sec, best.started.tv_usec) >= (started.tv_sec, started.tv_usec) {
+                continue
+            }
+            best = (pid, full, started)
+        }
+        guard let best else { return nil }
+        return (best.pid, best.name)
+    }
+}
+
 // A Keep Awake window: indefinite (the default — runs until turned off or the app quits) or a fixed
 // length, after which `caffeinate -t` exits by itself and the Mac is free to sleep again. A registry
 // like KeepAwakeColor, so the menu rows, the radio-selection check, the arming path, and the
@@ -1122,6 +1210,11 @@ private enum KeepAwakeDuration: Equatable {
 private enum KeepAwakeLaunchOption {
     case off
     case window(KeepAwakeDuration)
+    // --keep-awake-pid: hold until that process exits. A third case rather than a sibling field on
+    // Config, so a window and a pid binding are mutually exclusive BY CONSTRUCTION and the launch
+    // precedence stays the one switch in applyLaunchKeepAwakeState — there is no pair of fields for a
+    // later reader to find both set.
+    case boundPID(pid_t)
 }
 
 // Why keep-awake is suspended right now, or nil to run. This replaced a plain `Bool`, because the
@@ -1238,6 +1331,7 @@ private struct Config {
         var labelArg: String?
         var loadSourceArg: String?
         var keepAwakeArg: String?
+        var keepAwakePIDArg: String?
         var batteryThresholdArg: String?
         var updateCheckEnabled = true
         var showAllSources = false
@@ -1276,6 +1370,13 @@ private struct Config {
                     return nil
                 }
                 keepAwakeArg = value
+            case "--keep-awake-pid":
+                guard let value = iterator.next() else {
+                    fputs("Invalid value for --keep-awake-pid. Expected the pid of a running process (e.g. --keep-awake-pid $!).\n", stderr)
+                    printUsage()
+                    return nil
+                }
+                keepAwakePIDArg = value
             case "--battery-threshold":
                 guard let value = iterator.next() else {
                     fputs("Invalid value for --battery-threshold. Expected a whole percent (e.g. 20) or off.\n", stderr)
@@ -1370,6 +1471,30 @@ private struct Config {
             }
         }
 
+        if keepAwakePIDArg == nil {
+            keepAwakePIDArg = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID"]
+        }
+        // Resolved AFTER --keep-awake so it can win the collision: a pid binding is the more specific
+        // intent of the two, and it is the one with a stopping condition the caller can point at.
+        //
+        // Same degrade-don't-die contract as every keep-awake argument above (see --keep-awake): a pid
+        // that is malformed or already gone warns and launches with keep-awake off, rather than costing
+        // the user their menu-bar app. The gone case is a race, not a typo — `--keep-awake-pid $!` for a
+        // job that finished during launch — and "the work is already done" is exactly `off`. Like a bad
+        // --keep-awake value it still counts as the flag being given, so it also suppresses the restore
+        // of a persisted window.
+        if let raw = keepAwakePIDArg?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
+            if let pid = pid_t(raw), ProcessProbe.isAlive(pid) {
+                if case .window = keepAwake {
+                    fputs("--keep-awake-pid \(pid) overrides --keep-awake: sleep prevention now ends when that process does.\n", stderr)
+                }
+                keepAwake = .boundPID(pid)
+            } else {
+                fputs("Unrecognized --keep-awake-pid \"\(raw)\"; launching with keep-awake off. Expected the pid of a process that is still running.\n", stderr)
+                keepAwake = .off
+            }
+        }
+
         if batteryThresholdArg == nil {
             batteryThresholdArg = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD"]
         }
@@ -1419,12 +1544,13 @@ private struct Config {
         let envBin = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_BIN_NAME"]
         let bin = (envBin?.isEmpty == false) ? envBin! : URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
         print("MenuBar Load Runner \(AppInfo.version)")
-        print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
-        print("   or: MENUBAR_LOAD_RUNNER_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
+        print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
+        print("   or: MENUBAR_LOAD_RUNNER_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
         print("Load source: which reader drives animation speed (default cpu). Also via MENUBAR_LOAD_RUNNER_LOAD_SOURCE; unknown values fall back to cpu.")
         print("Label: an optional second menu-bar slot. --label value shows the active source's live reading; --label <text> (up to \(Tuning.labelMaxChars) chars) shows a fixed label; --label off (default) shows nothing. Also via MENUBAR_LOAD_RUNNER_LABEL; switchable from the menu.")
         print("Show all sources: --show-all-sources (or MENUBAR_LOAD_RUNNER_SHOW_ALL=1) starts with the menu's \"Other Sources\" list expanded, sampling every available reader and showing each as a live row; click a row to switch the driving source. Collapsed by default (active source only). Toggle from the menu's disclosure header.")
         print("Keep awake: --keep-awake <off|on|30m|2h|1h30m> arms sleep prevention at launch (a unit is required; up to \(Tuning.keepAwakeMaxHours)h). Also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE. Off by default; switchable from the menu. An armed window is saved and resumed on the next launch — passing this flag (even as off) overrides what was saved.")
+        print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
         print("Battery threshold: --battery-threshold <pct|off> sets the charge at or below which Keep Awake releases on battery (default \(Int(Tuning.batteryLowThresholdDefault * Tuning.percentScale))%; off never releases on charge alone). Whole percents only — 20 or 20%, not 0.20. Also via MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD. Out-of-range values are clamped to \(Int(Tuning.batteryThresholdMin * Tuning.percentScale))–\(Int(Tuning.batteryThresholdMax * Tuning.percentScale))%, and below \(Int(Tuning.batteryCriticalThreshold * Tuning.percentScale))% on battery the Mac sleeps regardless — that floor is not configurable.")
         print("Width: the menu-bar item sizes itself to the GIF's aspect ratio at menu-bar height — not configurable.")
         print("Default speed: auto (preset-dependent; per-preset ranges defined in gifs/presets.json).")
@@ -1444,7 +1570,11 @@ private struct PersistedState: Codable {
         // four fresh hours on the next launch would silently extend every window across a reboot;
         // storing the end instant means what comes back is the window the user actually asked for,
         // already shortened by the time the app was down (and already expired if it elapsed).
-        // nil when Keep Awake is indefinite.
+        // nil when Keep Awake is indefinite, and also when the hold is bound to a process
+        // (--keep-awake-pid). That binding is deliberately NOT persisted — pids are recycled, so a
+        // restored one could bind to an unrelated process or to nothing at all — and it needs no rule
+        // of its own to stay unrestored: `enabled: true` with no deadline is exactly the saved shape
+        // applyLaunchKeepAwakeState already refuses to resume.
         var deadline: Date?
         // The user's INTENT (SleepPreventer.isEnabled), never the transient running state: a
         // battery/thermal condition-suspend kills caffeinate while intent stands, and persisting
@@ -3135,6 +3265,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     private var activeLabelItem: NSStatusItem? {
         labelSide == .left ? labelItemLeft : labelItemRight
     }
+    // Live countdown string for the active Keep Awake window, if one is armed and running.
+    // nil when indefinite, bound to a process, expired, or disabled.
+    private var activeKeepAwakeCountdownText: String? {
+        guard sleepPreventer.isEnabled, let remaining = keepAwakeRemainingSeconds, remaining > 0 else {
+            return nil
+        }
+        return KeepAwakeDuration.countdown(remaining)
+    }
     // Menu-bar font with monospaced digits: a reading's width then depends only on how MANY characters
     // it has, not which digits it happens to show ("111%" and "888%" measure the same). That is what
     // lets one reserved width hold for a whole shape, and it stops the digits wobbling within it.
@@ -3183,6 +3321,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // space is disjoint from the tint group's (which selectKeepAwakeOption owns) despite the overlap.
     private var keepAwakeDurationItems: [NSMenuItem] = []
     private var keepAwakeCustomDurationItem: NSMenuItem!
+    private var keepAwakeProcessItem: NSMenuItem!
     private var keepAwakeStatusItem: NSMenuItem!
     // The status row's own separator, hidden with it — it is the submenu's last row, and a trailing
     // separator left behind by a hidden row draws as a rule under nothing.
@@ -3203,9 +3342,21 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // countdown readout and the `-t` balance a respawn passes. caffeinate performs the release itself,
     // so nothing polls this for expiry.
     private var keepAwakeDeadline: Date?
-    // 1s ticker that runs ONLY while the menu is open, so the countdown reads as a countdown (the 2s
-    // load tick can't render seconds smoothly). See startKeepAwakeCountdownTicker.
+    // Tracks whether the info menu is currently open.
+    private var isMenuOpen = false
+    // 1s ticker that runs when a countdown is active in the menu bar, or while the menu is open
+    // so the countdown reads as a countdown. See syncKeepAwakeCountdownTicker.
     private var keepAwakeCountdownTicker: Timer?
+    // The process the hold is bound to (--keep-awake-pid, or the menu prompt), and its name for the
+    // rows that attribute the hold. MUTUALLY EXCLUSIVE with keepAwakeDeadline: an event-ended window
+    // has no wall clock, so caffeinate gets no `-t` and the countdown surfaces stay quiet. Both are
+    // cleared together with the intent by keepAwakeBoundProcessDidExit / clearKeepAwakeBinding.
+    private var keepAwakeBoundPID: pid_t?
+    private var keepAwakeBoundProcessName: String?
+    // kqueue exit watch on that pid — the primary release signal (zero latency, and immune to pid
+    // recycling, because kqueue holds the process rather than the number). The 2s tick re-checks
+    // liveness as a fallback for the case this can't cover: a source that failed to register at all.
+    private var keepAwakeProcessSource: DispatchSourceProcess?
     // Keep-awake bar tint, user-selectable via the Keep Awake submenu. Menu-only (no CLI/env), but
     // persisted: it is cosmetic and carries no sleep consequence, so it is restored unconditionally
     // at launch even when the saved window isn't.
@@ -3639,6 +3790,17 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         keepAwakeCustomDurationItem.target = self
         useSelectionMark(keepAwakeCustomDurationItem)
         keepAwakeSubmenu.addItem(keepAwakeCustomDurationItem)
+        // Last in the Duration group: it IS a duration, just one measured by an event. Below Custom…
+        // because it is the least-reached row of the group, not because it is a lesser answer — for an
+        // unattended job it is the only one that isn't a guess.
+        keepAwakeProcessItem = NSMenuItem(
+            title: MenuTitle.keepAwakeUntilProcessExits,
+            action: #selector(promptKeepAwakeBoundProcess),
+            keyEquivalent: ""
+        )
+        keepAwakeProcessItem.target = self
+        useSelectionMark(keepAwakeProcessItem)
+        keepAwakeSubmenu.addItem(keepAwakeProcessItem)
 
         // Live sub-state of Keep Awake, in one row with two modes: the countdown for an armed window,
         // or why keep-awake is paused. Hidden only when there is nothing to say (running, indefinite).
@@ -4124,7 +4286,10 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             batteryThresholdPercent: Int((keepAwakeBatteryThreshold * Tuning.percentScale).rounded()),
             speedMultiplierOverride: config.speedMultiplierOverride,
             showAllSources: showAllSources,
-            keepAwakeIndefinite: sleepPreventer.isEnabled && keepAwakeDeadline == nil
+            // Bound and indefinite are exclusive: without the pid check a binding would restart as a
+            // plain `--keep-awake on`, i.e. a hold with no stopping condition at all.
+            keepAwakeIndefinite: sleepPreventer.isEnabled && keepAwakeDeadline == nil && keepAwakeBoundPID == nil,
+            keepAwakeBoundPID: keepAwakeBoundPID.flatMap { ProcessProbe.isAlive($0) ? $0 : nil }
         )
         guard let command = Restarter.restartCommand(mode: mode, appArguments: arguments, uid: getuid()),
               Restarter.spawnRestart(command: command) else {
@@ -4300,6 +4465,9 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             }
         }
 
+        // Fallback release for a pid binding whose kqueue watch never registered — see
+        // checkKeepAwakeBoundProcess. A no-op (and no syscall) when nothing is bound.
+        checkKeepAwakeBoundProcess()
         // Who else holds a sleep assertion. Sampled on the tick whether or not the menu is open, because
         // the hysteresis that keeps a renewal loop from blinking needs continuity — see the function.
         sampleOtherAssertions(now: now)
@@ -4322,6 +4490,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // Keep Awake's countdown is the one selection-state row that changes on its own, so it refreshes
         // on the tick as well as on menuWillOpen — an open menu counts down live.
         refreshKeepAwakeSelectionState()
+        syncKeepAwakeCountdownTicker()
     }
 
     // Sample whichever reader currently drives the animation, returning its 0…1 fraction (or nil
@@ -4392,6 +4561,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        isMenuOpen = true
         refreshMenuMetrics()
         refreshPresetSelectionState()
         refreshWidthInfo()
@@ -4402,26 +4572,40 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         refreshUpdateStatus()
         refreshStartAtLoginState()
         refreshFreezeAnimationState()
-        startKeepAwakeCountdownTicker()
+        syncKeepAwakeCountdownTicker()
     }
 
     func menuDidClose(_ menu: NSMenu) {
-        stopKeepAwakeCountdownTicker()
+        isMenuOpen = false
+        syncKeepAwakeCountdownTicker()
     }
 
-    // The countdown lives inside the dropdown, so it is only ever *seen* while the menu is open — which
-    // is exactly when the 2s load tick is too coarse for a seconds-resolution readout. Run a 1s ticker
-    // for the lifetime of the open menu and nothing more: no cost when closed, and it keeps the
-    // self-throttle ethos (the 2s tick still refreshes the row for the next open). `.common` mode is
-    // required — a menu puts the run loop in modal tracking, where a default-mode timer wouldn't fire.
-    private func startKeepAwakeCountdownTicker() {
-        stopKeepAwakeCountdownTicker()
-        // Our own window OR a foreign hold: the machine-state row renders our countdown too, so a running
-        // hold with no window of ours still has a row that changes (and a foreign hold can start or clear
-        // while the menu sits open). Nothing to count down at all → no ticker, as before.
-        guard keepAwakeDeadline != nil || awakeHold.isHeld || awakeHold.isPartial else { return }
+    // The countdown ticker drives the seconds-resolution readout: runs whenever a Keep Awake window is
+    // actively counting down on the menu bar, or while the dropdown menu is open with a live countdown
+    // row to render. Stops when neither applies, preserving the self-throttle / minimal-footprint ethos.
+    // `.common` mode is required so modal menu tracking doesn't block it.
+    private func syncKeepAwakeCountdownTicker() {
+        let hasActiveCountdown = activeKeepAwakeCountdownText != nil
+        let needsMenuTicker = isMenuOpen && (keepAwakeDeadline != nil || awakeHold.isHeld || awakeHold.isPartial)
+        guard hasActiveCountdown || needsMenuTicker else {
+            stopKeepAwakeCountdownTicker()
+            return
+        }
+        guard keepAwakeCountdownTicker == nil else { return }
         let ticker = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshKeepAwakeSelectionState() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.isMenuOpen {
+                    self.refreshKeepAwakeSelectionState()
+                }
+                if self.activeKeepAwakeCountdownText != nil {
+                    self.updateValueLabel()
+                } else {
+                    // Countdown elapsed while menu was closed: collapse or restore slot and stop ticker.
+                    self.applyLabelMode()
+                    self.syncKeepAwakeCountdownTicker()
+                }
+            }
         }
         keepAwakeCountdownTicker = ticker
         RunLoop.main.add(ticker, forMode: .common)
@@ -4801,14 +4985,19 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // Duration group. The armed window's row is marked; a custom length that matches no preset row
         // marks Custom… instead. With no window armed, "Until turned off" holds the mark — it describes
         // what turning Keep Awake on from here would do.
+        // A pid binding owns the whole group's mark: it cleared the window, so keepAwakeSelectedDuration
+        // has fallen back to .indefinite and would otherwise leave "Until turned off" ticked — which is
+        // a different promise (no stopping condition) from the one actually armed.
         let rows = KeepAwakeDuration.presetRows
+        let boundLabel = enabled ? keepAwakeBoundProcessLabel : nil
         var matchedPresetRow = false
         for (index, item) in keepAwakeDurationItems.enumerated() where index < rows.count {
-            let selected = rows[index] == keepAwakeSelectedDuration
+            let selected = boundLabel == nil && rows[index] == keepAwakeSelectedDuration
             if selected { matchedPresetRow = true }
             item.state = selected ? .on : .off
         }
-        keepAwakeCustomDurationItem.state = matchedPresetRow ? .off : .on
+        keepAwakeCustomDurationItem.state = (boundLabel == nil && !matchedPresetRow) ? .on : .off
+        keepAwakeProcessItem.state = boundLabel == nil ? .off : .on
 
         // Status row + parent title. Three things can be true — keep-awake is on, a window is armed,
         // a condition has it paused — so both surfaces are composed rather than branched pairwise.
@@ -4835,6 +5024,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             keepAwakeStatusItem.title = MenuTitle.keepAwakePausedRow(suspension.reasonText)
             setKeepAwakeStatusRowVisible(true)
             keepAwakeMenuItem.title = countdown.map { MenuTitle.keepAwakePausedWithWindow($0.text) }
+                ?? boundLabel.map { MenuTitle.keepAwakePausedWithProcess($0) }
                 ?? MenuTitle.keepAwakePausedBare
         } else if let countdown {
             // Monospaced digits: the countdown refreshes on the 2s tick, including while the menu is
@@ -4851,6 +5041,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             )
             setKeepAwakeStatusRowVisible(true)
             keepAwakeMenuItem.title = MenuTitle.keepAwakeRemaining(countdown.text)
+        } else if let boundLabel {
+            // There is no countdown to render — the end of this window is an event — so the row names
+            // the event instead. Plain `title` like the paused row: it never ticks, so it needs no
+            // monospaced digits, and nil the attributed form or a previous countdown keeps winning.
+            keepAwakeStatusItem.attributedTitle = nil
+            keepAwakeStatusItem.title = MenuTitle.keepAwakeProcessRow(boundLabel)
+            setKeepAwakeStatusRowVisible(true)
+            keepAwakeMenuItem.title = MenuTitle.keepAwakeWithProcess(boundLabel)
         } else {
             setKeepAwakeStatusRowVisible(false)
             keepAwakeMenuItem.title = MenuTitle.keepAwake
@@ -4858,6 +5056,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
 
         refreshMachineAwakeRow()
         refreshOtherAssertionRows()
+    }
+
+    // "claude (41293)" for every row that attributes the hold, or nil when no process is bound. One
+    // helper so the parent row, the paused variant and the status row can't drift apart.
+    private var keepAwakeBoundProcessLabel: String? {
+        guard let keepAwakeBoundPID else { return nil }
+        return MenuTitle.keepAwakeProcessLabel(pid: keepAwakeBoundPID, name: keepAwakeBoundProcessName)
     }
 
     // The status row and the separator above it are one unit: the row is the submenu's last, so leaving
@@ -4955,6 +5160,9 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         fputs("AWAKE hold=\(state) own=\(hold.ownRunning ? 1 : 0)"
               + " display=\(hold.foreignDisplayHeld ? 1 : 0) idle=\(hold.foreignIdleHeld ? 1 : 0)"
               + " owners=\(hold.foreignOwners.count) paused=\(paused ? 1 : 0)"
+              // 0 rather than an absent field when nothing is bound, so a shell can assert the release
+              // (bound_pid going 0) and not merely the arm.
+              + " bound_pid=\(keepAwakeBoundPID ?? 0)"
               + " tint=\(tint) row=\"\(hold.rowText)\"\n", stderr)
     }
 
@@ -5124,8 +5332,9 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     private func applyLabelMode() {
         guard let live = activeLabelItem, let left = labelItemLeft, let right = labelItemRight else { return }
         (live === left ? right : left).length = 0
-        guard effectiveLabelMode != .off else {
+        guard effectiveLabelMode != .off || activeKeepAwakeCountdownText != nil else {
             live.length = 0
+            live.button?.title = ""
             return
         }
         // Align the text toward the animation, so the gap that a reserved slot sometimes leaves opens
@@ -5144,15 +5353,36 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // widens the slot for that tick instead of being truncated to an ellipsis. That is the only case
     // where the width moves at all, and a wrong-looking number is worse than a rare nudge.
     private func labelSlotWidth(for text: String) -> CGFloat {
-        let reserved: String
+        let countdown = activeKeepAwakeCountdownText
+        let countdownTemplate: String? = {
+            guard countdown != nil else { return nil }
+            let isHourScale = (keepAwakeSelectedDuration.seconds ?? 0) >= 3600
+                || (keepAwakeRemainingSeconds ?? 0) >= 3600
+            return isHourScale ? "88:88:88" : "88:88"
+        }()
+
+        let baseReserved: String?
         switch effectiveLabelMode {
         case .off:
-            return 0
+            baseReserved = nil
         case .value:
-            reserved = labelWidthTemplate(for: activeLoadSource)
+            baseReserved = labelWidthTemplate(for: activeLoadSource)
         case .custom(let label):
-            reserved = label   // a fixed string is its own worst case
+            baseReserved = label   // a fixed string is its own worst case
         }
+
+        let reserved: String
+        switch (baseReserved, countdownTemplate) {
+        case let (base?, cd?):
+            reserved = (labelSide == .left) ? "\(base)  \(cd)" : "\(cd)  \(base)"
+        case let (base?, nil):
+            reserved = base
+        case let (nil, cd?):
+            reserved = cd
+        case (nil, nil):
+            return 0
+        }
+
         let width = max(measuredLabelWidth(reserved), measuredLabelWidth(text))
         return ceil(width) + Tuning.labelSlotPadding
     }
@@ -5161,48 +5391,60 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         (text as NSString).size(withAttributes: [.font: Self.labelFont]).width
     }
 
-    // Write the current label text into the live slot (no-op before the slots exist, or when off). In
-    // .value mode this is the active source's compact live reading; in .custom mode, the fixed user
-    // string. Also carries the slot's width and the Keep Awake tint (see below), so it is called both on
-    // the 2s tick and from updateKeepAwakeBar() — a toggle/suspend must recolor at once, not up to 2s
-    // later.
+    // Write the current label text into the live slot (no-op before the slots exist, or when off and
+    // no countdown is armed). In .value mode this is the active source's compact live reading; in .custom
+    // mode, the fixed user string; when a windowed Keep Awake is armed, the countdown timer is included.
+    // Also carries the slot's width and the Keep Awake tint (see below), so it is called both on
+    // the 2s tick, on the 1s countdown ticker, and from updateKeepAwakeBar().
     private func updateValueLabel() {
         guard let item = activeLabelItem, let button = item.button else { return }
-        let text: String
+        let countdown = activeKeepAwakeCountdownText
+        guard effectiveLabelMode != .off || countdown != nil else {
+            if item.length != 0 { item.length = 0 }
+            button.title = ""
+            return
+        }
+
+        let baseText: String?
         switch effectiveLabelMode {
         case .off:
-            return
+            baseText = nil
         case .value:
-            text = compactLabelText(for: activeLoadSource)
+            baseText = compactLabelText(for: activeLoadSource)
         case .custom(let label):
-            text = label
+            baseText = label
         }
+
+        let text: String
+        switch (baseText, countdown) {
+        case let (base?, cd?):
+            text = (labelSide == .left) ? "\(base)  \(cd)" : "\(cd)  \(base)"
+        case let (base?, nil):
+            text = base
+        case let (nil, cd?):
+            text = cd
+        case (nil, nil):
+            text = ""
+        }
+
         // Sizing before the text, so the slot is never briefly too narrow for what is about to go in it.
-        // Assigning only on a real change keeps the 2s tick from handing AppKit a status-bar relayout it
-        // doesn't need — the whole point of a reserved width is that this almost never fires twice.
+        // Assigning only on a real change keeps AppKit from re-running status-bar layout when width holds.
         let width = labelSlotWidth(for: text)
         if abs(item.length - width) > 0.01 {
             item.length = width
         }
+        button.title = text
         // The label wears the same tint as the bar under the animation — both through keepAwakeTintColor,
         // so they cannot disagree: full tone for our own hold, faded for someone else's, faintest while
-        // ours is armed but suspended, nothing when nothing is held and nothing is armed. The two surfaces
-        // read as one indicator, so don't special-case either. Untinted, the text goes back to inheriting
-        // the menu bar's own color, which is what tracks appearance and the highlight when the dropdown is
-        // open; the tint has per-appearance tones for the same reason.
-        // attributedTitle is the only way to color a status button's text, and it is invisible to
-        // VoiceOver, hence the explicit accessibility label.
+        // ours is armed but suspended, nothing when nothing is held and nothing is armed.
         if let color = keepAwakeTintColor(
             for: awakeHold, paused: keepAwakeArmedNotHolding, appearance: button.effectiveAppearance) {
             button.attributedTitle = NSAttributedString(
                 string: text,
                 attributes: [.foregroundColor: color, .font: Self.labelFont]
             )
-        } else {
-            button.title = text
         }
-        // Strip the width padding for VoiceOver — the figure spaces are a layout device, and "CPU 47%"
-        // is what the row means. (All padding is leading-within-a-field, so removing it is lossless.)
+        // Strip the width padding for VoiceOver — the figure spaces are a layout device.
         button.setAccessibilityLabel(text.replacingOccurrences(of: "\u{2007}", with: ""))
     }
 
@@ -5408,6 +5650,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         if sender.tag == Self.keepAwakeOffTag {
             if sleepPreventer.isEnabled { sleepPreventer.setEnabled(false) }
             clearKeepAwakeWindow()   // Off ends any armed window too
+            clearKeepAwakeBinding()  // …and any process it was waiting on
             keepAwakeBatteryOverride = false   // Off withdraws the arm-anyway gesture with the intent
         } else if let choice = KeepAwakeColor(rawValue: sender.tag) {
             grantKeepAwakeBatteryOverrideIfOffered()
@@ -5430,6 +5673,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Arm a window (or clear it, for .indefinite) and engage Keep Awake. Picking a duration while it's
     // off turns it on with the current tint — arming and enabling are one gesture.
     private func armKeepAwake(with duration: KeepAwakeDuration, isUserGesture: Bool = true) {
+        clearKeepAwakeBinding()   // a clock replaces an event: the two windows are exclusive
         keepAwakeSelectedDuration = duration
         keepAwakeDeadline = duration.seconds.map { Date(timeIntervalSinceNow: $0) }
         if !sleepPreventer.isEnabled { sleepPreventer.setEnabled(true) }
@@ -5440,6 +5684,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // A child already running carries the OLD window's `-t`, so it has to be replaced.
         sleepPreventer.restartForNewWindow(remaining: keepAwakeRemainingSeconds)
         updateSleepPrevention()
+        applyLabelMode()
+        syncKeepAwakeCountdownTicker()
         persistState()
     }
 
@@ -5460,6 +5706,137 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     private func clearKeepAwakeWindow() {
         keepAwakeSelectedDuration = .indefinite
         keepAwakeDeadline = nil
+        applyLabelMode()
+        syncKeepAwakeCountdownTicker()
+    }
+
+    // Arm Keep Awake bound to a process: hold until that pid exits, with no wall clock involved at
+    // all. The counterpart to armKeepAwake(with:) and mutually exclusive with it, so each clears the
+    // other's state — a timed window and an event-ended one cannot both be armed.
+    private func armKeepAwake(boundTo pid: pid_t, name: String? = nil, isUserGesture: Bool = true) {
+        clearKeepAwakeWindow()   // no deadline, so no countdown and no duration row marked
+        keepAwakeBoundPID = pid
+        keepAwakeBoundProcessName = name ?? ProcessProbe.name(of: pid)
+        if !sleepPreventer.isEnabled { sleepPreventer.setEnabled(true) }
+        // Same rule as the duration rows: a click is an explicit arm and outweighs a low battery, while
+        // the launch path passes false — --keep-awake-pid can be in a script that runs unattended.
+        if isUserGesture { grantKeepAwakeBatteryOverrideIfOffered() }
+        startKeepAwakeProcessMonitor(pid: pid)
+        // A child already running carries the previous window's `-t`; an event-ended hold must have
+        // none, so the child has to be replaced rather than left to expire on someone else's clock.
+        sleepPreventer.restartForNewWindow(remaining: nil)
+        updateSleepPrevention()
+        persistState()
+    }
+
+    // Drop the binding without deciding anything about intent — for the paths that REPLACE it (a
+    // duration row, a custom window) as well as the ones that end it (Off, the target exiting).
+    private func clearKeepAwakeBinding() {
+        cancelKeepAwakeProcessMonitor()
+        keepAwakeBoundPID = nil
+        keepAwakeBoundProcessName = nil
+    }
+
+    // kqueue .exit watch — the primary release signal, because it is exact: the source is attached to
+    // the PROCESS, so it cannot be fooled by a recycled pid the way a liveness poll can, and it fires
+    // the instant the target exits rather than up to 2s later. Unprivileged for a process this user
+    // owns; if registration ever fails, the liveness check on the 2s tick is what still releases.
+    private func startKeepAwakeProcessMonitor(pid: pid_t) {
+        cancelKeepAwakeProcessMonitor()
+        let source = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
+        // Strong self, deliberately, for the same reason as SleepPreventer's terminationHandler: the
+        // handler is @Sendable and capturing a weak var inside one is a Swift 6 error. The app owns the
+        // source for its lifetime and cancel() nils the handler, so there is nothing to outlive.
+        source.setEventHandler { [self] in
+            MainActor.assumeIsolated { keepAwakeBoundProcessDidExit(pid) }
+        }
+        source.activate()
+        keepAwakeProcessSource = source
+    }
+
+    private func cancelKeepAwakeProcessMonitor() {
+        keepAwakeProcessSource?.setEventHandler(handler: nil)
+        keepAwakeProcessSource?.cancel()
+        keepAwakeProcessSource = nil
+    }
+
+    // The bound process is gone, so the job it was holding the Mac awake for is over and the INTENT
+    // ends with it — the same disposal a timed window gets when it elapses (see onWindowExpired).
+    // Guarded on the pid so a late event from a monitor that a newer binding already replaced cannot
+    // disarm the new one.
+    private func keepAwakeBoundProcessDidExit(_ pid: pid_t) {
+        guard keepAwakeBoundPID == pid else { return }
+        clearKeepAwakeBinding()
+        sleepPreventer.setEnabled(false)
+        keepAwakeBatteryOverride = false   // the gesture is spent with the hold it authorized
+        updateSleepPrevention()             // kills caffeinate, re-tints the bar, refreshes the group
+        persistState()                      // the binding is over; nothing to carry forward
+    }
+
+    // Liveness fallback on the 2s tick, for a kqueue source that never registered. A zombie still
+    // answers `kill(pid, 0)` with 0 until its parent reaps it, so this can only fire late, never early.
+    private func checkKeepAwakeBoundProcess() {
+        guard let pid = keepAwakeBoundPID, !ProcessProbe.isAlive(pid) else { return }
+        keepAwakeBoundProcessDidExit(pid)
+    }
+
+    // Prompt for the process to bind to. Takes a pid OR a name, because a pid is not something anyone
+    // has to hand: this row exists for a job already running in a terminal, and pgrep-ing for its
+    // number is a step the app can take itself. A name resolves to the NEWEST match among this user's
+    // processes, and every row afterwards names the pid it settled on — so a wrong guess is visible
+    // rather than a hold nobody can attribute.
+    @objc
+    private func promptKeepAwakeBoundProcess() {
+        let alert = NSAlert()
+        alert.messageText = "Keep Awake Until a Process Exits"
+        alert.informativeText = "The Mac stays awake while that process runs, then sleeps on its own. Enter its pid, or a name to match the newest one running."
+        alert.alertStyle = .informational
+        if let icon = makeMenuAlertIcon() {
+            alert.icon = icon
+        }
+
+        let field = NSTextField(string: "")
+        field.placeholderString = "41293 or claude"
+        field.frame = NSRect(x: 0, y: 6, width: 260, height: 24)
+        let fieldLabel = NSTextField(labelWithString: "Process pid or name")
+        fieldLabel.frame = NSRect(x: 0, y: 32, width: 260, height: 16)
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 52))
+        accessory.addSubview(fieldLabel)
+        accessory.addSubview(field)
+        alert.accessoryView = accessory
+
+        alert.addButton(withTitle: "Start")
+        alert.addButton(withTitle: "Cancel")
+
+        // Same focus mechanism as promptCustomLabel / promptCustomKeepAwakeDuration.
+        let alertWindow = alert.window
+        alertWindow.initialFirstResponder = field
+        DispatchQueue.main.async { [weak field, weak alertWindow] in
+            guard let field, let alertWindow else { return }
+            alertWindow.makeFirstResponder(field)
+            field.selectText(nil)
+        }
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let input = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }   // blank = Cancel, as the duration prompt treats 0h 0m
+
+        // A pid is refused when it is not running rather than armed hopefully: an unresolvable target
+        // would hold the Mac awake until the 5% floor with nothing to release it.
+        if let pid = pid_t(input) {
+            guard ProcessProbe.isAlive(pid) else {
+                showRuntimeError("No process with pid \(pid) is running, so there is nothing to wait for.")
+                return
+            }
+            armKeepAwake(boundTo: pid)
+            return
+        }
+        guard let match = ProcessProbe.newestMatch(input) else {
+            showRuntimeError("No running process matches \u{201C}\(input)\u{201D}. Enter part of the process name, or its pid.")
+            return
+        }
+        armKeepAwake(boundTo: match.pid, name: match.name)
     }
 
     // The ONLY writer for state.json, and the reason there is only one: StateStore.save() replaces the
@@ -5566,6 +5943,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             // login with nobody there to weigh a low battery against the task.
             armKeepAwake(with: duration, isUserGesture: false)   // engages, persists, spawns caffeinate
             return
+        case .boundPID(let pid):
+            // Config.parse already refused a pid that wasn't running, but it can still exit in the
+            // milliseconds since — in which case the kqueue watch fails to register and the liveness
+            // check on the first 2s tick releases the hold. Not a user gesture, for the same reason as
+            // the window above: this flag lives in scripts that run unattended.
+            armKeepAwake(boundTo: pid, isUserGesture: false)
+            return
         case nil:
             break                           // no flag — fall through to the saved window
         }
@@ -5579,6 +5963,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         keepAwakeDeadline = deadline
         sleepPreventer.setEnabled(true)
         updateSleepPrevention()
+        applyLabelMode()
+        syncKeepAwakeCountdownTicker()
     }
 
     // Seconds left in the armed window, or nil when indefinite (→ no `-t` at the spawn site). Floored
@@ -5872,7 +6258,12 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 batteryThresholdPercent: Int((keepAwakeBatteryThreshold * Tuning.percentScale).rounded()),
                 speedMultiplierOverride: config.speedMultiplierOverride,
                 showAllSources: showAllSources,
-                keepAwakeIndefinite: sleepPreventer.isEnabled && keepAwakeDeadline == nil
+                // Both keep-awake fields are withheld from a LOGIN ITEM, unlike the restart path: a pid
+                // means nothing at the next login (recycled, or simply gone), and a live binding is not
+                // an indefinite hold — baking it in as one would arm a stopping-condition-free window at
+                // every boot from a choice the user made about a single job.
+                keepAwakeIndefinite: sleepPreventer.isEnabled && keepAwakeDeadline == nil && keepAwakeBoundPID == nil,
+                keepAwakeBoundPID: nil
             )
             runShellScript(
                 repoDir.appendingPathComponent("scripts/install-login-item.sh").path,

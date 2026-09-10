@@ -10,11 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps apply to is:
 
 - **Launcher CLI** — the positional preset keyword or GIF path, and the flags
-  `--speed-multiplier`, `--label`, `--load-source`, `--keep-awake`, `--battery-threshold`,
-  `--no-update-check`,
+  `--speed-multiplier`, `--label`, `--load-source`, `--keep-awake`, `--keep-awake-pid`,
+  `--battery-threshold`, `--no-update-check`,
   `--foreground` / `--no-detach`, `--detach`, `--extra`, `--precompile`, `-h` / `--help`.
 - **Environment variables** — `MENUBAR_LOAD_RUNNER_PATH`, `MENUBAR_LOAD_RUNNER_LOAD_SOURCE`,
   `MENUBAR_LOAD_RUNNER_LABEL`, `MENUBAR_LOAD_RUNNER_KEEP_AWAKE`,
+  `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`,
   `MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD`, `MENUBAR_LOAD_RUNNER_UPDATE_CHECK`,
   `MENUBAR_LOAD_RUNNER_LOG_FILE`, `MENUBAR_LOAD_RUNNER_BIN_NAME`, and the debug/QA hooks
   `MENUBAR_LOAD_RUNNER_EXIT_AFTER`, `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE`,
@@ -29,6 +30,20 @@ Internal implementation details (Swift types, `Tuning` constants, file structure
 of the public API and may change in any release.
 
 ## [Unreleased]
+
+### Added
+
+- **Keep Awake can now wait for a process instead of a clock.** `--keep-awake-pid <pid>` (or
+  `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`) holds the Mac awake until that process exits, then releases
+  on its own — the shape an unattended terminal job actually has, where picking `2h` or `4h` is a
+  guess in both directions and the guess that ends early is the one that costs the job. From the menu,
+  **`Keep Awake ▸ Until a process exits…`** takes a pid *or* a name, matching the newest process of
+  that name you are running, so binding to a job already in flight doesn't start with a `pgrep`. The
+  hold names its subject wherever it is shown (`Keep Awake: claude (41293)`), obeys the battery band
+  and the 5% floor like any other window, and is deliberately never resumed after a reboot — pids are
+  recycled, so a restored one could bind to something unrelated. It survives an in-app restart, which
+  doesn't reboot the Mac. Release is event-driven (a kqueue exit watch), with a 2s liveness re-check
+  underneath it as a fallback.
 
 ## [1.22.0] - 2026-08-02
 

@@ -345,6 +345,32 @@ into a login item:
 ./scripts/install-login-item.sh --keep-awake 4h
 ```
 
+### Waiting for a process instead of a clock (`--keep-awake-pid`)
+
+```bash
+long-build.sh & ./menubar-load-runner --keep-awake-pid $!   # hold until that job exits
+MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID=41293 ./menubar-load-runner
+```
+
+A duration is a *time* promise, not a *task* promise, and for an unattended job that is the whole
+problem: `2h` and `4h` are both guesses, and the one that ends early is the one that costs you the
+run. `--keep-awake-pid <pid>` (or `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`) holds the Mac awake until that
+process exits and then releases on its own — no window to pick, and nothing left holding sleep after
+the job is done.
+
+**From the menu, on an instance already running:** `Keep Awake ▸ Until a process exits…`, which takes
+a pid *or* a name — type `claude` and it binds to the newest process of that name you are running, so
+you don't have to `pgrep` for a number first. Whichever way it was armed, the hold names its subject
+wherever it is shown: the `Keep Awake` row reads `Keep Awake: claude (41293)` and the submenu says
+`until claude (41293) exits`.
+
+Everything else about Keep Awake is unchanged: a bound hold still pauses on low battery and still
+releases at the 5% floor, and it says why in the same place. Two deliberate limits — a pid that is
+already gone warns on stderr and launches with Keep Awake off (the work is finished, so there is
+nothing to wait for), and a binding is **never resumed after a reboot**, because pids are recycled and
+a restored one could bind to something unrelated. It does survive the in-app update restart, which
+doesn't reboot the Mac. If you pass both `--keep-awake` and `--keep-awake-pid`, the pid wins.
+
 ### The battery release point (`--battery-threshold`)
 
 ```bash

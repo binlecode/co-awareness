@@ -400,6 +400,42 @@ Reads machine-wide power management state via `IOPMCopyAssertionsByProcess`:
   2. Foreign Tone ($0.45\alpha$, `keepAwakeBarForeignAlpha`): Mac held awake by an external process.
   3. Paused Tone ($0.22\alpha$, `keepAwakeBarPausedAlpha`): Armed but suspended due to battery/thermal conditions.
 
+### 7.4 Process-Bound Windows (`--keep-awake-pid`)
+
+A window whose end is an **event** rather than a clock: the hold is released when a named process
+exits. That is the shape an unattended terminal job actually has — an agent run, a long build, a
+render — where a fixed duration is a guess in both directions, and the guess that ends early is the
+one that costs the job.
+
+- **Exclusive with a timed window by construction.** `KeepAwakeLaunchOption.boundPID` is a third case
+  beside `.off` / `.window`, so launch precedence stays the one switch in `applyLaunchKeepAwakeState`,
+  and arming either kind clears the other's state. A bound hold therefore has no deadline, spawns
+  `caffeinate` with no `-t`, and renders no countdown. When both flags are given the pid wins: it is
+  the more specific intent, and the one whose stopping condition the caller can point at.
+- **Release is event-driven with a poll underneath.** A `DispatchSourceProcess` `.exit` watch is
+  primary — it fires the instant the target exits, and it is attached to the *process*, so a recycled
+  pid cannot fool it. `ProcessProbe.isAlive` (`kill(pid, 0)`, where only `ESRCH` is death) is
+  re-checked on the existing 2s sample tick to cover the one case the watch cannot: a registration
+  that failed outright. A zombie still answers `kill(pid, 0)` until it is reaped, so the fallback can
+  only ever fire late, never early. The exit ends the **intent**, not just the child, exactly as an
+  elapsed window does.
+- **Never resumed after a reboot, and never baked into a login item.** Pids are recycled, so a
+  restored one could bind to an unrelated process or to nothing. This needs no rule of its own in the
+  restore path: a binding saves as `enabled: true` with no `deadline`, which is already the one shape
+  the restore refuses (§ 8.2). It *is* forwarded across an in-app restart, which does not reboot the
+  Mac — the job is still running and its pid still means what it meant a second ago.
+- **The subject is named on every surface** (`Keep Awake: claude (41293)`, and `until claude (41293)
+  exits` in the status row). An unattributable hold is the exact problem § 7.3 exists to fix, and this
+  app must not become that for its own.
+- **A pid is not something a user has by hand,** so the menu prompt (`Keep Awake ▸ Until a process
+  exits…`) takes a pid *or* a name, resolving a name to the newest match among the calling user's own
+  processes (`ProcessProbe.newestMatch`, via `KERN_PROC_UID` + `proc_pidpath`). Newest is the right
+  tie-break for the case this exists for — the job just started — and the pid it settled on is then
+  shown, so a wrong guess is visible rather than silent. Same uid scope as the launcher's singleton
+  guard, for the same reason: the menu bar is per-session.
+- **The safety floor is untouched.** A bound hold suspends on the battery band and the 5% floor like
+  any other (§ 7.2): the binding says when to stop holding, never that the floor stops applying.
+
 ---
 
 ## 8. In-Menu Dashboard & State Persistence

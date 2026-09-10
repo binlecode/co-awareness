@@ -35,8 +35,8 @@ resolve_script_path() {
 print_help() {
   cat <<EOF
 Usage:
-  $APP_CMD_NAME [dog-white|dog-black|horse-black|horse-white|chihiro|chihiro-white|chihiro-black|totoro|totoro-group-white|totoro-group-black|totoro-white|totoro-black|/path/to.gif] [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
-  MENUBAR_LOAD_RUNNER_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
+  $APP_CMD_NAME [dog-white|dog-black|horse-black|horse-white|chihiro|chihiro-white|chihiro-black|totoro|totoro-group-white|totoro-group-black|totoro-white|totoro-black|/path/to.gif] [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
+  MENUBAR_LOAD_RUNNER_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
 
 Presets:
   dog-white   Built-in running dog (white)
@@ -67,6 +67,13 @@ Options:
                              (also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE; switchable from the menu).
                              An armed window is saved and resumed on the next launch; passing this
                              flag -- even as 'off' -- overrides what was saved
+  --keep-awake-pid <pid>     Arm Keep Awake bound to a process: sleep prevention is held until that
+                             pid exits, then released automatically (also via
+                             MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID). The shape that fits an unattended
+                             terminal job (\`--keep-awake-pid \$!\`), where a fixed window is a
+                             guess. Wins over --keep-awake if both are given; a pid that
+                             is already gone warns and launches with keep-awake off. Never resumed
+                             after a reboot, since pids are recycled
   --battery-threshold <pct|off>
                              Charge at or below which Keep Awake releases on battery (default 20;
                              'off' never releases on charge alone). Whole percents only -- 20 or 20%,
@@ -102,6 +109,7 @@ Examples:
   $APP_CMD_NAME --label value
   $APP_CMD_NAME dog-black --label BUILD
   $APP_CMD_NAME --keep-awake 4h
+  $APP_CMD_NAME --keep-awake-pid \$!
   $APP_CMD_NAME horse-black --speed-multiplier 1.2
   $APP_CMD_NAME --foreground horse-black
   MENUBAR_LOAD_RUNNER_PATH=/tmp/cat.gif $APP_CMD_NAME

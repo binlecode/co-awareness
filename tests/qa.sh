@@ -77,12 +77,16 @@ $BIN --keep-awake >/dev/null 2>&1;                  chk "--keep-awake no value" 
 $BIN --keep-awake off --help >/dev/null 2>&1;       chk "--keep-awake off accepted" 0 $?
 $BIN --keep-awake 3s --help >/dev/null 2>&1;        chk "--keep-awake seconds form" 0 $?
 $BIN --keep-awake 1h30m --help >/dev/null 2>&1;     chk "--keep-awake compound form" 0 $?
+# --keep-awake-pid follows the same split: a missing value is fatal, a value is not. Which pids are
+# ACCEPTED (and what a dead one does) is behavior, so it is asserted against a real process in §3f.
+$BIN --keep-awake-pid >/dev/null 2>&1;              chk "--keep-awake-pid no value" 1 $?
+$BIN --keep-awake-pid $$ --help >/dev/null 2>&1;    chk "--keep-awake-pid live pid accepted" 0 $?
 # --battery-threshold: only the fatal contract is assertable without booting. Every *value* — garbage
 # and out-of-range included — is deliberately non-fatal (it clamps or falls back and launches, since
 # this can be baked into a login item), so which value each form resolves to is asserted by behavior
 # in §3a. A bare "rc=0, flag accepted" check here would restate that without observing anything.
 $BIN --battery-threshold >/dev/null 2>&1;           chk "--battery-threshold no value" 1 $?
-for f in --speed-multiplier --label --load-source --keep-awake --battery-threshold --show-all-sources --no-update-check; do
+for f in --speed-multiplier --label --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check; do
   $BIN --help 2>&1 | grep -q -- "$f" && { echo "  PASS --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL --help missing $f"; fail=$((fail+1)); }
 done
 # The launcher's OWN flags, against the launcher's own help — the app binary never sees these and its
@@ -224,6 +228,28 @@ for want in left right; do
   gk "icon does not move relative to the slot ($want)" \
      "$([ "${6:-1}" = 0 ] && echo 1 || echo 0)" "icon_shifts=$6 raw=$out"
 done
+
+# Countdown display on the bar when windowed Keep Awake is armed
+printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
+out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN --keep-awake 30m 2>&1 | grep '^SLOTS' | tail -1)
+lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
+gk "countdown displayed on the bar when keep-awake is windowed" \
+   "$([ -n "$lbl" ] && echo "$lbl" | grep -qE '^(29|30):[0-9]{2}$' && echo 1 || echo 0)" "got: $lbl"
+
+out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN --keep-awake 30m --label value 2>&1 | grep '^SLOTS' | tail -1)
+lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
+gk "countdown displayed beside telemetry when label=value" \
+   "$([ -n "$lbl" ] && echo "$lbl" | grep -qE 'CPU .* (29|30):[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
+
+printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
+out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN --keep-awake on 2>&1 | grep '^SLOTS' | tail -1)
+lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
+gk "indefinite keep-awake shows no countdown on the bar" \
+   "$([ -z "$lbl" ] && echo 1 || echo 0)" "got: $lbl"
+
 rm -f "$SG"
 echo "  slot geometry: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
@@ -308,7 +334,7 @@ ST="$PWD/tmp/qa-arm-state.json"; ERR=./tmp/qa-arm-err.txt
 ck(){ if [ "$2" = EMPTY ]; then [ -z "$3" ] && r=0 || r=1; else case "$3" in *"$2"*) r=0;; *) r=1;; esac; fi
   [ $r = 0 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAIL [$1] want [$2] got [${3:-<empty>}]"; fail=$((fail+1)); }; }
 # Launch, capture the caffeinate child bound to THIS app (by -w pid, never by name), wait for its exit.
-arm(){ MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" MENUBAR_LOAD_RUNNER_FORCE_BATTERY=100:ac \
+arm(){ MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" MENUBAR_LOAD_RUNNER_FORCE_BATTERY="${FORCE:-100:ac}" \
          MENUBAR_LOAD_RUNNER_EXIT_AFTER=3 $BIN --no-update-check "$@" >/dev/null 2>"$ERR" & app=$!
        sleep 1.2; CHILD=$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true); wait $app; }
 
@@ -345,6 +371,53 @@ MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" MENUBAR_LOAD_RUNNER_EXIT_AFTER=7 $BIN --no-
 ck "window released itself" EMPTY "$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true)"
 wait $app; ck "expiry persisted enabled:false" '"enabled" : false' "$(cat "$ST")"
 arm; ck "spent window not resumed" EMPTY "$CHILD"
+# --keep-awake-pid: the same window contract, ended by an event instead of a clock. The target is a
+# real background `sleep` — there is no injection hook for "a process exited" and none should be added,
+# since a real one is a single command away.
+# Long enough that the fixture can never be what ends a case: the eight arms below take ~30s of real
+# app launches, so a target sized to that margin would turn a slow machine into false failures. It is
+# killed explicitly the moment the block is done, so the length costs nothing.
+sleep 600 >/dev/null 2>&1 & TPID=$!
+rm -f "$ST"; arm --keep-awake-pid $TPID; ck "pid binding = no -t"     "-di -w" "$CHILD"
+rm -f "$ST"; arm --keep-awake-pid 999999
+                                         ck "dead pid = no child"     EMPTY    "$CHILD"
+                                         ck "dead pid warns" "Unrecognized --keep-awake-pid" "$(cat "$ERR")"
+# The collision rule, from both sides: the pid is the more specific intent, so it wins the arming
+# whichever order the flags arrive in. Asserted on the ABSENCE of `-t`, which is the only thing that
+# separates a bound hold from the 30m window it beat.
+rm -f "$ST"; arm --keep-awake 30m --keep-awake-pid $TPID
+                                         ck "pid beats a window"      "-di -w" "$CHILD"
+                                         ck "collision warns" "overrides --keep-awake" "$(cat "$ERR")"
+rm -f "$ST"; arm --keep-awake-pid $TPID --keep-awake 30m
+                                         ck "pid wins either order"   "-di -w" "$CHILD"
+rm -f "$ST"; MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID=$TPID arm
+                                         ck "env binds"               "-di -w" "$CHILD"
+# A bound hold obeys the battery band like any other — the binding says when to STOP holding, never
+# that the floor doesn't apply.
+FORCE=15:battery; rm -f "$ST"; arm --keep-awake-pid $TPID; FORCE=
+                                         ck "low battery releases a bound hold" EMPTY "$CHILD"
+# Never resumed after a relaunch: the binding saves as enabled-with-no-deadline, which is the shape the
+# restore already refuses (see "saved indefinite not restored" above) — pids are recycled, so a resumed
+# one could bind to an unrelated process.
+rm -f "$ST"; arm --keep-awake-pid $TPID; ck "binding saves no deadline" EMPTY "$(grep deadline "$ST" || true)"
+arm;                                     ck "binding not resumed"       EMPTY "$CHILD"
+kill $TPID 2>/dev/null; wait $TPID 2>/dev/null   # reap it here, or bash reports it mid-run
+
+# The release itself, against a target that exits on its own while the app keeps running. LOG_AWAKE
+# carries the attribution (bound_pid) so both halves are observable: the hold names its subject, and
+# the subject's exit ends the hold AND the intent.
+rm -f "$ST"
+sleep 3 >/dev/null 2>&1 & TSHORT=$!
+MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" MENUBAR_LOAD_RUNNER_FORCE_BATTERY=100:ac   MENUBAR_LOAD_RUNNER_LOG_AWAKE=1 MENUBAR_LOAD_RUNNER_EXIT_AFTER=9 $BIN --no-update-check   --keep-awake-pid $TSHORT >/dev/null 2>"$ERR" & app=$!
+sleep 2.5
+ck "holds while the target runs"   "-di -w" "$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true)"
+ck "hold names its subject"        "bound_pid=$TSHORT" "$(cat "$ERR")"
+sleep 3
+ck "released when the target exits" EMPTY "$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true)"
+wait $app
+ck "binding cleared on release"    "bound_pid=0" "$(cat "$ERR")"
+ck "release persisted enabled:false" '"enabled" : false' "$(cat "$ST")"
+
 # An unwritable state location must not cost the user the feature.
 mkdir -p tmp/qa-ro && chmod 500 tmp/qa-ro
 MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-ro/s.json" MENUBAR_LOAD_RUNNER_EXIT_AFTER=3 $BIN \
@@ -633,7 +706,7 @@ else
     echo "       last: $last"
   else
     mk "an armed-but-suspended hold shows the paused tone, not nothing" \
-       "$(echo "$last" | grep -q 'paused=1 tint=paused' && echo 1 || echo 0)" "got: $last"
+       "$(echo "$last" | grep -q 'paused=1 .*tint=paused' && echo 1 || echo 0)" "got: $last"
   fi
   # That precedence, asserted rather than assumed: with the fixture holding the display, the same paused
   # hold reads foreign, because this surface reports the machine before it reports us.
@@ -642,7 +715,7 @@ else
   wait $probe_pid 2>/dev/null
   unset MENUBAR_LOAD_RUNNER_FORCE_BATTERY
   mk "a foreign display hold outranks our pause" \
-     "$(echo "$last" | grep -q 'paused=1 tint=foreign' && echo 1 || echo 0)" "got: $last"
+     "$(echo "$last" | grep -q 'paused=1 .*tint=foreign' && echo 1 || echo 0)" "got: $last"
 fi
 rm -f "$PROBE" "$AW"
 echo "  machine sleep-hold state: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
