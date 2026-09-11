@@ -250,6 +250,18 @@ lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "indefinite keep-awake shows no countdown on the bar" \
    "$([ -z "$lbl" ] && echo 1 || echo 0)" "got: $lbl"
 
+# A window that elapses while the hold is condition-suspended must still collapse the slot. The
+# countdown reads the deadline directly for this reason: the seconds-remaining value the caffeinate
+# respawn uses is floored at 1s, and reusing it here pinned the bar at 00:01 forever (and with it the
+# 1Hz ticker). FORCE_BATTERY holds it suspended so the window elapses with no child to expire.
+printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
+out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
+      MENUBAR_LOAD_RUNNER_FORCE_BATTERY=15:battery \
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=8 $BIN --keep-awake 3s 2>&1 | grep '^SLOTS' | tail -1)
+lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
+gk "elapsed-while-suspended window collapses the countdown slot" \
+   "$([ -z "$lbl" ] && echo 1 || echo 0)" "got: $lbl"
+
 rm -f "$SG"
 echo "  slot geometry: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 

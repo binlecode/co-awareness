@@ -1,6 +1,6 @@
 # ARCHITECTURE — As-Built System Architecture & Technical Specifications
 
-> **Canonical as-built architecture document for MenuBar Load Runner (v1.22.0).**
+> **Canonical as-built architecture document for MenuBar Load Runner (v1.23.0).**
 > **Source ground truth:** `MenuBarLoadRunner.swift`, `menubar-load-runner` (launcher), `gifs/presets.json`.
 > **Scope:** Complete architectural specifications, subsystem topologies, concurrency models, telemetry algorithms, and system invariants.
 

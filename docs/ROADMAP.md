@@ -2,7 +2,7 @@
 
 The product tracker: what is open, what was declined, known limits, and verification debt. Shipped
 work is not tracked here — it is described as-built in `docs/ARCHITECTURE.md`. Created 2026-07-26;
-current as of v1.22.0 (updated September 2026).
+current as of v1.23.0 (updated September 2026).
 
 Items are `R<n>`, assigned once, never reused. **P1** user-visible defect or silent failure · **P2**
 real capability gap · **P3** nice to have · **P4** parity for its own sake. Nothing here is a

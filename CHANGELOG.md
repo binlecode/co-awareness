@@ -29,7 +29,7 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
-## [Unreleased]
+## [1.23.0] - 2026-09-10
 
 ### Added
 
@@ -44,6 +44,31 @@ of the public API and may change in any release.
   recycled, so a restored one could bind to something unrelated. It survives an in-app restart, which
   doesn't reboot the Mac. Release is event-driven (a kqueue exit watch), with a 2s liveness re-check
   underneath it as a fallback.
+- **A timed Keep Awake now counts down on the menu bar itself, not just inside the menu.** How long
+  is left was previously a fact you had to open the menu to learn, which is the wrong shape for the
+  thing it answers — you glance at a menu bar, you navigate a menu. With the label off, the slot
+  reveals the countdown on its own (`29:58`) in the Keep Awake tint, wearing the paused tone when a
+  condition has the hold suspended, and collapses back to nothing when the window ends or you disarm
+  it. With `--label value` or a custom label, the countdown sits alongside the reading rather than
+  replacing it (`CPU 45%  29:58`), always on the side nearest the icon. The slot reserves width for
+  the full `88:88` / `88:88:88` template, so a ticking countdown shifts neighboring items by 0 pt —
+  the same no-jitter promise the telemetry labels already make. An indefinite or process-bound hold
+  shows nothing, having no clock to show. The 1 Hz ticker behind it runs only while there is a live
+  countdown to draw or the menu is open, and stops otherwise.
+
+### Fixed
+
+- **A countdown that ran out while Keep Awake was paused stayed frozen at `00:01` on the menu bar.**
+  If the window elapsed while a low battery had the hold suspended, the bar kept showing one second
+  remaining indefinitely — and disagreed with the menu, which correctly showed the window as over.
+  The readout was reusing the seconds-remaining value that the `caffeinate` respawn needs floored at
+  1s; it now reads the deadline directly, like the in-menu row always did. The 1 Hz ticker that the
+  stuck value kept alive now stops with it.
+- **An externally killed `caffeinate` left a process-bound hold half-armed.** Keep Awake correctly
+  went off, but the process binding survived it — so restarting the app from the menu silently
+  re-armed a hold the user had not asked for, and re-enabling from a tint row re-attached to the old
+  process. The binding is now released with the intent, and the restart path forwards a bound pid
+  only while Keep Awake is actually on.
 
 ## [1.22.0] - 2026-08-02
 

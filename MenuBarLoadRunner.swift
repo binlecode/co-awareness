@@ -10,7 +10,7 @@ import QuartzCore
 // Human-facing app version (semver). Surfaced in --help and the About dialog, and the anchor for
 // CHANGELOG.md releases. Bump this together with a new CHANGELOG entry and git tag.
 private enum AppInfo {
-    static let version = "1.22.0"
+    static let version = "1.23.0"
     static let name = "MenuBar Load Runner"
     static let tagline = "An animated GIF in the macOS menu bar, its playback speed driven by live system load."
     static let copyright = "© 2026 Bin Le"
@@ -3268,9 +3268,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Live countdown string for the active Keep Awake window, if one is armed and running.
     // nil when indefinite, bound to a process, expired, or disabled.
     private var activeKeepAwakeCountdownText: String? {
-        guard sleepPreventer.isEnabled, let remaining = keepAwakeRemainingSeconds, remaining > 0 else {
-            return nil
-        }
+        // Reads the deadline directly rather than keepAwakeRemainingSeconds: that one is floored at 1s
+        // for the caffeinate `-t` spawn site, so a window that elapsed while condition-suspended would
+        // pin this readout at 00:01 forever (and with it the 1Hz ticker). The in-menu countdown row
+        // derives from the same un-floored deadline, so the two surfaces cannot disagree.
+        guard sleepPreventer.isEnabled, let deadline = keepAwakeDeadline else { return nil }
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { return nil }
         return KeepAwakeDuration.countdown(remaining)
     }
     // Menu-bar font with monospaced digits: a reading's width then depends only on how MANY characters
@@ -3875,6 +3879,12 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         sleepPreventer.onWindowExpired = { [weak self] in
             guard let self else { return }
             self.clearKeepAwakeWindow()
+            // The binding is spent too. Reaching here means the child exited on its own, which the
+            // preventer has already read as intent ending (isEnabled = false) — so a surviving pid
+            // would be a binding with no intent behind it: the restart path would forward it and the
+            // tint rows would re-attach to it. Also cancels the kqueue watch, so a later exit event
+            // from the old target cannot disarm a hold armed after this one.
+            self.clearKeepAwakeBinding()
             // The gesture is spent with the window it authorized. Without this, a later arm from a
             // non-gesture path (a restored window) would inherit an override nobody granted it.
             self.keepAwakeBatteryOverride = false
@@ -4289,7 +4299,11 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             // Bound and indefinite are exclusive: without the pid check a binding would restart as a
             // plain `--keep-awake on`, i.e. a hold with no stopping condition at all.
             keepAwakeIndefinite: sleepPreventer.isEnabled && keepAwakeDeadline == nil && keepAwakeBoundPID == nil,
-            keepAwakeBoundPID: keepAwakeBoundPID.flatMap { ProcessProbe.isAlive($0) ? $0 : nil }
+            // Gated on intent for the same reason as the line above: a restart must not re-arm a hold
+            // the user turned off, and a pid outlives the intent that bound it.
+            keepAwakeBoundPID: sleepPreventer.isEnabled
+                ? keepAwakeBoundPID.flatMap { ProcessProbe.isAlive($0) ? $0 : nil }
+                : nil
         )
         guard let command = Restarter.restartCommand(mode: mode, appArguments: arguments, uid: getuid()),
               Restarter.spawnRestart(command: command) else {
