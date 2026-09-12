@@ -21,14 +21,30 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
   `MENUBAR_LOAD_RUNNER_EXIT_AFTER`, `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE`,
   `MENUBAR_LOAD_RUNNER_FORCE_BATTERY`, `MENUBAR_LOAD_RUNNER_STATE_FILE`,
   `MENUBAR_LOAD_RUNNER_LOG_SLOTS`, `MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS`,
-  `MENUBAR_LOAD_RUNNER_LOG_AWAKE`, `MENUBAR_LOAD_RUNNER_LOG_ANIMATION`, and
-  `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS`.
+  `MENUBAR_LOAD_RUNNER_LOG_AWAKE`, `MENUBAR_LOAD_RUNNER_LOG_ANIMATION`,
+  `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS`, `MENUBAR_LOAD_RUNNER_FORCE_THERMAL`, and
+  `MENUBAR_LOAD_RUNNER_LOG_THERMAL`.
 - **Built-in preset keywords** and the `gifs/presets.json` manifest schema.
 - **Observable behavior** — the status menu structure, the default preset, and the load-adaptive
   speed contract.
 
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
+
+## [1.25.0] - 2026-09-12
+
+### Added
+
+- **The temperature row now says when macOS has started throttling the machine.** Once the system
+  reports serious or critical thermal pressure, the row reads
+  `Temperature: 98 °C · P-cores 92–98 °C · Thermal Throttling` — the sensor count steps aside, since
+  a die reading alone can't tell you whether the kernel has begun clocking the hardware down, which
+  is the thing that number is watched for. It is the *kernel's* throttling, kept distinct from this
+  app slowing its own animation, which keeps its own `Slowing animation — …` line; and it shows on a
+  fixed `--speed-multiplier` too, where that line is hidden by design and the menu previously said
+  nothing about heat at all. No percentage comes with it: Apple Silicon manages clocks on-die and
+  publishes a pressure level rather than a frequency cap, so a percentage here would be a number
+  nothing measured. Nothing new is polled — the reading is one the app already observed.
 
 ## [1.24.0] - 2026-09-12
 
