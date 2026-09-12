@@ -417,6 +417,16 @@ The engine reduces its own footprint under thermal or battery strain.
   - Memory Pressure is `.warning` or `.critical` (`DispatchSource.makeMemoryPressureSource`)
 - **Action:** Speed multiplier is capped at `Tuning.constrainedSpeedCeilingFraction` ($0.5\times$ range midpoint). Immediate recalculation bypasses standard 2s hysteresis.
 
+**Kernel throttling is a separate fact from this self-throttling, and the menu states them separately (R23).** `KernelThermalPressure` maps `ProcessInfo.thermalState` to a level and annotates the *temperature* row with `· Thermal Throttling` at `.serious` / `.critical`, replacing the sensor count rather than extending the row. Three constraints shape it:
+
+- **Level only, never a percentage.** Apple Silicon manages clocks on-die via CLPC and publishes no unprivileged frequency cap: `IOPMCopyCPUPowerStatus` answers `kIOReturnNotFound` (probed on M4 Max; `pmset -g therm` agrees). Intel's `CPU_Speed_Limit` was declined rather than special-cased: no Intel hardware is available to this project, so both the IOKit read and the row it would annotate would ship unverified — and § 4.3's claim that `Tp**` discovery spans Intel is itself untested here (`floatKey` accepts only `flt `-typed keys, so an Intel Mac may answer with a different type rather than a different name). Deriving a percentage from a level would be a fabricated reading.
+- **No new telemetry source, no new timer, no new sample.** It reads a property the app already observes, inline in `refreshMenuMetrics()` — so it is evaluated on that method's existing cadence (the 2s tick and `menuWillOpen`) and adds no cache, no timer of its own, and no IOKit call.
+- **`.fair` does not annotate.** That is headroom narrowing, not the kernel clocking anything down.
+
+It also closes a gap: `throttleStatusItem` is set only in the `isAutoSpeed` branch, so on a fixed `--speed-multiplier` the menu previously carried no thermal indication at all — and its wording could not simply be un-gated, since in that mode the app is not slowing anything.
+
+**Wiring invariant.** `loadReductionReasons` and `isUnderPowerPressure` read `ProcessInfo.thermalState` directly and must never consult `KernelThermalPressure`. The type is display-only, which is what keeps its `MENUBAR_LOAD_RUNNER_FORCE_THERMAL` hook an input simulator rather than a hook that moves a business decision (§ 10). `MENUBAR_LOAD_RUNNER_LOG_THERMAL` prints the level, the derived gate, the row it produced and the self-throttle row's state together, so a headless test asserts the separation instead of trusting it.
+
 ### 5.3 Reduce Motion & Manual Freeze
 
 - **System Accessibility:** Listens for `NSWorkspace.accessibilityDisplayOptionsDidChangeNotification` to observe `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion`.
@@ -788,7 +798,7 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v1.20** — the sensor tier | A shared `SMCClient` opened fan, then die temperature | The family of hardware readings the app can keep growing through without privileges (§ 4.3) |
 | **v1.21 → v1.22** — restart cost, and standing still | Build-before-restart in the update path; Freeze Animation honoring Reduce Motion (R17) | The compile moved out of the window where the app is gone (§ 9.2); a single stop/start decider total over occlusion + freeze (§ 5.1, § 5.3) |
 | **v1.23** — a hold that isn't a guess | Keep Awake bound to a process instead of a clock (R19); the timed window counting down on the menu bar itself | A hold can take its end condition from the job rather than from a guessed duration (§ 7.4); the countdown became a glance, under the same occlusion gate the animation obeys (§ 6.3) |
-| **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu (R21); the dropdown reports battery health, cycle count and capacity (R22) | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); and the first reading the app does not poll at all, gated entirely on menu open (§ 4.6) |
+| **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu (R21); the dropdown reports battery health, cycle count and capacity (R22); the temperature row names the kernel's own throttling (R23) | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); the first reading the app does not poll at all, gated entirely on menu open (§ 4.6); and the line between what the kernel does to the machine and what this app does about it, drawn in the menu and enforced in the wiring (§ 5.2) |
 
 ---
 

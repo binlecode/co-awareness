@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 - 🔴 **单文件无包架构（Unbundled Swift）**：所有业务逻辑集中于 `MenuBarLoadRunner.swift`，零外部包依赖，由 `swiftc -O -strict-concurrency=complete` 编译；绝不引入 Xcode 项目、SwiftPM (`Package.swift`)、CocoaPods 或外部第三方库。类均标注 `@MainActor`，构建必须保持零警告。
 - 🔴 **原子重命名编译（Atomic Rename）**：启动脚本 `--precompile` 必须先编译到临时路径再通过 `mv`（`rename(2)`）原子替换目标二进制；严禁在运行中原地覆盖 Mach-O 二进制文件，否则破坏正在运行进程的内存分页导致当场崩溃。
 - 🔴 **单例守卫必须前置于编译（Singleton Guard Before Compile）**：启动器中的 `pgrep -U "$(id -u)"` 检查必须严格在 `compile_if_stale` 之前执行，防止多个并发启动请求同时触发 `swiftc` 写入同一目标路径。
-- 🔴 **零 Mock 真实驱动测试（Zero Mocks / Real Binary Assertions）**：`tests/qa.sh` 是唯一测试套件，必须驱动真实二进制检验真实副作用；严禁在测试中复制业务代码类型；只允许使用无侵入可观测性环境变量（`EXIT_AFTER`, `LOG_*`, `FORCE_BATTERY`, `STATE_FILE`），严禁引入改变业务决策逻辑的 hook。
+- 🔴 **零 Mock 真实驱动测试（Zero Mocks / Real Binary Assertions）**：`tests/qa.sh` 是唯一测试套件，必须驱动真实二进制检验真实副作用；严禁在测试中复制业务代码类型；只允许使用无侵入可观测性环境变量（`EXIT_AFTER`, `LOG_*`, `FORCE_BATTERY`, `FORCE_UNAVAILABLE`, `FORCE_THERMAL`, `STATE_FILE`），严禁引入改变业务决策逻辑的 hook。
 - 🔴 **无特权只读遥测与纯用户态（Unprivileged & Read-Only）**：遥测仅限公开或无特权的 Mach / IOKit / SMC 接口，严禁请求 root，严禁通过 `pmset disablesleep` 修改系统全局 NVRAM 电源策略；Keep Awake 仅通过绑定自身 PID 的 `caffeinate -di -w <pid>` 实现，保证进程异常退出时内核自动回收。
 - 🔴 **5% 硬件电池底线不可逾越**：电量 ≤ 5% 时强制释放 Keep Awake，任何 CLI 参数、状态恢复或菜单操作均严禁绕过此硬底线。
 
@@ -84,6 +84,8 @@ MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS=1 ./tmp/mblr-check 2>&1 | grep ASSERTIONS    
 MENUBAR_LOAD_RUNNER_LOG_AWAKE=1 ./tmp/mblr-check 2>&1 | grep AWAKE               # 打印睡眠阻止综合判定与菜单行文本
 MENUBAR_LOAD_RUNNER_LOG_ANIMATION=1 ./tmp/mblr-check 2>&1 | grep ANIM           # 打印动画冻结状态与游标
 MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1 ./tmp/mblr-check 2>&1 | grep BATTERY_DIAG  # 打印电池健康度/循环次数/容量（启动一次 + 每次开菜单）
+MENUBAR_LOAD_RUNNER_FORCE_THERMAL=serious ./tmp/mblr-check --load-source temperature  # 模拟内核热压力等级
+MENUBAR_LOAD_RUNNER_LOG_THERMAL=1 ./tmp/mblr-check 2>&1 | grep THERMAL         # 打印内核热压力、温度行文本与自限流行状态
 
 # 自动化测试套件
 tests/qa.sh --core                           # 核心门禁（CI 友好，不依赖 WindowServer，秒级）
@@ -136,7 +138,7 @@ pkill -f 'MenuBarLoadRunner'                 # 停止当前用户正在运行的
 ## 测试与回归约定
 
 - **驱动真实二进制**：`tests/qa.sh` 是唯一的自动化回归测试套件，分级运行：`--core`（语法、编译、CLI 解析与版本基线，无 GUI 依赖）、默认（包含 GUI 状态栏与断言检查）、`--launcher`（启动器单例与并发测试）。
-- **只使用无侵入可观测性钩子**：`MENUBAR_LOAD_RUNNER_EXIT_AFTER`（生命周期截断）、`FORCE_BATTERY`（模拟电量）、`FORCE_UNAVAILABLE`（模拟遥测源缺失）、`LOG_SLOTS` / `LOG_ASSERTIONS` / `LOG_AWAKE` / `LOG_ANIMATION` / `LOG_BATTERY_DIAGNOSTICS`（日志输出内部判定）。禁止任何改变业务决策逻辑的 hook —— `LOG_*` 只允许读取并打印，严禁回写被打印的状态字段（否则会让菜单在未打开时走上不该走的渲染分支）。
+- **只使用无侵入可观测性钩子**：`MENUBAR_LOAD_RUNNER_EXIT_AFTER`（生命周期截断）、`FORCE_BATTERY`（模拟电量）、`FORCE_UNAVAILABLE`（模拟遥测源缺失）、`FORCE_THERMAL`（模拟内核热压力等级，仅供显示层，严禁回流自限流判定）、`LOG_SLOTS` / `LOG_ASSERTIONS` / `LOG_AWAKE` / `LOG_ANIMATION` / `LOG_BATTERY_DIAGNOSTICS` / `LOG_THERMAL`（日志输出内部判定）。禁止任何改变业务决策逻辑的 hook —— `LOG_*` 只允许读取并打印，严禁回写被打印的状态字段（否则会让菜单在未打开时走上不该走的渲染分支）。
 - **环境无法测定时输出 NOTE，绝不造假 PASS/FAIL**：例如屏幕拥挤、无电池桌面机、系统自带睡眠断言等外部不可控状态，如实输出 NOTE。
 - **严禁谎称覆盖**：测试无法测定的系统边界必须诚实声明，绝不引入虚假断言。
 

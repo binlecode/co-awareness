@@ -23,10 +23,7 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 established which invariant — is as-built and lives in `docs/ARCHITECTURE.md` § 12; a completed item's
 durable outcome moves there and its row leaves this file.
 
-The Open items sit on the same arc:
-- R9 extends preset identity beyond the repo;
-- R8 is parity only;
-- R20 separates menu-open highlight from custom presets.
+The Open item sits on the same arc: R9 extends preset identity beyond the repo.
 
 ## Open
 
@@ -35,8 +32,6 @@ Ordered by ROI, highest first — value against cost, not just the priority band
 | ID | Item | Pri | Blocked by |
 |---|---|---|---|
 | R9 | **Custom GIFs are launch-only, not reusable presets.** Add first-class local animated-GIF presets under `~/.config/menubar-load-runner/presets/`, with drop-in discovery plus native menu/CLI import that validates, alpha-union crops, bounds, normalizes, atomically installs, and immediately selects the result. Static images and non-GIF animation formats stay out of the first cut; a raw positional GIF path remains the no-install escape hatch. Full accepted-input contract, resource budgets, identity/merge rules, failure semantics, symbol-level implementation order, and real-binary QA matrix: [`PLAN-custom-gifs.md`](PLAN-custom-gifs.md). | P4 | — |
-| R8 | **English only** — zero `NSLocalizedString`. | P4 | — |
-| R20 | **The menu-open highlight is not configurable.** This is an appearance preference, not part of custom-preset ingestion, and no longer shares R9's scope. | P4 | Define the desired highlighted and unhighlighted behavior against the layer-backed animation view before implementation. |
 
 ## Declined
 
@@ -48,6 +43,7 @@ the behavior being missed.
 | Item | Why not |
 |---|---|
 | GPU power and SoC package power readers (the rest of R10) | **Decided 2026-09-12:** Energy Model channels nest arbitrarily with cross-chip schema debt while closely correlating with CPU/GPU utilization and temperature readers, offering negligible ROI compared to the isolated ANE leaf rail. |
+| A numeric CPU speed-limit percentage on the temperature row (the other half of R23) | **Decided 2026-09-12:** Apple Silicon publishes a discrete pressure level, not a frequency cap — `IOPMCopyCPUPowerStatus` answers `kIOReturnNotFound` (probed) — so any percentage would be derived from a level rather than measured. Intel's `CPU_Speed_Limit` is real, but no Intel hardware is available to this project — both the read and the temperature row it would annotate would ship unverified. Re-propose with a reading from a real Intel Mac. |
 | Periodic update polling (R18) | **Decided 2026-09-10:** Launch-time discovery plus on-demand menu checks are sufficient for non-critical releases without adding background network timers or lifecycle complexity. |
 | An `.app` bundle · notarization · Homebrew cask · Sparkle · a URL scheme / automation interface | **Decided 2026-07-26:** Stays an unbundled source-built binary to preserve direct CLI argv execution, zero-cost ad-hoc signing, and git-native in-place updates without $99/yr notarization overhead. |
 | Closed-lid (clamshell) sleep prevention via `pmset disablesleep` (like modafinil) | **Violates unprivileged execution and clean-teardown tenets:** Mutating system-wide sleep policy via `pmset` requires root and risks leaving sleep permanently disabled on crash, unlike PID-bound `caffeinate`. |

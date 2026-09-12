@@ -11,6 +11,7 @@
 #   gui       §3 launch lifecycle · §3a Keep Awake battery conditions · §3b settings persistence ·
 #             §3c label slot geometry · §3d other sleep assertions · §3e machine sleep-hold state ·
 #             §3f Keep Awake launch arming · §3g freeze animation · §3h battery diagnostics ·
+#             §3i kernel thermal pressure ·
 #             §5 reader readouts · §4 error paths. These boot NSApplication + create an NSStatusItem, so
 #             they need an active WindowServer (GUI) session. Fine on a logged-in Mac; best-effort on
 #             hosted runners.
@@ -836,6 +837,83 @@ bk "forced unavailable battery reports unavailable" \
    "got: $diag_unavail"
 
 echo "  battery diagnostics: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
+
+# --- §3i Kernel thermal pressure [gui] -------------------------------------
+# R23: the temperature row says when the KERNEL has begun throttling, distinct from this app's own
+# animation self-throttling. MENUBAR_LOAD_RUNNER_FORCE_THERMAL pins the level (no way to cook a real
+# machine on demand); LOG_THERMAL prints the level, the derived gate, the row it produced, and the
+# self-throttle row's state — the last of which is what makes "display only" assertable.
+section "§3i kernel thermal pressure [gui — needs WindowServer]"
+pass=0; fail=0
+tk(){ [ "$2" = 1 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAIL [$1] $3"; fail=$((fail+1)); }; }
+# Every run here gets a throwaway state file. The app calls persistState() on exit unconditionally,
+# so without this the suite would load and rewrite the tester's real state.json — including a live
+# Keep Awake intent, which a test instance would then arm for itself.
+TH_ST="$PWD/tmp/qa-thermal-state.json"
+rm -f "$TH_ST"
+# $1 is the forced level ("" = no override, the real read); the rest are app flags. Taken as an
+# argument rather than an env prefix on the call: prefixing a FUNCTION invocation leaks the variable
+# into later calls in POSIX-mode shells, and this suite runs under bash 3.2 and zsh both.
+th(){ lvl=$1; shift; env MENUBAR_LOAD_RUNNER_FORCE_THERMAL="$lvl" MENUBAR_LOAD_RUNNER_LOG_THERMAL=1 \
+        MENUBAR_LOAD_RUNNER_STATE_FILE="$TH_ST" \
+        MENUBAR_LOAD_RUNNER_EXIT_AFTER=4 $BIN "$@" 2>&1 | grep '^THERMAL' | tail -1; }
+
+base=$(th "" --load-source temperature)
+if [ -z "$base" ] || ! echo "$base" | grep -q 'source=temperature'; then
+  echo "  NOTE [no die-temperature sensor on this machine (VM or Intel Mac) — launch fell back to cpu]"
+else
+  # 1. Shape only. Severity is NOT asserted: a thermally loaded test machine is a legitimate state,
+  #    not a regression, and asserting `nominal` here would make this test lie about hot hardware.
+  tk "live thermal line has the expected schema" \
+     "$(echo "$base" | grep -qE 'pressure=(nominal|fair|serious|critical) throttling=(true|false) source=temperature row=".+" app=".+"' && echo 1 || echo 0)" \
+     "got: $base"
+
+  # 2. Throttling replaces the sensor count rather than extending the row to a third clause. Holds
+  #    for the all-clusters-parked shape of this row too, which carries no count to replace.
+  ser=$(th serious --load-source temperature)
+  tk "serious annotates the temperature row and drops the sensor count" \
+     "$(echo "$ser" | grep -q 'row=".*· Thermal Throttling"' && ! echo "$ser" | grep -q 'sensors"' && echo 1 || echo 0)" \
+     "got: $ser"
+
+  # 3. `fair` is headroom narrowing, not throttling — annotating there would cry wolf on a warm Mac.
+  fair=$(th fair --load-source temperature)
+  tk "fair does not annotate" \
+     "$(echo "$fair" | grep -q 'throttling=false' && ! echo "$fair" | grep -q 'Thermal Throttling"' && echo 1 || echo 0)" \
+     "got: $fair"
+
+  # 4. The gap this closes: on a fixed speed the self-throttle row is hidden by design, so the
+  #    annotation is the only thermal indication left in the menu.
+  fix=$(th critical --load-source temperature --speed-multiplier 1.5)
+  tk "annotation survives fixed-speed mode, where the self-throttle row is hidden" \
+     "$(echo "$fix" | grep -q 'row=".*· Thermal Throttling"' && echo "$fix" | grep -q 'app="hidden"' && echo 1 || echo 0)" \
+     "got: $fix"
+
+  # 5. Display-only contract: forcing the level must move the usage row and NOTHING else. The app's
+  #    own self-throttle reads ProcessInfo.thermalState directly, so its row must stay as the machine
+  #    left it. Only assertable while the real machine is calm — say so rather than fake it.
+  if echo "$base" | grep -q 'app="hidden"'; then
+    crit=$(th critical --load-source temperature)
+    tk "forced level annotates the row without moving the app's self-throttle decision" \
+       "$(echo "$crit" | grep -q 'throttling=true' && echo "$crit" | grep -q 'app="hidden"' && echo 1 || echo 0)" \
+       "got: $crit"
+  else
+    echo "  NOTE [this machine is genuinely under thermal/power pressure — the display-only contract"
+    echo "        cannot be isolated from a real self-throttle here; rerun on a calm machine]"
+  fi
+fi
+
+# 6. No die sensor: the source is disabled and the launch falls back, so no orphan annotation can
+#    reach a row that isn't rendering a temperature.
+unavail=$(env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=temperature MENUBAR_LOAD_RUNNER_FORCE_THERMAL=critical \
+           MENUBAR_LOAD_RUNNER_LOG_THERMAL=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$TH_ST" \
+           MENUBAR_LOAD_RUNNER_EXIT_AFTER=4 $BIN --load-source temperature 2>&1 \
+           | grep '^THERMAL' | tail -1)
+tk "forced-unavailable temperature falls back without an orphan annotation" \
+   "$(echo "$unavail" | grep -q 'source=cpu' && ! echo "$unavail" | grep -q 'Thermal Throttling"' && echo 1 || echo 0)" \
+   "got: $unavail"
+
+rm -f "$TH_ST"
+echo "  kernel thermal pressure: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
 # --- §4 Error paths [gui] --------------------------------------------------
 section "§4 error paths (fast, no modal) [gui — needs WindowServer]"

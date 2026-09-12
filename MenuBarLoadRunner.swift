@@ -2403,6 +2403,44 @@ private final class TemperatureLoadMonitor {
     }
 }
 
+// What the KERNEL is doing to the machine, as opposed to what this app does about it. macOS answers
+// with a discrete pressure level and nothing more: on Apple Silicon the clock is managed on-die by
+// CLPC, and the numeric frequency cap Intel publishes as `CPU_Speed_Limit` has no counterpart —
+// IOPMCopyCPUPowerStatus answers kIOReturnNotFound here. So there is no percentage to show, and
+// inventing one from the level would be a fabricated reading. Level only, or nothing.
+//
+// Deliberately NOT wired into self-throttling: loadReductionReasons reads ProcessInfo.thermalState
+// directly and must keep doing so. This type exists to ANNOTATE the temperature readout, and its
+// test hook (`forced`) may therefore never reach a decision path — see logThermalIfRequested.
+enum KernelThermalPressure: String {
+    case nominal, fair, serious, critical
+
+    // `.fair` is headroom narrowing, not throttling — the kernel has not begun clocking anything
+    // down yet, so annotating there would cry wolf on a machine that is merely warm.
+    var isThrottling: Bool { self == .serious || self == .critical }
+
+    static func current() -> KernelThermalPressure {
+        if let forced { return forced }
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal:  return .nominal
+        case .fair:     return .fair
+        case .serious:  return .serious
+        case .critical: return .critical
+        @unknown default: return .nominal
+        }
+    }
+
+    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_THERMAL=<nominal|fair|serious|critical> pins the
+    // level, so the throttled row is testable without cooking a real machine — the reason it would
+    // otherwise ship unverified. Mirrors MENUBAR_LOAD_RUNNER_FORCE_BATTERY. Unset or unparseable =
+    // no override, real read.
+    private static let forced: KernelThermalPressure? = {
+        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_THERMAL"],
+              !raw.isEmpty else { return nil }
+        return KernelThermalPressure(rawValue: raw.lowercased().trimmingCharacters(in: .whitespaces))
+    }()
+}
+
 // Network throughput as a 0…1 load. Cumulative interface byte counters (getifaddrs → if_data) are
 // differenced over real elapsed wall time into inbound/outbound bytes/sec (counter-delta, warms up
 // one tick like CPU); the driving signal normalized by the shared adaptive ThroughputScaler is the
@@ -5178,6 +5216,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // when the label is off or custom — updateValueLabel() only rebuilds text in .value mode.
         updateValueLabel()
         logSlotGeometry()   // no-op unless MENUBAR_LOAD_RUNNER_LOG_SLOTS=1
+        logThermalIfRequested()   // no-op unless MENUBAR_LOAD_RUNNER_LOG_THERMAL=1
     }
 
     private func memoryPressureText() -> String {
@@ -5242,13 +5281,24 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // No sensor reporting means every cluster is power-gated. Say so and bound the reading with
         // "≤" — the floor is the number the animation runs on, but nothing measured it, so the row
         // must not present it as a measurement (see TemperatureLoadMonitor.sampleUsage).
+        // Once the kernel is throttling, THAT is what this row is watched for. Strictly the kernel's
+        // doing; this app's own response to the same heat stays on throttleStatusItem, which says
+        // "slowing animation" and never a temperature — the two rows must not read as one sentence
+        // twice. It has to reach BOTH shapes of this line: an all-clusters-parked read is a rendered
+        // state (hasSample stays true above), not an unavailable one, so returning early from it
+        // would drop the annotation exactly when the machine is hot enough to park and throttle.
+        let throttling = KernelThermalPressure.current().isThrottling
         guard let coolest = values.min(), let hottest = values.max() else {
-            return String(format: "Temperature: ≤%.0f °C · every core cluster parked",
-                          temperatureMonitor.currentCelsius)
+            let parked = String(format: "Temperature: ≤%.0f °C · every core cluster parked",
+                                temperatureMonitor.currentCelsius)
+            // Here it ADDS a clause instead of replacing one: "parked" is the honesty about the number
+            // itself and cannot step aside, where the sensor count below is incidental and can.
+            return throttling ? parked + " · Thermal Throttling" : parked
         }
         var line = String(format: "Temperature: %.0f °C", temperatureMonitor.currentCelsius)
         line += String(format: " · P-cores %.0f–%.0f °C", coolest, hottest)
-        line += " · \(values.count) sensor\(values.count == 1 ? "" : "s")"
+        line += throttling ? " · Thermal Throttling"
+                           : " · \(values.count) sensor\(values.count == 1 ? "" : "s")"
         return line
     }
 
@@ -5604,6 +5654,27 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         let handoff = (effectiveLabelMode != labelMode) ? 1 : 0
         fputs("ANIM running=\(running) freeze=\(freeze) frame=\(frameIndex) "
               + String(format: "speed=%.2f", speedMultiplier) + " labelHandoff=\(handoff)\n", stderr)
+    }
+
+    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_THERMAL=1, sibling to LOG_SLOTS/LOG_ANIMATION and there
+    // for the same no-TCC-grant reason: a shell cannot read an NSMenu, so the annotated usage row is
+    // otherwise unassertable. Prints the kernel level, the derived gate, and the row the gate produced,
+    // so a test asserts the decision and its rendered effect together.
+    //
+    // Read-only: it prints the title refreshMenuMetrics has just assigned and never assigns one itself,
+    // so enabling it cannot make the menu render a branch it would not have rendered. Emitted on the
+    // same 2s cadence as LOG_SLOTS, off the same call.
+    private let logThermal = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_THERMAL"] == "1"
+
+    private func logThermalIfRequested() {
+        guard logThermal else { return }
+        let pressure = KernelThermalPressure.current()
+        // `app=` is the self-throttle row's state, and printing it beside `pressure=` is what makes the
+        // display-only contract assertable: forcing the level must annotate the usage row while leaving
+        // this hidden, since loadReductionReasons reads ProcessInfo.thermalState and never this type.
+        let appRow = throttleStatusItem.isHidden ? "hidden" : throttleStatusItem.title
+        fputs("THERMAL pressure=\(pressure.rawValue) throttling=\(pressure.isThrottling) "
+              + "source=\(activeLoadSource.key) row=\"\(usageItem.title)\" app=\"\(appRow)\"\n", stderr)
     }
 
     // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1, sibling to LOG_SLOTS/LOG_ASSERTIONS/
