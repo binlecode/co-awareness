@@ -472,6 +472,49 @@ When Keep Awake is armed with a windowed duration (`keepAwakeDeadline != nil`):
 - **1-Second Countdown Ticker:** A unified 1-second timer (`syncKeepAwakeCountdownTicker()`) drives live updates while a windowed countdown is active on the bar, stopping when disarmed or expired to preserve the self-throttling footprint.
 - **Occlusion Gate:** The bar branch of that ticker reads the same `statusItemOccluded` verdict the frame driver does (§5), so a hidden item (notch, overflow, another Space, display off) costs 0 measure/relayout passes per second rather than 1 — a countdown exists to be looked at, and an 8-hour window is the case that makes the difference material. The *menu* branch is deliberately ungated: an open menu is its own window, visible whatever the status item is doing. On resume `updateAnimationForOcclusion()` redraws through `refreshKeepAwakeCountdown()` before restarting the timer, so the slot never shows the second it went dark on for up to a tick.
 
+### 6.4 Click Dispatch & Modifier Routing
+
+All three slots present the same `infoMenu`, but none of them owns it. A permanently attached
+`NSStatusItem.menu` makes AppKit handle the mouse-down itself and never fires the button's action —
+which is the only place a modifier can be read — so the menu is attached only for the duration of a
+plain click and each slot carries `handleStatusItemClick(_:)` the rest of the time.
+
+```
+                [ Click on any of the three status item slots ]
+                                      |
+                                      v
+                       handleStatusItemClick(_:) reads
+                          NSApp.currentEvent modifiers
+                                      |
+                  +-------------------+-------------------+
+                  |                                       |
+        [ leftMouseUp + exactly Option ]        [ anything else ]
+                  |                                       |
+                  v                                       v
+        toggleKeepAwakeQuick()                   presentInfoMenu(from:)
+        (no menu is ever shown)                  item.menu = infoMenu
+                  |                              button.performClick(nil)   <- modal
+                  v                              item.menu = nil            <- on close
+        arm/disarm via the submenu's                       |
+        own two functions (§ 7.6)                          v
+                                                 menuWillOpen / menuDidClose
+                                                 fire unchanged (delegate is
+                                                 on the menu, not the item)
+```
+
+- **Why not `popUpMenu(_:)`:** it does the same job without the attach/detach, but has been deprecated
+  since macOS 11 and this build is gated warning-clean (`tests/qa.sh` § 1).
+- **No re-entrancy:** `NSStatusItem` intercepts `performClick` below target/action, so the popup does not
+  re-invoke `handleStatusItemClick`. The button's target/action also survives attaching and detaching
+  `menu`, so there is nothing to re-wire — both verified against the real AppKit on macOS 26, not assumed
+  from the widely-copied idiom, which asserts the opposite.
+- **Modifier exclusivity:** the toggle requires *exactly* `.option` on `leftMouseUp`. Right-click and
+  Control-click stay the conventional "show me the menu" gesture and must never arm anything; Command is
+  left untouched so the system keeps its own drag-to-rearrange modifier.
+- **Accepted cost:** an attached `menu` opens on mouse-*down*; an action fires on mouse-*up*. The dropdown
+  therefore now appears on release rather than on press. This is the price of reading the modifier at all,
+  and it is the same trade every status-bar app that supports modifier clicks makes.
+
 ---
 
 ## 7. Integrated Sleep Prevention (`SleepPreventer`) & Assertion Monitor
@@ -572,6 +615,37 @@ one that costs the job.
 - **Machine-Wide Sleep Semantics:** Sleep is a system-wide hardware/kernel state managed by `powerd`. A `caffeinate` assertion prevents the entire Mac from sleeping, so holds from two concurrent user sessions do not compose independently. User intent remains cleanly partitioned per user via per-account `state.json` (§ 8.2).
 - **Fast User Switching GUI Isolation:** Windows and status items belonging to a background login session are invisible from the foreground session due to macOS WindowServer security boundaries. Background Keep Awake assertions deliberately continue running across user switches so unattended jobs finish without interruption.
 - **Unprivileged Clamshell Sleep Boundary:** Subprocess `caffeinate -di -w <pid>` cannot prevent clamshell (closed-lid) sleep on battery power. Inhibiting clamshell sleep on battery requires mutating system-wide NVRAM power settings via root-privileged `pmset disablesleep`, which violates the unprivileged execution tenet and risks leaving sleep permanently disabled if the process terminates abnormally. Supported closed-lid operation requires Apple's standard clamshell conditions (AC power + external display).
+
+### 7.6 Option-Click Quick Toggle (R21)
+
+Option-clicking any of the three status item slots (§ 6.4) arms or disarms Keep Awake without opening
+the dropdown, matching the modifier-click convention of the system's own Wi-Fi and Battery items.
+
+The gesture is deliberately a **shortcut through** the submenu's two existing paths, never a second
+implementation of them — `toggleKeepAwakeQuick()` calls `armKeepAwake(with:)` and `disarmKeepAwake()`,
+the same functions the duration rows and the `Off` row call. That is what makes every guarantee below
+inherited rather than re-argued:
+
+- **The 5% floor still holds.** Arming routes through `updateSleepPrevention()` →
+  `SleepPreventer.applyConditions(suspend:)`, and `KeepAwakeSuspension.batteryCritical` is not
+  overridable by construction. No gesture can reach past it (§ 7.2).
+- **The battery-override rule is unchanged.** The gesture passes `isUserGesture: true`, so it grants the
+  arm-anyway override on exactly the same condition a menu click does: only while an overridable
+  suspension is actually in force.
+- **Single-writer persistence holds.** Both branches end in `persistState()` (§ 8.2).
+- **The window is never invented.** The toggle arms `keepAwakeSelectedDuration` as it stands, which is
+  `.indefinite` unless a window is live — disarming runs `clearKeepAwakeWindow()`, which resets the
+  selection to `.indefinite`, the same default the submenu's first duration row carries. There is no
+  separate "last duration" memory and no state added to `state.json`.
+
+`disarmKeepAwake()` exists so that "off" has exactly one meaning across both surfaces: intent withdrawn,
+any armed window dropped, any process binding released, and the arm-anyway override withdrawn with them.
+
+**Verification boundary:** the gesture itself is not machine-testable here. Injecting a modified click
+needs `CGEvent` posting under an Accessibility (TCC) grant, and every observability hook in this project
+exists precisely to avoid requiring one. Its *effects* are covered — the arm and disarm paths are the
+same ones `tests/qa.sh` § 3a/§ 3f already drive — but that Option-click, plain click and right-click each
+route correctly is an eyes-and-hands check in the manual walk (§ 13), not a scripted assertion.
 
 ---
 

@@ -4139,10 +4139,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         infoMenu.items.forEach { $0.target = self }
         refreshStartAtLoginState()
         refreshFreezeAnimationState()
-        statusItem.menu = infoMenu
-        // Both label slots share the animation's dropdown, so clicking the number opens the same menu.
-        labelItemLeft.menu = infoMenu
-        labelItemRight.menu = infoMenu
+        // All three slots present the same dropdown — clicking the number opens the animation's menu —
+        // but none of them OWNS it. A permanently attached `NSStatusItem.menu` makes AppKit handle the
+        // mouse-down itself and never fire the button's action, which is the only place the modifier
+        // behind the Option-click quick toggle can be read. So the menu is attached only for the
+        // duration of a plain click (presentInfoMenu) and every slot carries the dispatch action the
+        // rest of the time. NSStatusItem.popUpMenu would pop it without the attach/detach dance, but it
+        // has been deprecated since macOS 11 and this build is warning-clean.
+        clickDispatchItems.forEach(wireClickDispatch(on:))
         refreshPresetSelectionState()
         refreshWidthInfo()
         applyLaunchFreezeState()   // before the label pass below: a frozen launch sizes the handoff slot with it
@@ -4855,6 +4859,50 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .temperature: return temperatureMonitor.currentLoad
         case .ane: return aneMonitor.currentLoad
         }
+    }
+
+    // Every slot that presents the dropdown, and so every slot the click dispatch has to cover. Nil
+    // only before applicationDidFinishLaunching has built them.
+    private var clickDispatchItems: [NSStatusItem] {
+        [statusItem, labelItemLeft, labelItemRight].compactMap { $0 }
+    }
+
+    // Attach the click handler to one slot's button. Both mouse-ups, because with no `.menu` attached
+    // AppKit does nothing with a right-click on its own, and a right- or control-click must still reach
+    // the handler to open the dropdown the way it always has.
+    private func wireClickDispatch(on item: NSStatusItem) {
+        guard let button = item.button else { return }
+        button.target = self
+        button.action = #selector(handleStatusItemClick(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    }
+
+    // The one place a menu-bar click is classified. Option + plain left-click is the quick toggle;
+    // everything else opens the dropdown, which is what every click did before this existed.
+    @objc
+    private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        let flags = event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+        // Exactly Option, and only on the left button: a right- or control-click is the conventional
+        // "show me the menu" gesture and must never arm anything, and Command is left untouched so the
+        // system keeps its own drag-to-rearrange modifier.
+        if event?.type == .leftMouseUp, flags == .option {
+            toggleKeepAwakeQuick()
+            return
+        }
+        presentInfoMenu(from: sender)
+    }
+
+    // Pop the dropdown from whichever slot was clicked. Attaching `menu` and clicking the button hands
+    // the popup to NSStatusItem's own (non-deprecated) path: it intercepts below target/action, so this
+    // does not re-enter handleStatusItemClick, and it runs the menu modally, so the detach lands after
+    // the menu closes. The button's target/action survives the round trip — verified, not assumed —
+    // which is why there is nothing to re-wire here.
+    private func presentInfoMenu(from button: NSStatusBarButton) {
+        guard let item = clickDispatchItems.first(where: { $0.button === button }) else { return }
+        item.menu = infoMenu
+        button.performClick(nil)
+        item.menu = nil
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -6063,10 +6111,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     @objc
     private func selectKeepAwakeOption(_ sender: NSMenuItem) {
         if sender.tag == Self.keepAwakeOffTag {
-            if sleepPreventer.isEnabled { sleepPreventer.setEnabled(false) }
-            clearKeepAwakeWindow()   // Off ends any armed window too
-            clearKeepAwakeBinding()  // …and any process it was waiting on
-            keepAwakeBatteryOverride = false   // Off withdraws the arm-anyway gesture with the intent
+            disarmKeepAwake()
         } else if let choice = KeepAwakeColor(rawValue: sender.tag) {
             grantKeepAwakeBatteryOverrideIfOffered()
             activeKeepAwakeColor = choice
@@ -6074,6 +6119,34 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         }
         updateSleepPrevention()   // spawns/suspends caffeinate, re-tints the bar, refreshes the group
         persistState()
+    }
+
+    // What "off" means, in one place: intent withdrawn, and with it any armed window, any process the
+    // hold was waiting on, and the arm-anyway gesture that authorized it over a low battery. Leaves the
+    // caller to drive updateSleepPrevention() and persistState(), since the Off row folds those into
+    // the same pass that handles the tint rows.
+    private func disarmKeepAwake() {
+        if sleepPreventer.isEnabled { sleepPreventer.setEnabled(false) }
+        clearKeepAwakeWindow()   // Off ends any armed window too
+        clearKeepAwakeBinding()  // …and any process it was waiting on
+        keepAwakeBatteryOverride = false   // Off withdraws the arm-anyway gesture with the intent
+    }
+
+    // The Option-click quick toggle (R21). Deliberately a shortcut THROUGH the submenu's own two paths rather
+    // than a second implementation of them, so the 5% floor, the battery-override rule and the
+    // single-writer persist all apply to the gesture unchanged and cannot drift from the rows.
+    //
+    // Arms whatever window is currently selected, which is .indefinite unless one is live: a disarm
+    // runs clearKeepAwakeWindow(), which resets the selection to .indefinite — the same default the
+    // submenu's first duration row carries. So the gesture never silently invents a window length.
+    private func toggleKeepAwakeQuick() {
+        if sleepPreventer.isEnabled {
+            disarmKeepAwake()
+            updateSleepPrevention()
+            persistState()
+        } else {
+            armKeepAwake(with: keepAwakeSelectedDuration)
+        }
     }
 
     // Duration group handler. Reads only its own rows' tags (indices into presetRows) — the sibling
