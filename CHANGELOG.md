@@ -29,6 +29,18 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [Unreleased]
+
+### Fixed
+
+- **A timed Keep Awake kept a 1 Hz redraw running while the icon was hidden.** The menu-bar countdown
+  measured and relaid out its slot every second even with the status item behind the notch, in menu-bar
+  overflow, on another Space, or with the display asleep — the one case the app's pause-when-hidden
+  rule exists to cover, and an 8-hour window held it for eight hours. The countdown now reads the same
+  occlusion verdict the animation does and stops with it, redrawing on the way back so the slot never
+  shows the second it went dark on. A countdown *in an open menu* is unaffected: the menu is its own
+  window, visible whatever the status item is doing.
+
 ## [1.23.0] - 2026-09-10
 
 ### Added

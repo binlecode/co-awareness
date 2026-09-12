@@ -4599,7 +4599,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // row to render. Stops when neither applies, preserving the self-throttle / minimal-footprint ethos.
     // `.common` mode is required so modal menu tracking doesn't block it.
     private func syncKeepAwakeCountdownTicker() {
-        let hasActiveCountdown = activeKeepAwakeCountdownText != nil
+        // Occlusion-gated for the same reason the game loop is (see syncGameLoopRunning): a bar
+        // countdown exists only to be looked at, so re-measuring and relaying out the slot once a
+        // second behind the notch or with the display off is exactly the work this app's
+        // self-throttling ethos refuses. An 8h window used to hold a 1Hz relayout the whole time.
+        // The menu branch is deliberately NOT gated: an open menu is its own window, and the user is
+        // looking at it whatever the status item is doing.
+        let hasActiveCountdown = activeKeepAwakeCountdownText != nil && !statusItemOccluded
         let needsMenuTicker = isMenuOpen && (keepAwakeDeadline != nil || awakeHold.isHeld || awakeHold.isPartial)
         guard hasActiveCountdown || needsMenuTicker else {
             stopKeepAwakeCountdownTicker()
@@ -4608,21 +4614,28 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         guard keepAwakeCountdownTicker == nil else { return }
         let ticker = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                if self.isMenuOpen {
-                    self.refreshKeepAwakeSelectionState()
-                }
-                if self.activeKeepAwakeCountdownText != nil {
-                    self.updateValueLabel()
-                } else {
-                    // Countdown elapsed while menu was closed: collapse or restore slot and stop ticker.
-                    self.applyLabelMode()
-                    self.syncKeepAwakeCountdownTicker()
-                }
+                self?.refreshKeepAwakeCountdown()
             }
         }
         keepAwakeCountdownTicker = ticker
         RunLoop.main.add(ticker, forMode: .common)
+    }
+
+    // One tick's worth of countdown work. Extracted from the ticker body because an occlusion resume
+    // needs exactly the same pass: the slot was left holding whatever second it was hiding at, so it
+    // is redrawn before the ticker restarts rather than showing a stale value until the next tick.
+    private func refreshKeepAwakeCountdown() {
+        if isMenuOpen {
+            refreshKeepAwakeSelectionState()
+        }
+        if activeKeepAwakeCountdownText != nil {
+            updateValueLabel()
+        } else {
+            // Countdown elapsed while the menu was closed (or while hidden): collapse or restore the
+            // slot and stop the ticker.
+            applyLabelMode()
+            syncKeepAwakeCountdownTicker()
+        }
     }
 
     private func stopKeepAwakeCountdownTicker() {
@@ -6643,6 +6656,17 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         sleepPreventer.isEnabled && !sleepPreventer.isRunning
     }
 
+    // Whether the status item group is fully hidden (behind the notch / menu-bar overflow, another
+    // Space, display off). One reading, shared by every periodic worker that exists only to draw:
+    // the animation item is the one the occlusion observer is bound to, and §6 keeps the three items
+    // contiguous, so its visibility is the group's.
+    private var statusItemOccluded: Bool {
+        guard let window = statusItem.button?.window else {
+            return false   // no window yet (early launch) — matches the old unconditional start
+        }
+        return !window.occlusionState.contains(.visible)
+    }
+
     // The one place that decides whether the frame driver runs. Total over both inputs (occlusion,
     // freeze) so no caller can resume past a condition it didn't check — the occlusion path used to
     // start the loop blindly on visibility, which a freeze must survive. On resume startGameLoop()
@@ -6650,13 +6674,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // ones — identical for an occlusion resume and an unfreeze. On freeze the last advance already
     // drew the current frame, so no renderCurrentFrame() is needed either way.
     private func syncGameLoopRunning() {
-        let occluded: Bool
-        if let window = statusItem.button?.window {
-            occluded = !window.occlusionState.contains(.visible)
-        } else {
-            occluded = false   // no window yet (early launch) — matches the old unconditional start
-        }
-        let shouldRun = !occluded && animationFreeze == nil
+        let shouldRun = !statusItemOccluded && animationFreeze == nil
         if shouldRun {
             if displayLink == nil, fallbackTimer == nil { startGameLoop() }
         } else {
@@ -6667,7 +6685,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Pause the game loop while the status item is fully occluded, resume when it becomes visible
     // again. Only ever stops in response to a positive occlusion event (no window reads as visible
     // above), so a never-firing notification leaves animation running — no freeze risk.
-    private func updateAnimationForOcclusion() { syncGameLoopRunning() }
+    private func updateAnimationForOcclusion() {
+        syncGameLoopRunning()
+        // The countdown ticker is gated on the same reading, so it has to be re-decided here or a
+        // hidden-then-visible item would never get it back. Redraw before restarting: the slot still
+        // holds the second it went dark on, and the ticker's first fire is a second away.
+        if !statusItemOccluded { refreshKeepAwakeCountdown() }
+        syncKeepAwakeCountdownTicker()
+    }
 
     // Drives frame advancement off the display's refresh signal via CADisplayLink
     // (macOS 14+), so ticks are vsync-aligned and follow the status item's screen
