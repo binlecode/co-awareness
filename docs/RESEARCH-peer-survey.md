@@ -1,12 +1,12 @@
 # RESEARCH — Peer Survey: macOS Status Bar Load Visualizers & Telemetry Monitors
 
 > **Scope:** Comprehensive technical peer survey and architectural comparison of open-source macOS status bar system monitors, load visualizers, and sleep inhibitors in 2026.
-> **Peer set:** `RunCatNeo` (runcat-dev), `menubar_runcat` (Kyome22), `zoomies` (KartikLabhshetwar), `DanceKunKun` (ygsgdbd), `tray-pulsy` (krissss), `sysprite` (AbhinavGupta-de), `stats` (exelban), `Hot` (macmade), `macstate` (snail007), `better-resource-monitor` (alexx855), `KeepingYouAwake` (newmarcel), `Belay` (PerfectoWeb), `Sleepless` (Aboudjem).
+> **Peer set:** `RunCatNeo` (runcat-dev), `menubar_runcat` (Kyome22), `zoomies` (KartikLabhshetwar), `DanceKunKun` (ygsgdbd), `tray-pulsy` (krissss), `sysprite` (AbhinavGupta-de), `RsCat` (luke358), `stats` (exelban), `Hot` (macmade), `macstate` (snail007), `better-resource-monitor` (alexx855), `mac-vitals` (netsatsawat), `light-stats` (EvilIrving), `featherbar` (nim444), `KeepingYouAwake` (newmarcel), `Belay` (PerfectoWeb), `Sleepless` (Aboudjem), `keepresso` (gyorgysh), `caffeineOSS` (Kuberwastaken).
 > **Methodology:** Public README / documentation review, live GitHub repository metadata checks (stars, tags, release histories), plus
 > **direct source-code inspection of `newmarcel/KeepingYouAwake` 1.6.8 only** (§8). Everything said about the
 > other peers is documentation-level and repository-metadata-level, not source-verified, and none of them was runtime-profiled — so no
 > claim here is a category-first claim (see `docs/ROADMAP.md` § Verification debt, the R13 row).
-> **Snapshot:** September 2026. Star counts, activity dates and feature sets are point-in-time reads of
+> **Snapshot:** September 11, 2026 (live re-verification via GitHub API and web inspection). Star counts, activity dates and feature sets are point-in-time reads of
 > other people's projects and **go stale on their schedule, not ours**.
 > **Re-check or prune before 2027-03-01**, and before any public use of a comparative claim: confirm each
 > peer's current release, then either re-date this line or delete the rows you did not re-verify. A survey
@@ -21,14 +21,15 @@ The macOS menu bar customization and system-monitoring category has experienced 
 
 In 2026, the ecosystem exhibits several notable evolutions:
 
-1. **Modernization & Extensibility of Animated Visualizers:** The launch of **RunCat Neo** (`runcat-dev/RunCatNeo`, 838+ stars) in 2026 represents the active open-source successor from the RunCat ecosystem. Written in Swift 6.2 for macOS 26 Tahoe, it introduces **Custom Metrics** (polling local JSON files to visualize AI agent token usage such as Claude Code and Codex, cryptocurrency prices, or custom scripts) alongside a community **Runner Gallery** for pixel-art keyframes.
-2. **Major Milestone in General Monitors:** The premier open-source system monitor, **Stats** (`exelban/stats`), crossed 41,700+ GitHub stars and released **v3.0.0** (latest v3.0.15 in September 2026), initiating a new architectural chapter for comprehensive multi-module telemetry.
-3. **Specialization in Power Management & Sleep Inhibition:** Beyond classic `caffeinate` GUI wrappers like **KeepingYouAwake** (6,897 stars, v1.6.8), the category has branched into specialized sub-genres:
-   - **AI-agent session guards:** Tools like **Belay** (`PerfectoWeb/Belay`) keep Macs awake specifically while autonomous agents (Claude Code, Codex, Cline, Aider) are running.
-   - **Closed-lid/clamshell sleep management:** Utilities like **Sleepless** (`Aboudjem/Sleepless`) and **keepresso** (`gyorgysh/keepresso`) leverage `pmset disablesleep` to keep MacBooks running as headless servers with the lid closed.
-4. **App Store Sandboxing Backlash & Dotfile Alignment:** Power users and terminal-centric developers increasingly favor lightweight, unbundled, CLI-driven utilities that run without Xcode project overhead, script cleanly via user LaunchAgents, and read unprivileged Mach and SMC telemetry directly.
+1. **Modernization & Extensibility of Animated Visualizers:** The launch of **RunCat Neo** (`runcat-dev/RunCatNeo`, 840 stars, v1.0.3) in 2026 represents the active open-source successor from the RunCat ecosystem. Written in Swift 6.2 for macOS 26 Tahoe, it introduces **Custom Metrics** (polling local JSON files to visualize AI agent token usage such as Claude Code and Codex, cryptocurrency prices, or custom scripts) alongside a community **Runner Gallery** for pixel-art keyframes. Cross-platform interest has also spurred exploratory native Rust implementations like **RsCat** (`luke358/RsCat`, v0.1.2).
+2. **Major Milestone in General Monitors:** The premier open-source system monitor, **Stats** (`exelban/stats`), reached 41,729 GitHub stars and released **v3.0.0** (latest v3.0.15 in September 2026), initiating a new architectural chapter for comprehensive multi-module telemetry.
+3. **Specialization in Power Management & Sleep Inhibition:** Beyond classic `caffeinate` GUI wrappers like **KeepingYouAwake** (6,898 stars, v1.6.8), the category has branched into specialized sub-genres:
+   - **AI-agent session guards:** Tools like **Belay** (`PerfectoWeb/Belay`, 34 stars, v1.8.1) keep Macs awake specifically while autonomous agents (Claude Code, Codex, Cline, Aider) are running.
+   - **Closed-lid/clamshell sleep management:** Utilities like **Sleepless** (`Aboudjem/Sleepless`, 65 stars, v1.2.7) and **keepresso** (`gyorgysh/keepresso`, 86 stars, v1.24.1) leverage `pmset disablesleep` to keep MacBooks running as headless servers with the lid closed.
+   - **Corporate MDM circumvention:** Utilities like **caffeineOSS** (`Kuberwastaken/caffeineOSS`, 14 stars, v1.0.0) offer ~120 lines of local-compilation Swift to evade MDM blocks on prebuilt binaries, albeit requiring `sudo pmset`.
+4. **App Store Sandboxing Backlash & Lightweight Minimalist Monitors:** Power users and terminal-centric developers increasingly favor lightweight, unbundled, CLI-driven utilities that run without Xcode project overhead, script cleanly via user LaunchAgents, and read unprivileged Mach and SMC telemetry directly. This has also spurred minimal monitors like **Light Stats** (`EvilIrving/light-stats`, 25 stars, v1.9.2) focusing on holistic 0–100 system pressure, **featherbar** (`nim444/featherbar`, 5 stars) delivering zero-background-thread flat-memory Rust monitoring, and **Mac Vitals** (`netsatsawat/mac-vitals`, v0.2.1) providing unprivileged Apple Silicon rail power and an MCP server.
 
-Within this landscape, **MenuBar Load Runner** occupies a specialized, command-line-first niche. It is a single-file Swift script backed by a Zsh launcher, featuring adaptive rate scaling (`btop` hysteresis), power-throttling, occlusion-awareness, and machine-wide sleep assertion inspection — functioning as a high-efficiency animated load visualizer and live status-bar diagnostic monitor.
+Within this landscape, **MenuBar Load Runner** (v1.23.0) occupies a specialized, command-line-first niche. It is a single-file Swift script backed by a Zsh launcher, featuring adaptive rate scaling (`btop` hysteresis), power-throttling, occlusion-awareness, machine-wide sleep assertion inspection, process-bound sleep inhibition (`--keep-awake-pid`), and a direct menu-bar countdown readout — functioning as a high-efficiency animated load visualizer and live status-bar diagnostic monitor.
 
 ---
 
@@ -46,15 +47,16 @@ These are open-source macOS status-bar projects whose core mission is to map har
   - **Power and occlusion awareness:** Monitors window/notch occlusion and pauses frame rasterization and display loops when hidden, dropping rendering CPU usage to **0%**. Automatically caps its own animation rate under thermal, memory, or Low Power pressure. Honors the macOS **Reduce Motion** accessibility setting (freezing the icon on the current frame, live via workspace notification) and provides a manual **Freeze Animation** toggle — while frozen, the live reading hands off to the adjacent label slot so the indicator never goes silent.
   - **Telemetry variety:** Supports 8 unprivileged hardware inputs (CPU load, memory load + swap rate, GPU usage, network bandwidth, disk I/O, fan speed, battery discharge current, and die temperature — the last two SMC/IOKit-backed through a shared read-only `SMCClient` with binary-search key discovery). Each source is capability-probed at launch (`isAvailable`), so hardware-dependent inputs degrade gracefully (e.g. fanless Macs disable the Fan source in the menu, and `--load-source fan` falls back cleanly to CPU).
   - **Live in-menu diagnostic dashboard:** The status-bar dropdown functions as a lightweight monitor refreshed every 2s. It displays a **60-second load-history sparkline** (`LoadHistoryView`, 30 samples × 2s, color-coded green/yellow/red by threshold), the active source's numeric readout (CPU/GPU/fan %, memory % + swap capacity + live MB/s, network ↓↑ or disk r/w in MB/s), system **load averages (1/5/15m)** via `getloadavg`, a load/pressure **state** line, the current **speed multiplier**, and a named **self-throttle cause** line when active.
-  - **Built-in Keep Awake (sleep inhibitor):** A menu selection spawns `caffeinate -di -w <pid>` (display and idle sleep prevention, bound to the app's PID) so long builds and downloads finish uninterrupted, with battery- and thermal-aware auto-disengage protection (5% hard critical floor). A timed window can be armed via presets or custom duration, surviving relaunches and accepting launch-time CLI flags.
+  - **Built-in Keep Awake (sleep inhibitor & process watch):** Spawns `caffeinate -di -w <pid>` (display and idle sleep prevention, bound to the app's PID) so long builds and downloads finish uninterrupted, with battery- and thermal-aware auto-disengage protection (5% hard critical floor). Supports both timed windows (presets or custom duration surviving relaunches) and **process-bound sleep inhibition** (`--keep-awake-pid <pid>` / `Until a process exits…` via `DispatchSourceProcess .exit` watch and `kill(pid, 0)` liveness check), holding the Mac awake until an unattended compiler, script, or AI agent run exits.
+  - **Menu-bar surface countdown:** The active Keep Awake countdown renders directly in the adjacent menu bar slot (`88:88:88` fixed-width template, 1Hz ticker derived from deadline) so remaining hold time is legible at a glance without opening the menu.
   - **Machine-wide sleep assertion inspection:** Queries `IOPMCopyAssertionsByProcess` to inspect foreign sleep assertions holding the Mac awake, rendering hold attribution and remaining deadlines in the menu.
 * **Trade-offs and Limitations:**
-  - **No dedicated preferences window:** Runtime settings are accessible via the status-bar dropdown (load source, preset, Keep Awake state/color/duration, plus a `Settings ▸` submenu holding persisted preferences: label mode/side, Keep Awake battery threshold, Freeze Animation, and Start-at-Login LaunchAgent management). Adding custom GIFs requires editing `gifs/presets.json`.
+  - **No dedicated preferences window:** Runtime settings are accessible via the status-bar dropdown (load source, preset, Keep Awake state/color/duration/process-exit, plus a `Settings ▸` submenu holding persisted preferences: label mode/side, Keep Awake battery threshold, Freeze Animation, and Start-at-Login LaunchAgent management). Adding custom GIFs currently requires editing `gifs/presets.json` (first-class local preset import planned in R9).
   - **Source-based distribution:** Distributed as a source repository rather than a prebuilt `.dmg` or App Store package (though a one-line `curl | bash` installer, a LaunchAgent generator, and a git-native in-app update check with click-gated `git pull` self-update streamline deployment).
   - **Static asset registry:** Relies on GIF assets registered on disk rather than dynamic in-app pixel editors.
   - **Lightweight diagnostic scope:** Deliberately excludes battery health cycle counts and per-PID process breakdowns to maintain zero-config, unprivileged execution.
 
-### 2.2 runcat-dev / RunCatNeo (838+ Stars)
+### 2.2 runcat-dev / RunCatNeo (840 Stars, v1.0.3)
 
 * **What it is:** The active open-source next-generation RunCat application for macOS, launched in 2026 by the RunCat developer community (`runcat-dev`, Kyome22).
 * **Core mechanics:** Animates a running cat or community runner in the menu bar based on system CPU metrics, while supporting arbitrary external JSON metric cards.
@@ -62,11 +64,11 @@ These are open-source macOS status-bar projects whose core mission is to map har
   - Built with modern Swift 6.2 and the LUCA architecture, targeting macOS 26 Tahoe.
   - **Custom Metrics engine:** Can poll user-specified local JSON files to display arbitrary telemetry cards on the dropdown (e.g. Claude Code token usage, Codex sessions, Bitcoin prices, custom script telemetry).
   - **Runner Gallery ecosystem:** Centralized online portal (`runcat-dev.github.io/RunnerGallery/`) for sharing and downloading community-authored keyframe animations.
-  - Official distribution through the Mac App Store alongside GitHub releases.
+  - Official distribution through the Mac App Store alongside GitHub releases (latest release v1.0.3, active commits in September 2026).
 * **Weaknesses:**
   - Requires full Xcode 26.5+ environment to build from source; delivered as a standard compiled `.app` bundle.
   - Core animation driver remains tied to CPU percentage thresholds; does not offer btop-style adaptive scaling for unbounded stream metrics (disk IO / network / swap).
-  - No built-in sleep assertion management or system-wide power assertion diagnostics.
+  - No built-in sleep assertion management, process-exit watches, or system-wide power assertion diagnostics.
   - Lacks command-line interface, CLI launch flags, and dotfile-friendly headless orchestration.
 
 ### 2.3 Kyome22 / menubar_runcat (510 Stars)
@@ -110,7 +112,7 @@ These are open-source macOS status-bar projects whose core mission is to map har
 * **Weaknesses:**
   - Lacks multi-sensor telemetry (CPU-focused), unbounded rate scaling, self-throttling under power pressure, or developer-focused CLI launchers.
 
-### 2.7 AbhinavGupta-de / sysprite (Emerging 2026)
+### 2.7 AbhinavGupta-de / sysprite (Emerging 2026, 1 Star, v0.1.1)
 
 * **What it is:** A lightweight animated menu-bar pet written in pure Swift Package Manager (no Xcode project) whose animation speed reflects composite "system pressure" (CPU + memory + disk + network combined).
 * **Core mechanics:** Computes combined hardware pressure, provides 6 bundled sprite themes, a 60-sample sparkline menu, and a JSON CLI (`sysprite stats`) designed for SketchyBar integration.
@@ -122,20 +124,34 @@ These are open-source macOS status-bar projects whose core mission is to map har
   - Blends metrics into a single opaque "pressure" formula rather than offering dedicated, discrete telemetry readers.
   - No sleep management, occlusion pausing, or adaptive rate scaling.
 
+### 2.8 luke358 / RsCat (Emerging 2026, 1 Star, v0.1.2)
+
+* **What it is:** An open-source, cross-platform desktop tray runner written in Rust, inspired by RunCat 365.
+* **Core mechanics:** Core crate handling CPU metrics, animation intervals, and embedded runner assets; cross-platform tray backed by `tray-icon`; settings window built in Slint.
+* **Strengths:**
+  - Demonstrates that the menu-bar runner concept is being explored outside Apple-only toolchains in modern systems languages (Rust).
+  - Cross-platform architectural foundation.
+* **Weaknesses:**
+  - Early MVP stage (v0.1.2, May 2026); CPU-only telemetry.
+  - Lacks native AppKit deep integration, dynamic menu-bar geometry handling, power-aware self-throttling, or sleep management.
+
 ---
 
 ## 3. Adjacent Peers (General System Monitors & Utilities)
 
 These are non-animated utilities that live in the macOS menu bar to display hardware telemetry or manage sleep assertions. They lack animation visualizers but represent popular alternatives for system monitoring and power management.
 
-* **exelban / stats (41,700+ Stars):** The benchmark for open-source macOS system monitoring. Written in Swift, it occupies the traditional comprehensive dashboard space — core-by-core graphs, network transfer rates, temperatures, battery health cycle counts, and per-process usage breakdowns. Released major version **v3.0.0** in June 2026 (latest v3.0.15 in September 2026). Highly customizable, running a persistent background daemon.
+* **exelban / stats (41,729 Stars):** The benchmark for open-source macOS system monitoring. Written in Swift, it occupies the traditional comprehensive dashboard space — core-by-core graphs, network transfer rates, temperatures, battery health cycle counts, and per-process usage breakdowns. Released major version **v3.0.0** in June 2026 (latest v3.0.15 in September 2026). Highly customizable, running a persistent background daemon.
 * **macmade / Hot (3,038 Stars, v1.9.4):** A specialized native menu bar utility focused strictly on thermal limits — monitoring whether macOS is throttling CPU speed due to hardware heat or power constraints.
-* **snail007 / macstate (46 Stars, v1.8.2) & alexx855 / better-resource-monitor (43 Stars, v1.1.9):** Compact menu bar resource monitors designed for minimal memory footprints, the latter built on Rust and Tauri.
-* **netsatsawat / mac-vitals (Emerging 2026):** Open-source Apple Silicon menu bar monitor (CPU, GPU, memory, power, temperature, fan) running without sudo, featuring a built-in Model Context Protocol (MCP) server for direct AI agent integration.
-* **newmarcel / KeepingYouAwake (6,897 Stars, v1.6.8):** Dedicated sleep inhibitor and status bar menu utility wrapping `caffeinate` (analyzed in depth in §8).
-* **AI-Agent & Closed-Lid Keep-Awake Utilities (2026 Trend):**
-  - **PerfectoWeb / Belay (34 Stars):** Specifically prevents macOS sleep while AI coding agents (Claude Code, Codex, Cline, Aider) are actively executing tasks.
-  - **Aboudjem / Sleepless (65 Stars) & gyorgysh / keepresso (84 Stars):** Keep MacBooks awake with the lid closed on battery using `pmset disablesleep`, with auto-off timers and battery floor cutoffs.
+* **snail007 / macstate (46 Stars, v1.8.2) & alexx855 / better-resource-monitor (44 Stars, v1.1.9):** Compact menu bar resource monitors designed for minimal memory footprints, the latter built on Rust and Tauri.
+* **EvilIrving / light-stats (25 Stars, v1.9.2):** A native macOS menu bar instrument (Swift/AppKit) emphasizing real-time system pressure (0–100 health score + live CPU, GPU, and memory pressure signals) rather than raw capacity. Includes optional developer workflow tools (AI CLI token/session usage, proxy context, display keep-awake) while preserving a read-only core without privileged helpers.
+* **nim444 / featherbar (5 Stars, Emerging 2026):** Ultra-lightweight Rust menu-bar monitor (`NSStatusItem`). Renders live CPU + battery watts and RAM + CPU temperature across two color-coded lines. Features zero background threads, flat memory footprint, and fixed-width font layout.
+* **netsatsawat / mac-vitals (Emerging 2026, v0.2.1):** Open-source Apple Silicon menu bar monitor reading unprivileged chip energy counters (CPU, GPU, Apple Neural Engine rails in watts) and SMC thermals/fans without `sudo`, featuring a built-in Model Context Protocol (MCP) server for direct AI agent integration.
+* **newmarcel / KeepingYouAwake (6,898 Stars, v1.6.8):** Dedicated sleep inhibitor and status bar menu utility wrapping `caffeinate` (analyzed in depth in §8).
+* **AI-Agent, Clamshell & Anti-MDM Keep-Awake Utilities (2026 Trend):**
+  - **PerfectoWeb / Belay (34 Stars, v1.8.1):** Specifically prevents macOS sleep while AI coding agents (Claude Code, Codex, Cline, Copilot CLI) are actively executing tasks via session log inspection and optional tool hooks.
+  - **Aboudjem / Sleepless (65 Stars, v1.2.7) & gyorgysh / keepresso (86 Stars, v1.24.1):** Keep MacBooks awake with the lid closed on battery using `pmset disablesleep` (or `IOPMAssertion` triggers in keepresso), with auto-off timers and battery floor cutoffs.
+  - **Kuberwastaken / caffeineOSS (14 Stars, v1.0.0):** Single-file (~120 lines) Swift menu-bar app compiled locally by users to bypass corporate MDM endpoint allowlists that block downloaded prebuilt binaries like KeepingYouAwake or Caffeine; executes `caffeinate -dimsu` and `sudo pmset -a disablesleep 1`.
 
 ---
 
@@ -152,7 +168,7 @@ These are non-animated utilities that live in the macOS menu bar to display hard
 | **In-Menu Readout** | 60s sparkline + numeric + load avgs | Custom JSON metric cards | Minimal | Numeric dropdown | Full graphs/temps/per-process |
 | **Hardware Sensors / SMC** | SMCClient (Fan RPM, Max Die Temp) | External metric files / none | None | None | Comprehensive SMC & IOKit |
 | **Power Throttling** | Occlusion pause (0% CPU) + thermal/LPM/RAM cap + Reduce Motion | None (standard app lifecycle) | None | None | None (continuous polling) |
-| **Sleep Inhibitor** | Built-in Keep Awake (`caffeinate`), auto-disengage, assertion inspection | None | None | None | None |
+| **Sleep Inhibitor** | Built-in Keep Awake (`caffeinate`), process watch (`--keep-awake-pid`), surface countdown, auto-disengage, assertion inspection | None | None | None | None |
 | **CLI & Automation** | Native launcher flags, env vars, LaunchAgents | JSON card format only | None | None | AppleScript / Defaults |
 | **Update Mechanism** | Git tag check + `git pull --ff-only` (precompiles before restart) | App Store / GitHub release | Manual rebuild | App Store / GitHub release | Sparkle / GitHub release |
 
@@ -224,6 +240,8 @@ Distributed as a source checkout, update management uses native git operations:
 Rather than requiring a secondary sleep management utility, sleep inhibition is integrated directly:
 
 * **PID-bound inhibition:** `SleepPreventer` spawns `caffeinate -di -w <pid>` (preventing display and idle sleep, tied to the app PID).
+* **Process-bound sleep inhibition (wait for process):** Supports `--keep-awake-pid <pid>` (or `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`) and menu selection `Keep Awake ▸ Until a process exits…` (accepting a PID or process name). Monitors the target using a kernel-level `DispatchSourceProcess` `.exit` watch with fallback `kill(pid, 0)` liveness polling, automatically releasing sleep inhibition the moment an unattended compiler build, script, or AI agent run finishes.
+* **Direct menu-bar countdown surface:** When a timed hold is active, remaining time counts down directly in the adjacent menu-bar slot (`88:88:88` fixed-width template, monospaced digits, 1Hz ticker derived directly from the deadline), ensuring time remaining is immediately visible at a glance without opening the menu.
 * **State and intent separation:** Distinguishes user intent (`isEnabled`) from process running state, allowing temporary suspension during thermal spikes or low battery without dropping the user's configuration.
 * **Safety disengage & overrides:** Automatically releases sleep locks on battery at or below a configurable threshold (default 20%, adjustable from 6% to 100% or `Never`; the menu offers 10/15/20/30% plus `Custom…`) or under elevated thermal states. An explicit manual arm below the threshold is honored down to a hard 5% safety floor.
 * **Timed durations & persistence:** Supports presets (30m, 1h, 2h, 4h, 8h) and custom durations (`caffeinate -di -t <secs>`), with active windows persisted across relaunches via target end timestamps.
@@ -283,20 +301,26 @@ Grounded in source review of `newmarcel/KeepingYouAwake` against MenuBar Load Ru
 | **State vs Intent Preservation** | Decoupled (`isEnabled` vs `isRunning`); respawns with remaining time | Deactivation clears timer state | MLR resumes remaining duration after condition suspension |
 | **Relaunch Persistence** | Persists target deadline timestamp to local state JSON | Persists activate-on-launch preference | MLR restores remaining bounded window without clock reset |
 | **Launch-Time Scripting** | `--keep-awake <duration>` / environment variable | URL Scheme (`keepingyouawake:///activate`) | Different automation models (CLI vs URL handler) |
+| **Process-Exit Watch** | `--keep-awake-pid <pid>` / menu `Until a process exits…` (`DispatchSourceProcess .exit` + `kill(pid, 0)`) | None | MLR natively watches external compilers, test runs, or AI agents to finish |
+| **Menu-Bar Surface Countdown** | Active countdown rendered in adjacent status item (`88:88:88` fixed template, 1Hz) | None on menu bar; menu row only | MLR displays time remaining at a glance without opening menu |
 
 ### 8.2 Architectural Differences
 
-1. **Automation interfaces:**
+1. **Automation interfaces & Process Lifecycles:**
    - **KeepingYouAwake** registers a custom URL scheme (`keepingyouawake:///activate?seconds=...`, `/deactivate`, `/toggle`), enabling integration with `open`, Shortcuts, and web automation without special permissions.
-   - **MenuBar Load Runner** provides launch-time flags (`--keep-awake`, `--battery-threshold`) and environment variables designed for shell scripts and LaunchAgent configurations. Dynamic runtime control is accessible via standard macOS Accessibility scripting.
+   - **MenuBar Load Runner** provides launch-time flags (`--keep-awake`, `--keep-awake-pid`, `--battery-threshold`) and environment variables designed for shell scripts and LaunchAgent configurations. Crucially, it can bind its sleep hold to the lifetime of an arbitrary process (`--keep-awake-pid <pid>`), holding the machine awake until a long-running build or AI coding agent exits without needing artificial clock guesses. Dynamic runtime control is also accessible via standard macOS Accessibility scripting.
 
-2. **Configuration surface:**
+2. **At-a-Glance Visibility vs Menu Traversal:**
+   - **KeepingYouAwake** relies on a binary status bar icon (coffee cup empty vs full) to denote state. Checking remaining duration requires clicking to open the dropdown menu.
+   - **MenuBar Load Runner** projects the active countdown directly onto the menu bar in a dedicated adjacent status item slot (with an `88:88:88` fixed-width template and 1Hz ticker derived from the deadline), allowing engineers to verify hold status at a glance without breaking focus or interacting with menus.
+
+3. **Configuration surface:**
    - **KeepingYouAwake** provides a dedicated multi-tab Preferences window (General, Battery, Durations, Advanced, Updates, About) and localization across 21 languages.
    - **MenuBar Load Runner** concentrates settings in the status dropdown (`Settings ▸` submenu) to maintain a compact, single-file codebase without bundle dependencies.
 
-3. **Assertion policy and visibility:**
+4. **Assertion policy and visibility:**
    - **MenuBar Load Runner** queries machine-wide power management assertions via `IOPMCopyAssertionsByProcess`, presenting external sleep locks (such as terminal `caffeinate` sessions or media players) and their scheduled release times directly in the menu.
 
 ### 8.3 Practical Summary
 
-For developers managing build tasks and downloads within command-line environments, integrated sleep prevention in MenuBar Load Runner covers timed assertion requirements while eliminating the need for a secondary menu bar utility. Users requiring custom URL schemes, multi-language localization, or standalone preferences windows continue to be well-served by dedicated tools like KeepingYouAwake.
+For developers managing build tasks, downloads, and autonomous AI coding agent sessions within command-line environments, integrated sleep prevention in MenuBar Load Runner covers timed and process-bound assertion requirements while eliminating the need for a secondary menu bar utility. Users requiring custom URL schemes, multi-language localization, or standalone preferences windows continue to be well-served by dedicated tools like KeepingYouAwake.
