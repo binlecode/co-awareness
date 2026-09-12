@@ -1,6 +1,6 @@
 ---
 name: publish-cover
-description: Publish or redeploy the marketing/design cover page (docs/cover.html) to Cloudflare Pages as <project>.pages.dev. Use when asked to publish, redeploy, or update the cover / landing / web page, or after cutting a release when the cover's version badge or embedded GIFs changed. Builds + audits the deploy bundle automatically; the authenticated deploy is a human step (interactive Cloudflare login).
+description: Publish or redeploy the marketing/design cover page (docs/cover.html) to Cloudflare Pages as <project>.pages.dev. Use when asked to publish, redeploy, or update the cover / landing / web page, or after cutting a release when the cover's version badge or embedded GIFs changed. Builds + audits the deploy bundle and deploys it, all automatically — wrangler runs on stored OAuth creds, but every wrangler line needs `env -u CLOUDFLARE_API_TOKEN` (see §2). Only a fresh login is a human step.
 ---
 
 # Publish the web cover
@@ -15,9 +15,9 @@ Live URL: `https://menubar-load-runner.pages.dev`. Scripts live in `scripts/` ne
 ## What I can and can't do
 
 - **Build + audit the bundle: automated** — run `scripts/build-cover-dist.sh` (below). Safe, deterministic.
-- **Deploy: human step.** `npx wrangler` needs an interactive Cloudflare login (browser OAuth) or a
-  `CLOUDFLARE_API_TOKEN`. If neither is present, build + audit, then hand the user the exact deploy
-  commands to run via `!` — do not attempt the login.
+- **Deploy: automated too, as long as auth is already on disk** — stored OAuth creds (§2) deploy fine
+  non-interactively. Only a *fresh login* is a human step: if §2's `whoami` shows no valid creds,
+  build + audit, then hand the user the login command to run via `!` — never attempt the login itself.
 
 ## 0. Decision gate (read first)
 
@@ -43,14 +43,28 @@ the QA version-parity check, so it drifts silently (it has lagged a release befo
 `docs/cover.html` when you cut a release, rebuild, and redeploy so the public page matches the shipped
 version. The script prints the badge it bundled — confirm it matches.
 
-## 2. Deploy (human — interactive auth)
+## 2. Deploy
 
 Run wrangler via `npx` (no global install). Direct upload grants Cloudflare no repo access.
 
+🔴 **Drop `CLOUDFLARE_API_TOKEN` from the environment — `env -u` on *every* wrangler line.** This repo
+deploys on **OAuth creds stored on disk** (`~/Library/Preferences/.wrangler/config/default.toml`),
+which work non-interactively and need no login. But this machine also exports an unrelated
+`CLOUDFLARE_API_TOKEN` from `~/.zshrc`, wrangler **prefers the env token over stored OAuth**, and that
+token has no Pages permission — so leaving it set fails with `Authentication error [code: 10000]`
+followed by `Failed to automatically retrieve account IDs`. That error means *wrong credential picked*,
+not *not logged in*; `wrangler login` is the wrong reflex and now refuses outright ("You are logged in
+with an API Token. Unset the CLOUDFLARE_API_TOKEN..."). Confirm the right creds first:
+
 ```bash
-npx -y wrangler login            # once: opens browser, authorize; token persists
-npx wrangler pages deploy tmp/cover-dist --project-name=menubar-load-runner --commit-dirty=true
+env -u CLOUDFLARE_API_TOKEN npx wrangler whoami    # expect: "logged in with an OAuth Token" + an account row
+env -u CLOUDFLARE_API_TOKEN npx wrangler pages deploy tmp/cover-dist --project-name=menubar-load-runner --commit-dirty=true
 ```
+
+Only if `whoami` shows no OAuth creds is a login needed — that one is the human's (`env -u
+CLOUDFLARE_API_TOKEN npx -y wrangler login`, browser OAuth). Fixing the env token instead (grant it
+Account → Cloudflare Pages → Edit, plus `CLOUDFLARE_ACCOUNT_ID`, since it can't enumerate accounts) is
+a valid alternative, but it's the owner's call — that token is scoped for something else.
 
 First run offers to create the project; accept. Re-running the same command redeploys to the same URL.
 The `pages.dev` namespace is global across all accounts — keep the distinctive `menubar-load-runner`
