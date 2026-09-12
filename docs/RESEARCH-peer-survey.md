@@ -1,13 +1,13 @@
 # RESEARCH — Peer Survey: macOS Status Bar Load Visualizers & Telemetry Monitors
 
-> **Scope:** Comprehensive technical peer survey and architectural comparison of open-source macOS status bar system monitors, load visualizers, and sleep inhibitors in 2026.
-> **Peer set:** `RunCatNeo` (runcat-dev), `menubar_runcat` (Kyome22), `zoomies` (KartikLabhshetwar), `DanceKunKun` (ygsgdbd), `tray-pulsy` (krissss), `sysprite` (AbhinavGupta-de), `RsCat` (luke358), `stats` (exelban), `Hot` (macmade), `macstate` (snail007), `better-resource-monitor` (alexx855), `mac-vitals` (netsatsawat), `light-stats` (EvilIrving), `featherbar` (nim444), `KeepingYouAwake` (newmarcel), `Belay` (PerfectoWeb), `Sleepless` (Aboudjem), `keepresso` (gyorgysh), `caffeineOSS` (Kuberwastaken).
+> **Scope:** Comprehensive technical peer survey and architectural comparison of open-source macOS status bar system monitors, load visualizers, and sleep inhibitors (≥100 GitHub stars) in 2026.
+> **Peer set:** `RunCatNeo` (runcat-dev), `menubar_runcat` (Kyome22), `stats` (exelban), `Hot` (macmade), `Fanny` (DanielStormApps), `SiliconScope` (kennss), `KeepingYouAwake` (newmarcel), `adrafinil` (kageroumado), `modafinil` (narcotic-sh).
 > **Methodology:** Public README / documentation review, live GitHub repository metadata checks (stars, tags, release histories), plus
 > **direct source-code inspection of `newmarcel/KeepingYouAwake` 1.6.8 only** (§8). Everything said about the
 > other peers is documentation-level and repository-metadata-level, not source-verified, and none of them was runtime-profiled — so no
 > claim here is a category-first claim (see `docs/ROADMAP.md` § Verification debt, the R13 row).
-> **Snapshot:** September 11, 2026 (live re-verification via GitHub API and web inspection). Star counts, activity dates and feature sets are point-in-time reads of
-> other people's projects and **go stale on their schedule, not ours**.
+> **Snapshot:** September 11, 2026 (live re-verification via GitHub API and web inspection; strictly pruned to established peers with ≥100 stars).
+> Star counts, activity dates and feature sets are point-in-time reads of other people's projects and **go stale on their schedule, not ours**.
 > **Re-check or prune before 2027-03-01**, and before any public use of a comparative claim: confirm each
 > peer's current release, then either re-date this line or delete the rows you did not re-verify. A survey
 > that has silently aged is worse than no survey — per `CLAUDE.md`, a research file is evidence, and
@@ -21,13 +21,12 @@ The macOS menu bar customization and system-monitoring category has experienced 
 
 In 2026, the ecosystem exhibits several notable evolutions:
 
-1. **Modernization & Extensibility of Animated Visualizers:** The launch of **RunCat Neo** (`runcat-dev/RunCatNeo`, 840 stars, v1.0.3) in 2026 represents the active open-source successor from the RunCat ecosystem. Written in Swift 6.2 for macOS 26 Tahoe, it introduces **Custom Metrics** (polling local JSON files to visualize AI agent token usage such as Claude Code and Codex, cryptocurrency prices, or custom scripts) alongside a community **Runner Gallery** for pixel-art keyframes. Cross-platform interest has also spurred exploratory native Rust implementations like **RsCat** (`luke358/RsCat`, v0.1.2).
-2. **Major Milestone in General Monitors:** The premier open-source system monitor, **Stats** (`exelban/stats`), reached 41,729 GitHub stars and released **v3.0.0** (latest v3.0.15 in September 2026), initiating a new architectural chapter for comprehensive multi-module telemetry.
+1. **Modernization & Extensibility of Animated Visualizers:** The launch of **RunCat Neo** (`runcat-dev/RunCatNeo`, 841 stars, v1.0.3) in 2026 represents the active open-source successor from the RunCat ecosystem. Written in Swift 6.2 for macOS 26 Tahoe, it introduces **Custom Metrics** (polling local JSON files to visualize AI agent token usage such as Claude Code and Codex, cryptocurrency prices, or custom scripts) alongside a community **Runner Gallery** for pixel-art keyframes.
+2. **Major Milestone in General Monitors:** The premier open-source system monitor, **Stats** (`exelban/stats`), reached 41,742 GitHub stars and released **v3.0.0** (latest v3.0.15 in September 2026), initiating a new architectural chapter for comprehensive multi-module telemetry.
 3. **Specialization in Power Management & Sleep Inhibition:** Beyond classic `caffeinate` GUI wrappers like **KeepingYouAwake** (6,898 stars, v1.6.8), the category has branched into specialized sub-genres:
-   - **AI-agent session guards:** Tools like **Belay** (`PerfectoWeb/Belay`, 34 stars, v1.8.1) keep Macs awake specifically while autonomous agents (Claude Code, Codex, Cline, Aider) are running.
-   - **Closed-lid/clamshell sleep management:** Utilities like **Sleepless** (`Aboudjem/Sleepless`, 65 stars, v1.2.7) and **keepresso** (`gyorgysh/keepresso`, 86 stars, v1.24.1) leverage `pmset disablesleep` to keep MacBooks running as headless servers with the lid closed.
-   - **Corporate MDM circumvention:** Utilities like **caffeineOSS** (`Kuberwastaken/caffeineOSS`, 14 stars, v1.0.0) offer ~120 lines of local-compilation Swift to evade MDM blocks on prebuilt binaries, albeit requiring `sudo pmset`.
-4. **App Store Sandboxing Backlash & Lightweight Minimalist Monitors:** Power users and terminal-centric developers increasingly favor lightweight, unbundled, CLI-driven utilities that run without Xcode project overhead, script cleanly via user LaunchAgents, and read unprivileged Mach and SMC telemetry directly. This has also spurred minimal monitors like **Light Stats** (`EvilIrving/light-stats`, 25 stars, v1.9.2) focusing on holistic 0–100 system pressure, **featherbar** (`nim444/featherbar`, 5 stars) delivering zero-background-thread flat-memory Rust monitoring, and **Mac Vitals** (`netsatsawat/mac-vitals`, v0.2.1) providing unprivileged Apple Silicon rail power and an MCP server.
+   - **AI-agent session guards:** Tools like **adrafinil** (`kageroumado/adrafinil`, 471 stars) keep Macs awake specifically while autonomous AI coding agents are executing tasks.
+   - **Closed-lid/clamshell sleep management:** Utilities like **modafinil** (`narcotic-sh/modafinil`, 151 stars) prevent macOS sleep when MacBook lids are closed during long-running background tasks.
+4. **App Store Sandboxing Backlash & Specialized Unprivileged Telemetry:** Power users and terminal-centric developers increasingly favor lightweight, unbundled, CLI-driven utilities that run without Xcode project overhead, script cleanly via user LaunchAgents, and read unprivileged Mach and SMC telemetry directly. This has driven interest in focused monitors like **SiliconScope** (`kennss/SiliconScope`, 943 stars) for sudoless Apple Silicon ANE and bandwidth telemetry, alongside thermal-focused tools like **Hot** (`macmade/Hot`, 3,038 stars) and **Fanny** (`DanielStormApps/Fanny`, 1,384 stars).
 
 Within this landscape, **MenuBar Load Runner** (v1.23.0) occupies a specialized, command-line-first niche. It is a single-file Swift script backed by a Zsh launcher, featuring adaptive rate scaling (`btop` hysteresis), power-throttling, occlusion-awareness, machine-wide sleep assertion inspection, process-bound sleep inhibition (`--keep-awake-pid`), and a direct menu-bar countdown readout — functioning as a high-efficiency animated load visualizer and live status-bar diagnostic monitor.
 
@@ -83,94 +82,39 @@ These are open-source macOS status-bar projects whose core mission is to map har
   - **Archived repository:** Marked read-only on GitHub (last commit May 2023); serves primarily as a historical reference implementation superseded by RunCat Neo.
   - Requires Xcode to compile and packages as a standard `.app` bundle.
 
-### 2.4 KartikLabhshetwar / zoomies (20 Stars)
-
-* **What it is:** A modern SwiftUI-based macOS menu bar utility that turns system load into a living pixel-art pet.
-* **Core mechanics:** Translates CPU, GPU, or RAM percentage into a discrete state machine: **idle → walk → fast walk → run**.
-* **Strengths:**
-  - Visual-first design with 9 distinct pixel creatures (dog, fox, panda, skeleton, deno, vampire, cat, etc.) and up to 11 color variants.
-  - Graphical Settings window built in native SwiftUI; updated to v1.1 (June 2026).
-  - Clean numeric dropdown readout.
-* **Weaknesses:**
-  - No headless or command-line scripting support — must run as a standard GUI `.app`.
-  - Limited to percentage-bound metrics (CPU %, GPU %, RAM %); cannot track or scale unbounded rate metrics like network or disk speeds.
-  - Higher runtime memory footprint typical of multi-view SwiftUI applications.
-
-### 2.5 ygsgdbd / DanceKunKun (37 Stars)
-
-* **What it is:** A meme-focused macOS menu bar app in SwiftUI featuring an animated character dancing to system CPU usage.
-* **Core mechanics:** Animation loop scaling frame rates on-the-fly with CPU spikes.
-* **Strengths:**
-  - High novelty and direct installation of pre-compiled binaries.
-* **Weaknesses:**
-  - Hardcoded to a single character animation.
-  - SwiftUI rendering overhead relative to single-purpose scope.
-
-### 2.6 krissss / tray-pulsy (21 Stars)
-
-* **What it is:** An open-source Swift clone of RunCat implementing customizable menu bar runners, actively updated to v1.6.1 (September 2026).
-* **Weaknesses:**
-  - Lacks multi-sensor telemetry (CPU-focused), unbounded rate scaling, self-throttling under power pressure, or developer-focused CLI launchers.
-
-### 2.7 AbhinavGupta-de / sysprite (Emerging 2026, 1 Star, v0.1.1)
-
-* **What it is:** A lightweight animated menu-bar pet written in pure Swift Package Manager (no Xcode project) whose animation speed reflects composite "system pressure" (CPU + memory + disk + network combined).
-* **Core mechanics:** Computes combined hardware pressure, provides 6 bundled sprite themes, a 60-sample sparkline menu, and a JSON CLI (`sysprite stats`) designed for SketchyBar integration.
-* **Strengths:**
-  - Pure Swift Package build (`make install`), no Xcode IDE required.
-  - Scriptable JSON output for status-bar customizers (SketchyBar).
-* **Weaknesses:**
-  - Early-stage project with minimal adoption.
-  - Blends metrics into a single opaque "pressure" formula rather than offering dedicated, discrete telemetry readers.
-  - No sleep management, occlusion pausing, or adaptive rate scaling.
-
-### 2.8 luke358 / RsCat (Emerging 2026, 1 Star, v0.1.2)
-
-* **What it is:** An open-source, cross-platform desktop tray runner written in Rust, inspired by RunCat 365.
-* **Core mechanics:** Core crate handling CPU metrics, animation intervals, and embedded runner assets; cross-platform tray backed by `tray-icon`; settings window built in Slint.
-* **Strengths:**
-  - Demonstrates that the menu-bar runner concept is being explored outside Apple-only toolchains in modern systems languages (Rust).
-  - Cross-platform architectural foundation.
-* **Weaknesses:**
-  - Early MVP stage (v0.1.2, May 2026); CPU-only telemetry.
-  - Lacks native AppKit deep integration, dynamic menu-bar geometry handling, power-aware self-throttling, or sleep management.
-
 ---
 
 ## 3. Adjacent Peers (General System Monitors & Utilities)
 
-These are non-animated utilities that live in the macOS menu bar to display hardware telemetry or manage sleep assertions. They lack animation visualizers but represent popular alternatives for system monitoring and power management.
+These are non-animated utilities that live in the macOS menu bar to display hardware telemetry or manage sleep assertions. They lack animation visualizers but represent established open-source alternatives (filtered to established peers with ≥100 GitHub stars).
 
-* **exelban / stats (41,729 Stars):** The benchmark for open-source macOS system monitoring. Written in Swift, it occupies the traditional comprehensive dashboard space — core-by-core graphs, network transfer rates, temperatures, battery health cycle counts, and per-process usage breakdowns. Released major version **v3.0.0** in June 2026 (latest v3.0.15 in September 2026). Highly customizable, running a persistent background daemon.
+* **exelban / stats (41,742 Stars):** The benchmark for open-source macOS system monitoring. Written in Swift, it occupies the traditional comprehensive dashboard space — core-by-core graphs, network transfer rates, temperatures, battery health cycle counts, and per-process usage breakdowns. Released major version **v3.0.0** in June 2026 (latest v3.0.15 in September 2026). Highly customizable, running a persistent background daemon.
 * **macmade / Hot (3,038 Stars, v1.9.4):** A specialized native menu bar utility focused strictly on thermal limits — monitoring whether macOS is throttling CPU speed due to hardware heat or power constraints.
-* **snail007 / macstate (46 Stars, v1.8.2) & alexx855 / better-resource-monitor (44 Stars, v1.1.9):** Compact menu bar resource monitors designed for minimal memory footprints, the latter built on Rust and Tauri.
-* **EvilIrving / light-stats (25 Stars, v1.9.2):** A native macOS menu bar instrument (Swift/AppKit) emphasizing real-time system pressure (0–100 health score + live CPU, GPU, and memory pressure signals) rather than raw capacity. Includes optional developer workflow tools (AI CLI token/session usage, proxy context, display keep-awake) while preserving a read-only core without privileged helpers.
-* **nim444 / featherbar (5 Stars, Emerging 2026):** Ultra-lightweight Rust menu-bar monitor (`NSStatusItem`). Renders live CPU + battery watts and RAM + CPU temperature across two color-coded lines. Features zero background threads, flat memory footprint, and fixed-width font layout.
-* **netsatsawat / mac-vitals (Emerging 2026, v0.2.1):** Open-source Apple Silicon menu bar monitor reading unprivileged chip energy counters (CPU, GPU, Apple Neural Engine rails in watts) and SMC thermals/fans without `sudo`, featuring a built-in Model Context Protocol (MCP) server for direct AI agent integration.
+* **DanielStormApps / Fanny (1,384 Stars):** A compact open-source macOS menu bar and Notification Center widget monitoring fan speed (RPM) and CPU/GPU temperatures.
+* **kennss / SiliconScope (943 Stars):** A native SwiftUI Apple Silicon system monitor running without root, providing detailed tracking of the Apple Neural Engine (ANE), Media Engine, and unified memory bandwidth via `IOReport`.
 * **newmarcel / KeepingYouAwake (6,898 Stars, v1.6.8):** Dedicated sleep inhibitor and status bar menu utility wrapping `caffeinate` (analyzed in depth in §8).
-* **AI-Agent, Clamshell & Anti-MDM Keep-Awake Utilities (2026 Trend):**
-  - **PerfectoWeb / Belay (34 Stars, v1.8.1):** Specifically prevents macOS sleep while AI coding agents (Claude Code, Codex, Cline, Copilot CLI) are actively executing tasks via session log inspection and optional tool hooks.
-  - **Aboudjem / Sleepless (65 Stars, v1.2.7) & gyorgysh / keepresso (86 Stars, v1.24.1):** Keep MacBooks awake with the lid closed on battery using `pmset disablesleep` (or `IOPMAssertion` triggers in keepresso), with auto-off timers and battery floor cutoffs.
-  - **Kuberwastaken / caffeineOSS (14 Stars, v1.0.0):** Single-file (~120 lines) Swift menu-bar app compiled locally by users to bypass corporate MDM endpoint allowlists that block downloaded prebuilt binaries like KeepingYouAwake or Caffeine; executes `caffeinate -dimsu` and `sudo pmset -a disablesleep 1`.
+* **AI-Agent & Closed-Lid Keep-Awake Utilities (2026 Trend, ≥100 Stars):**
+  - **kageroumado / adrafinil (471 Stars):** Specifically prevents macOS sleep while AI coding agents are actively executing tasks, releasing sleep prevention when agent activity ceases.
+  - **narcotic-sh / modafinil (151 Stars):** Manages clamshell mode and prevents macOS sleep when MacBook lids are closed during long-running background tasks.
 
 ---
 
 ## 4. Deep Architectural Comparisons
 
-| Architectural Pillar | MenuBar Load Runner | runcat-dev / RunCatNeo | Kyome22 / menubar_runcat | KartikLabhshetwar / zoomies | exelban / stats |
+| Architectural Pillar | MenuBar Load Runner | runcat-dev / RunCatNeo | Kyome22 / menubar_runcat | exelban / stats | kennss / SiliconScope |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Primary Goal** | Scriptable load runner & dashboard | Ecosystem cat runner & custom cards | Minimal CPU tracking (archived) | Playful desktop pixel pet | Comprehensive system monitoring |
-| **Build Philosophy** | Single-file Swift script | Multi-file Xcode project (LUCA) | Xcode `.app` project | Xcode `.app` project | Multi-module Swift framework |
+| **Primary Goal** | Scriptable load runner & dashboard | Ecosystem cat runner & custom cards | Minimal CPU tracking (archived) | Comprehensive system monitoring | Sudoless Apple Silicon telemetry & ANE |
+| **Build Philosophy** | Single-file Swift script | Multi-file Xcode project (LUCA) | Xcode `.app` project | Multi-module Swift framework | Multi-file SwiftUI app |
 | **Packaging & Execution** | Unbundled; launcher script | Compiled `.app` bundle | Compiled `.app` bundle | Compiled `.app` bundle | Compiled `.app` bundle |
-| **Toolchain Requirement** | `swiftc` CLI only (no Xcode required) | Xcode 26.5+, Swift 6.2 | Xcode | Xcode | Xcode / CocoaPods |
-| **Load Sources** | CPU, Memory, GPU, Net, Disk, Fan, Battery, Die Temp | CPU + Custom JSON metric files | CPU only | CPU, GPU, RAM | Full hardware telemetry suite |
-| **Scaling Logic** | Adaptive hysteresis scaler (`btop`) | Fixed step thresholds | Inverse linear percentage | Discrete 4-step state machine | Numerical & graph plots |
-| **In-Menu Readout** | 60s sparkline + numeric + load avgs | Custom JSON metric cards | Minimal | Numeric dropdown | Full graphs/temps/per-process |
-| **Hardware Sensors / SMC** | SMCClient (Fan RPM, Max Die Temp) | External metric files / none | None | None | Comprehensive SMC & IOKit |
-| **Power Throttling** | Occlusion pause (0% CPU) + thermal/LPM/RAM cap + Reduce Motion | None (standard app lifecycle) | None | None | None (continuous polling) |
+| **Toolchain Requirement** | `swiftc` CLI only (no Xcode required) | Xcode 26.5+, Swift 6.2 | Xcode | Xcode / CocoaPods | Xcode / Swift |
+| **Load Sources** | CPU, Memory, GPU, Net, Disk, Fan, Battery, Die Temp | CPU + Custom JSON metric files | CPU only | Full hardware telemetry suite | CPU, GPU, ANE, Media Engine, RAM bandwidth |
+| **Scaling Logic** | Adaptive hysteresis scaler (`btop`) | Fixed step thresholds | Inverse linear percentage | Numerical & graph plots | Numerical & progress gauges |
+| **In-Menu Readout** | 60s sparkline + numeric + load avgs | Custom JSON metric cards | Minimal | Full graphs/temps/per-process | Popover window with live charts |
+| **Hardware Sensors / SMC** | SMCClient (Fan RPM, Max Die Temp) | External metric files / none | None | Comprehensive SMC & IOKit | IOReport & IOHIDEventSystem |
+| **Power Throttling** | Occlusion pause (0% CPU) + thermal/LPM/RAM cap + Reduce Motion | None (standard app lifecycle) | None | None (continuous polling) | None (continuous polling) |
 | **Sleep Inhibitor** | Built-in Keep Awake (`caffeinate`), process watch (`--keep-awake-pid`), surface countdown, auto-disengage, assertion inspection | None | None | None | None |
-| **CLI & Automation** | Native launcher flags, env vars, LaunchAgents | JSON card format only | None | None | AppleScript / Defaults |
-| **Update Mechanism** | Git tag check + `git pull --ff-only` (precompiles before restart) | App Store / GitHub release | Manual rebuild | App Store / GitHub release | Sparkle / GitHub release |
+| **CLI & Automation** | Native launcher flags, env vars, LaunchAgents | JSON card format only | None | AppleScript / Defaults | None |
+| **Update Mechanism** | Git tag check + `git pull --ff-only` (precompiles before restart) | App Store / GitHub release | Manual rebuild | Sparkle / GitHub release | GitHub release |
 
 ---
 
@@ -265,7 +209,7 @@ MenuBar Load Runner is optimized for terminal-centric workflows, systems enginee
 Alternative tools are preferable under specific requirements:
 
 * **Community runners and custom JSON cards:** Users seeking community keyframe downloads via gallery or polling local JSON files for AI token counters may prefer **RunCat Neo** (`runcat-dev/RunCatNeo`).
-* **Graphical configuration:** Users seeking dedicated graphical preferences windows for asset management and drag-and-drop animations may prefer **zoomies**.
+* **Deep Apple Silicon telemetry (ANE, Media Engine, Bandwidth):** Users seeking dedicated graphical dashboards covering the Neural Engine and unified memory bandwidth may prefer **SiliconScope** (kennss) or **stats** (exelban).
 * **Detailed diagnostic breakdown:** Users requiring per-process PID breakdowns, detailed core-by-core telemetry graphs, and battery health cycle counts should use **stats** (exelban) or **Hot** (macmade).
 
 ### 6.3 Technical Synthesis
