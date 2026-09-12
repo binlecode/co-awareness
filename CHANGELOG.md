@@ -29,7 +29,7 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
-## [Unreleased]
+## [1.23.1] - 2026-09-11
 
 ### Fixed
 
