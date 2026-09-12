@@ -123,7 +123,7 @@ pass=0; fail=0
 # window. §3f requires this of its own runs; §3 never did.
 run(){ desc="$1"; allow="$2"; shift 2
   err=$(MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-lifecycle-state.json" \
-        MENUBAR_LOAD_RUNNER_EXIT_AFTER=2 "$@" 2>&1 >/dev/null); rc=$?
+        MENUBAR_LOAD_RUNNER_EXIT_AFTER=0.4 "$@" 2>&1 >/dev/null); rc=$?
   un=$(echo "$err" | grep -v 'MENUBAR_LOAD_RUNNER_EXIT_AFTER=' | { [ -n "$allow" ] && grep -v "$allow" || cat; } | grep -v '^$')
   [ "$rc" = 0 ] && [ -z "$un" ] && { echo "  PASS [$desc]"; pass=$((pass+1)); } || { echo "  FAIL [$desc] rc=$rc <<$un>>"; fail=$((fail+1)); }; }
 run "default cpu/auto"         "" $BIN
@@ -232,20 +232,20 @@ done
 # Countdown display on the bar when windowed Keep Awake is armed
 printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
 out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
-      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN --keep-awake 30m 2>&1 | grep '^SLOTS' | tail -1)
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=3 $BIN --keep-awake 30m 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "countdown displayed on the bar when keep-awake is windowed" \
    "$([ -n "$lbl" ] && echo "$lbl" | grep -qE '^(29|30):[0-9]{2}$' && echo 1 || echo 0)" "got: $lbl"
 
 out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
-      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN --keep-awake 30m --label value 2>&1 | grep '^SLOTS' | tail -1)
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=3 $BIN --keep-awake 30m --label value 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "countdown displayed beside telemetry when label=value" \
    "$([ -n "$lbl" ] && echo "$lbl" | grep -qE 'CPU .* (29|30):[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
 
 printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
 out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
-      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN --keep-awake on 2>&1 | grep '^SLOTS' | tail -1)
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=2 $BIN --keep-awake on 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "indefinite keep-awake shows no countdown on the bar" \
    "$([ -z "$lbl" ] && echo 1 || echo 0)" "got: $lbl"
@@ -257,7 +257,7 @@ gk "indefinite keep-awake shows no countdown on the bar" \
 printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
 out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$SG" \
       MENUBAR_LOAD_RUNNER_FORCE_BATTERY=15:battery \
-      MENUBAR_LOAD_RUNNER_EXIT_AFTER=8 $BIN --keep-awake 3s 2>&1 | grep '^SLOTS' | tail -1)
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN --keep-awake 3s 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "elapsed-while-suspended window collapses the countdown slot" \
    "$([ -z "$lbl" ] && echo 1 || echo 0)" "got: $lbl"
@@ -282,10 +282,10 @@ ka(){ desc="$1"; force="$2"; expect="$3"; shift 3  # expect: run | paused; rest 
   rm -f ./tmp/qa-ka-state.json
   MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-ka-state.json" \
   MENUBAR_LOAD_RUNNER_FORCE_BATTERY="$force" \
-  MENUBAR_LOAD_RUNNER_EXIT_AFTER=6 \
+  MENUBAR_LOAD_RUNNER_EXIT_AFTER=1.2 \
     $BIN --keep-awake 30m "$@" >/dev/null 2>&1 &
   kapid=$!
-  sleep 3
+  sleep 0.5
   got=paused
   # Match the child by its `-w <pid>` signature, never by name: the developer's own running instance
   # legitimately holds a caffeinate, and matching on the name would see it and pass everything.
@@ -347,8 +347,8 @@ ck(){ if [ "$2" = EMPTY ]; then [ -z "$3" ] && r=0 || r=1; else case "$3" in *"$
   [ $r = 0 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAIL [$1] want [$2] got [${3:-<empty>}]"; fail=$((fail+1)); }; }
 # Launch, capture the caffeinate child bound to THIS app (by -w pid, never by name), wait for its exit.
 arm(){ MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" MENUBAR_LOAD_RUNNER_FORCE_BATTERY="${FORCE:-100:ac}" \
-         MENUBAR_LOAD_RUNNER_EXIT_AFTER=3 $BIN --no-update-check "$@" >/dev/null 2>"$ERR" & app=$!
-       sleep 1.2; CHILD=$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true); wait $app; }
+         MENUBAR_LOAD_RUNNER_EXIT_AFTER=1.2 $BIN --no-update-check "$@" >/dev/null 2>"$ERR" & app=$!
+       sleep 0.5; CHILD=$(pgrep -fl caffeinate 2>/dev/null | grep -- "-w $app" || true); wait $app; }
 
 rm -f "$ST"; arm --keep-awake 1m;     ck "1m arms -t 60"          "-t 60"   "$CHILD"
 rm -f "$ST"; arm --keep-awake 1h30m;  ck "1h30m arms -t 5400"     "-t 5400" "$CHILD"
@@ -380,7 +380,7 @@ arm; ck "corrupt file: no child"        EMPTY "$CHILD"
 rm -f "$ST"
 MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" MENUBAR_LOAD_RUNNER_EXIT_AFTER=7 $BIN --no-update-check \
   --keep-awake 3s >/dev/null 2>&1 & app=$!; sleep 4
-ck "window released itself" EMPTY "$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true)"
+ck "window released itself" EMPTY "$(pgrep -fl caffeinate 2>/dev/null | grep -- "-w $app" || true)"
 wait $app; ck "expiry persisted enabled:false" '"enabled" : false' "$(cat "$ST")"
 arm; ck "spent window not resumed" EMPTY "$CHILD"
 # --keep-awake-pid: the same window contract, ended by an event instead of a clock. The target is a
@@ -422,19 +422,19 @@ rm -f "$ST"
 sleep 3 >/dev/null 2>&1 & TSHORT=$!
 MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" MENUBAR_LOAD_RUNNER_FORCE_BATTERY=100:ac   MENUBAR_LOAD_RUNNER_LOG_AWAKE=1 MENUBAR_LOAD_RUNNER_EXIT_AFTER=9 $BIN --no-update-check   --keep-awake-pid $TSHORT >/dev/null 2>"$ERR" & app=$!
 sleep 2.5
-ck "holds while the target runs"   "-di -w" "$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true)"
+ck "holds while the target runs"   "-di -w" "$(pgrep -fl caffeinate 2>/dev/null | grep -- "-w $app" || true)"
 ck "hold names its subject"        "bound_pid=$TSHORT" "$(cat "$ERR")"
 sleep 3
-ck "released when the target exits" EMPTY "$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true)"
+ck "released when the target exits" EMPTY "$(pgrep -fl caffeinate 2>/dev/null | grep -- "-w $app" || true)"
 wait $app
 ck "binding cleared on release"    "bound_pid=0" "$(cat "$ERR")"
 ck "release persisted enabled:false" '"enabled" : false' "$(cat "$ST")"
 
 # An unwritable state location must not cost the user the feature.
 mkdir -p tmp/qa-ro && chmod 500 tmp/qa-ro
-MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-ro/s.json" MENUBAR_LOAD_RUNNER_EXIT_AFTER=3 $BIN \
-  --no-update-check --keep-awake 5m >/dev/null 2>&1 & app=$!; sleep 1.2
-ck "read-only state dir still arms" "-t 300" "$(ps -o args= -ax | grep '[c]affeinate' | grep -- "-w $app" || true)"
+MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-ro/s.json" MENUBAR_LOAD_RUNNER_EXIT_AFTER=2.0 $BIN \
+  --no-update-check --keep-awake 5m >/dev/null 2>&1 & app=$!; sleep 0.8
+ck "read-only state dir still arms" "-t 300" "$(pgrep -fl caffeinate 2>/dev/null | grep -- "-w $app" || true)"
 wait $app; ck "read-only state dir exits 0" 0 "$?"
 chmod 700 tmp/qa-ro; rm -rf tmp/qa-ro
 rm -f "$ST" "$ERR"
@@ -450,7 +450,7 @@ section "§3b settings persistence [gui — needs WindowServer]"
 pass=0; fail=0
 SF="$PWD/tmp/qa-settings-state.json"
 sp(){ desc="$1"; expect="$2"; shift 2
-  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=2 "$@" >/dev/null 2>&1; rc=$?
+  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=0.4 "$@" >/dev/null 2>&1; rc=$?
   got=$(sed -n 's/.*"labelMode" *: *"\([a-z]*\)".*/\1/p' "$SF" 2>/dev/null)
   if [ "$rc" = 0 ] && [ "$got" = "$expect" ]; then echo "  PASS [$desc]"; pass=$((pass+1))
   else echo "  FAIL [$desc] rc=$rc expect=$expect got=${got:-<none>}"; fail=$((fail+1)); fi; }
@@ -478,7 +478,7 @@ grep -q '"tint" : 3' "$SF" \
 # reset it. A run with no arguments must write back the side it read, and an unrecognized one must
 # degrade to the left default rather than to an empty/absent field.
 side(){ desc="$1"; expect="$2"; shift 2
-  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=2 "$@" >/dev/null 2>&1; rc=$?
+  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=0.4 "$@" >/dev/null 2>&1; rc=$?
   got=$(sed -n 's/.*"labelSide" *: *"\([a-z]*\)".*/\1/p' "$SF" 2>/dev/null)
   if [ "$rc" = 0 ] && [ "$got" = "$expect" ]; then echo "  PASS [$desc]"; pass=$((pass+1))
   else echo "  FAIL [$desc] rc=$rc expect=$expect got=${got:-<none>}"; fail=$((fail+1)); fi; }
@@ -495,7 +495,7 @@ side "unknown side -> left default"   left  $BIN
 # the fraction the app REWRITES at termination, so a broken restore surfaces as the 0.2 default coming
 # back. §3a already proves the value drives the actual sleep policy; this proves it round-trips.
 bt(){ desc="$1"; expect="$2"; shift 2
-  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=2 "$@" >/dev/null 2>&1; rc=$?
+  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=0.4 "$@" >/dev/null 2>&1; rc=$?
   got=$(sed -n 's/.*"batteryThreshold" *: *\([0-9.]*\).*/\1/p' "$SF" 2>/dev/null)
   if [ "$rc" = 0 ] && [ "$got" = "$expect" ]; then echo "  PASS [$desc]"; pass=$((pass+1))
   else echo "  FAIL [$desc] rc=$rc expect=$expect got=${got:-<none>}"; fail=$((fail+1)); fi; }
@@ -526,7 +526,7 @@ grep -q '"keepAwake"' "$SF" \
 # and a file without the key degrades to false rather than erroring (Optional-field degradation).
 # What the freeze DOES is §3g's subject, not this one's.
 fz(){ desc="$1"; expect="$2"; shift 2
-  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=2 "$@" >/dev/null 2>&1; rc=$?
+  MENUBAR_LOAD_RUNNER_STATE_FILE="$SF" MENUBAR_LOAD_RUNNER_EXIT_AFTER=0.4 "$@" >/dev/null 2>&1; rc=$?
   got=$(sed -n 's/.*"freezeAnimation" *: *\([a-z]*\).*/\1/p' "$SF" 2>/dev/null)
   if [ "$rc" = 0 ] && [ "$got" = "$expect" ]; then echo "  PASS [$desc]"; pass=$((pass+1))
   else echo "  FAIL [$desc] rc=$rc expect=$expect got=${got:-<none>}"; fail=$((fail+1)); fi; }
@@ -593,7 +593,7 @@ else
   # the run is long enough to see it clear (retention is 8s).
   "$PROBE" 2 & probe_pid=$!
   out=$(MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$AS" \
-        MENUBAR_LOAD_RUNNER_EXIT_AFTER=15 $BIN 2>&1 | grep '^ASSERTIONS')
+        MENUBAR_LOAD_RUNNER_EXIT_AFTER=11 $BIN 2>&1 | grep '^ASSERTIONS')
   wait $probe_pid 2>/dev/null
   seen=$(echo "$out" | grep -c 'mblr-assert-probe')
   ak "retained across a renewal gap (listed in $seen ticks after a 2s hold)" \
@@ -793,11 +793,11 @@ echo "  freeze animation: passes=$pass fails=$fail"; total_fail=$((total_fail+fa
 # --- §4 Error paths [gui] --------------------------------------------------
 section "§4 error paths (fast, no modal) [gui — needs WindowServer]"
 err=$(MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-lifecycle-state.json" \
-      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN /no/such/file.gif 2>&1 >/dev/null); rc=$?
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=1 $BIN /no/such/file.gif 2>&1 >/dev/null); rc=$?
 { [ "$rc" = 0 ] && echo "$err" | grep -q "GIF file not found"; } && echo "  PASS bad GIF" || { echo "  FAIL bad GIF (rc=$rc)"; total_fail=$((total_fail+1)); }
 mv gifs/presets.json gifs/presets.json.bak
 err=$(MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-lifecycle-state.json" \
-      MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 $BIN 2>&1 >/dev/null); rc=$?
+      MENUBAR_LOAD_RUNNER_EXIT_AFTER=1 $BIN 2>&1 >/dev/null); rc=$?
 mv gifs/presets.json.bak gifs/presets.json
 { [ "$rc" = 0 ] && echo "$err" | grep -q "Could not load preset manifest"; } && echo "  PASS missing manifest" || { echo "  FAIL missing manifest (rc=$rc)"; total_fail=$((total_fail+1)); }
 [ -f gifs/presets.json ] && echo "  PASS manifest restored" || { echo "  FAIL manifest NOT restored"; total_fail=$((total_fail+1)); }
@@ -828,7 +828,7 @@ rk(){ [ "$2" = 1 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAI
 for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:rate" "fan:FAN:%" "battery:BAT:%" "temperature:TMP:deg"; do
   src=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; shape=${rest##*:}
   out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$RO" \
-        MENUBAR_LOAD_RUNNER_EXIT_AFTER=9 $BIN --label value --load-source "$src" 2>&1 | grep '^SLOTS')
+        MENUBAR_LOAD_RUNNER_EXIT_AFTER=4.5 $BIN --label value --load-source "$src" 2>&1 | grep '^SLOTS')
   rm -f "$RO"
   # A source this machine lacks falls back to CPU and says so on stderr — not a failure (§3 covers it).
   if [ -z "$out" ] || ! echo "$out" | grep -q "label=\"$tag"; then
