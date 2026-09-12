@@ -147,7 +147,7 @@ Execution is governed by the `menubar-load-runner` zsh script, which manages com
 - **Atomic Rename:** When compiling, the launcher outputs to `MenuBarLoadRunner.new` before invoking `mv` (`rename(2)`) over `MenuBarLoadRunner`. This guarantees that an existing live process paging from the Mach-O binary does not crash during a rebuild.
 - **Precompilation Hook (`--precompile`):** Exposes the compilation branch without launching the process. Used by the in-app self-updater to build newly pulled source code while the current instance remains live.
 - **Strict Concurrency Safety:** Compiled with Swift 5 `-strict-concurrency=complete`. All UI and state-managing classes are annotated `@MainActor`.
-- **Interpreted Fallback:** If `swiftc` compilation fails or toolchain elements are unavailable, the launcher falls back to interpreted execution via `swift MenuBarLoadRunner.swift`.
+- **Interpreted Fallback & Singleton Scope:** If `swiftc` compilation fails or toolchain elements are unavailable, the launcher falls back to interpreted execution via `swift MenuBarLoadRunner.swift`. This degraded emergency fallback is intentionally not singleton-guarded: the launcher's singleton check (`pgrep -U "$(id -u)" -f "/MenuBarLoadRunner( |$)"`) explicitly matches the compiled binary path to avoid false positives against editors holding `MenuBarLoadRunner.swift` open or background `swiftc` builds, while the interpreted fallback process executes directly under `/usr/bin/swift`.
 
 ---
 
@@ -438,11 +438,12 @@ Auto-sizing status items causes neighboring items to jitter on every telemetry u
    ```
 3. **Reserved Template Width (`labelSlotWidth`):** Computes maximum string dimension based on worst-case template bounds + `Tuning.labelSlotPadding` (4 pt). Slot length is fixed to this reservation.
 
-### 6.2 Left/Right Placement Architecture
+### 6.2 Left/Right Placement Architecture & Menu Bar Congestion
 
 macOS orders status items right-to-left based on creation time with no reordering API. To allow dynamic side switching at runtime without rebuilding the animation layer:
 - Two label items are allocated at launch: `labelItemRight` (before animation item) and `labelItemLeft` (after animation item).
 - The active side gets the computed reservation length; the inactive side is collapsed to `length = 0`.
+- **Full Bar Adjacency Boundary (Scatter):** macOS owns status-item placement and provides no reorder or relative group-pinning API. Creation order decides *intent*; the WindowServer decides actual screen placement. On crowded menu bars (notably notched built-in displays with high item density), status items may scatter with foreign menu items interleaved between label and icon. The $0\text{ pt}$ jitter guarantee (§ 6.1) remains unaffected; `tests/qa.sh` §3c geometrically detects scatter and emits a `NOTE` rather than a spurious failure, as adjacency cannot be verified on a saturated bar.
 
 ### 6.3 Keep Awake Window Countdown Display
 
@@ -500,7 +501,7 @@ Sleep inhibition integrates directly into the visualizer while observing system-
 
 - **Configurable Battery Release:** Defaults to 20% (`Tuning.batteryLowThresholdDefault`), adjustable via CLI `--battery-threshold` or menu. The accepted range is **6%–100%** (`Tuning.batteryThresholdMin`…`batteryThresholdMax`), or `Never` / `0`; the menu offers 10 / 15 / 20 / 30% as rows plus `Custom…` for any whole percent in range. The minimum sits **above** the 5% floor on purpose, so no setting can reach it.
 - **5% Hard Critical Floor:** `Tuning.batteryCriticalThreshold` (0.05). If battery drops to $\le 5\%$, all sleep assertions release immediately, overriding manual user overrides.
-- **Low Battery Override:** Arming Keep Awake while already below the threshold sets `keepAwakeBatteryOverride`, honoring user intent down to the 5% hard floor.
+- **Low Battery Override Floor:** Arming Keep Awake while already below the threshold sets `keepAwakeBatteryOverride`, honoring user intent down to the 5% hard floor. An explicit "arm anyway" override is honored strictly between the configured threshold (e.g. 20%) and 5%; it deliberately never extends below the 5% physical floor into a hard power-off.
 
 ### 7.3 System Assertion Telemetry (`SleepAssertionMonitor`)
 
@@ -548,6 +549,12 @@ one that costs the job.
   guard, for the same reason: the menu bar is per-session.
 - **The safety floor is untouched.** A bound hold suspends on the battery band and the 5% floor like
   any other (§ 7.2): the binding says when to stop holding, never that the floor stops applying.
+
+### 7.5 OS Power & Multi-User Boundaries
+
+- **Machine-Wide Sleep Semantics:** Sleep is a system-wide hardware/kernel state managed by `powerd`. A `caffeinate` assertion prevents the entire Mac from sleeping, so holds from two concurrent user sessions do not compose independently. User intent remains cleanly partitioned per user via per-account `state.json` (§ 8.2).
+- **Fast User Switching GUI Isolation:** Windows and status items belonging to a background login session are invisible from the foreground session due to macOS WindowServer security boundaries. Background Keep Awake assertions deliberately continue running across user switches so unattended jobs finish without interruption.
+- **Unprivileged Clamshell Sleep Boundary:** Subprocess `caffeinate -di -w <pid>` cannot prevent clamshell (closed-lid) sleep on battery power. Inhibiting clamshell sleep on battery requires mutating system-wide NVRAM power settings via root-privileged `pmset disablesleep`, which violates the unprivileged execution tenet and risks leaving sleep permanently disabled if the process terminates abnormally. Supported closed-lid operation requires Apple's standard clamshell conditions (AC power + external display).
 
 ---
 
@@ -633,8 +640,9 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 | **Process Model** | Single binary execution per UID (`pgrep -U`) | Prevents duplicate menu bar status items across accidental terminal launches while supporting Fast User Switching. |
 | **SMC Access** | Exactly one `io_connect_t` instance | `SMCClient.shared` holds process-lifetime connection without opening redundant kernel handles. |
 | **Private API** | `IOReport` bound only by `dlopen`/`dlsym`, never linked | The one unheadered API in the build. Runtime binding keeps the zero-dependency single-file compile intact and makes every absence (dylib, symbol, group, rail) a clean `isAvailable == false` instead of a launch failure (§ 4.5). |
-| **Sleep Assertion** | Hard 5% critical battery floor | Sleep assertions unconditionally terminate at $\le 5\%$ battery, protecting laptop hardware from deep discharge. |
-| **Menu Layout** | Static slot width reservation | Status items must never resize based on live data values to guarantee zero layout jitter on the menu bar. |
+| **Sleep Assertion** | Hard 5% critical battery floor | Sleep assertions unconditionally terminate at $\le 5\%$ battery, protecting laptop hardware from deep discharge (§ 7.2). |
+| **Clamshell Sleep** | Unprivileged sleep inhibition | Uses PID-bound `caffeinate -di -w <pid>`; never mutates system-wide NVRAM sleep policy via `pmset` (§ 7.5). |
+| **Menu Layout** | Static slot width reservation | Status items must never resize based on live data values to guarantee zero layout jitter on the menu bar (§ 6.1). WindowServer owns ultimate placement under congestion (§ 6.2). |
 | **Game Loop** | Occlusion stops driver completely | Full occlusion (notch, inactive space, display off) must reduce render CPU utilization to exactly 0.0%. |
 | **State File** | Single-writer centralized save | `persistState()` is the only function permitted to write `state.json`, eliminating partial block overwrites. |
 

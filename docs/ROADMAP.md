@@ -1,7 +1,7 @@
 # ROADMAP
 
-The product tracker: what is open, what was declined, and known limits. Shipped
-work is not tracked here — it is described as-built in `docs/ARCHITECTURE.md`. Created 2026-07-26;
+The product tracker: what is open and what was declined. Shipped work and system
+boundaries are not tracked here — they are described as-built in `docs/ARCHITECTURE.md`. Created 2026-07-26;
 current as of v1.23.0 (updated September 2026).
 
 Items are `R<n>`, assigned once, never reused. **P1** user-visible defect or silent failure · **P2**
@@ -58,13 +58,3 @@ the behavior being missed.
 | Release Keep Awake on fast user switching | **Contradicts chosen semantics:** A Keep Awake hold is a time or process promise, so unattended background tasks must continue running when another user switches in. |
 | Any transient announcement of a Keep Awake event (HUD panel, notification) | **Ineffective and technically barred:** Transient panels are missed during unattended battery events (which already wear a persistent paused tone), while native notifications require an application bundle. |
 
-## Known limits — not gaps
-
-| Limit | Why |
-|---|---|
-| Keep Awake's *effect* is machine-wide | `caffeinate` holds the whole Mac awake; sleep is machine-level, so two users' windows don't compose. Per-user *state* is already correct (per-account Application Support). |
-| A window held by a background login session is invisible from the foreground one | Consequence of the above. Nothing to store differently. |
-| Clamshell sleep can't be prevented | `caffeinate` cannot inhibit it. |
-| Below 5% on battery the Mac sleeps regardless | Deliberate floor under the arm-anyway override: an explicit "anyway" is honored from 20% to 5%, not into a hard power-off. |
-| The interpreted-`swift` fallback isn't singleton-guarded | Runs only when `swiftc` fails; the guard matches the compiled binary's path. |
-| The menu-bar label may not sit adjacent to the icon on a **full** bar | macOS owns status-item placement and offers no reorder API — verified 2026-07-29 (6/6 scattered on a notched built-in display, 100% correct on a roomy external). Creation order decides *intent*; the bar decides the outcome. The v1.16.0 no-jitter guarantee is unaffected; `tests/qa.sh` §3c reports NOTE on scatter, so adjacency goes **unverified** on such a machine. Full account: `docs/ARCHITECTURE.md` § 6. |

@@ -178,7 +178,7 @@ echo "  lifecycle: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 # and they held throughout the scattered runs. The cost is real: on a machine that always scatters,
 # adjacency goes UNVERIFIED here, so re-run where the items land contiguously (a roomy external bar, or
 # CI) before trusting it. A genuine ordering regression is still caught, since a contiguous-but-wrong
-# order fails the check rather than skipping it. See ROADMAP known limits.
+# order fails the check rather than skipping it. See docs/ARCHITECTURE.md § 6.2.
 section "§3c label slot geometry [gui — needs WindowServer]"
 pass=0; fail=0
 SG="$PWD/tmp/qa-slots-state.json"
