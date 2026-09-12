@@ -20,14 +20,40 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
   `MENUBAR_LOAD_RUNNER_LOG_FILE`, `MENUBAR_LOAD_RUNNER_BIN_NAME`, and the debug/QA hooks
   `MENUBAR_LOAD_RUNNER_EXIT_AFTER`, `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE`,
   `MENUBAR_LOAD_RUNNER_FORCE_BATTERY`, `MENUBAR_LOAD_RUNNER_STATE_FILE`,
-  `MENUBAR_LOAD_RUNNER_LOG_SLOTS`, `MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS`, and
-  `MENUBAR_LOAD_RUNNER_LOG_AWAKE`.
+  `MENUBAR_LOAD_RUNNER_LOG_SLOTS`, `MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS`,
+  `MENUBAR_LOAD_RUNNER_LOG_AWAKE`, `MENUBAR_LOAD_RUNNER_LOG_ANIMATION`, and
+  `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS`.
 - **Built-in preset keywords** and the `gifs/presets.json` manifest schema.
 - **Observable behavior** — the status menu structure, the default preset, and the load-adaptive
   speed contract.
 
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
+
+## [1.24.0] - 2026-09-12
+
+### Added
+
+- **Option-click the menu bar item to turn Keep Awake on and off without opening the menu.** ⌥-clicking
+  the creature — or either number slot — arms an indefinite hold, or releases whatever hold is running
+  along with its window and its low-battery override. It is a shortcut *through* the submenu's own arm
+  and disarm paths, not a second copy of them, so the battery pause, the arm-anyway rule and the 5%
+  floor all apply to it unchanged. A plain click still opens the menu, a right- or Control-click still
+  opens the menu, and ⌘-drag still rearranges the item.
+- **The dropdown now reports the battery's own history: health, cycle count and capacity.** On a Mac
+  with a battery, the `Battery` row reads `Battery: 80% · AC · 100% health · 113 cycles`, the state row
+  names the condition and the capacity behind it (`Normal · 8478/8579 mAh`, or `Service Recommended`
+  once health falls under 80% or the hardware reports a permanent failure), and hovering either row
+  gives the full breakdown including the raw measured capacity. It reads `AppleSmartBattery` from the
+  IORegistry with no privileges and, unlike every other reading here, **is never polled** — health and
+  cycles move over months, so it is read once when you open the menu and dropped when you close it.
+  Desktop Macs with no battery are unaffected: the reader finds no service and the menu stays as it was.
+
+### Changed
+
+- **The dropdown now opens on mouse release rather than on mouse press.** Reading a modifier requires
+  the status item's button action, which only fires on release; an attached menu fires on press but
+  never reports the modifier. This is the cost of the gesture above.
 
 ## [1.23.1] - 2026-09-11
 
