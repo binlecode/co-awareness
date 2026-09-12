@@ -2617,6 +2617,86 @@ private final class BatteryLoadMonitor {
     }
 }
 
+// Battery health, cycle count, and capacity diagnostics (R22). Queryable without root privileges
+// via IORegistry's AppleSmartBattery service. Static / slow-moving data read once on menu open
+// (never polled in the telemetry loop). Nil on desktop Macs where no smart battery exists.
+struct BatteryDiagnostics: Equatable, Sendable {
+    let cycleCount: Int
+    let maxDesignCycles: Int
+    let healthPercent: Int
+    let nominalCapacityMilliampHours: Int?
+    let designCapacityMilliampHours: Int?
+    let rawCapacityMilliampHours: Int?
+    let isServiceRecommended: Bool
+    let conditionText: String
+}
+
+enum BatteryDiagnosticsReader {
+    static func readDiagnostics() -> BatteryDiagnostics? {
+        if let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE"],
+           raw.lowercased().split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }).contains("battery") {
+            return nil
+        }
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+
+        var props: Unmanaged<CFMutableDictionary>?
+        guard IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+              let dict = props?.takeRetainedValue() as? [String: Any] else {
+            return nil
+        }
+
+        guard let cycleCount = (dict["CycleCount"] as? NSNumber)?.intValue else {
+            return nil
+        }
+
+        let maxCap = (dict["MaxCapacity"] as? NSNumber)?.intValue
+        let designCap = (dict["DesignCapacity"] as? NSNumber)?.intValue
+        let nominalCap = (dict["NominalChargeCapacity"] as? NSNumber)?.intValue ?? maxCap
+        let rawCap = (dict["AppleRawMaxCapacity"] as? NSNumber)?.intValue ?? nominalCap
+        let maxDesignCycles = (dict["DesignCycleCount9C"] as? NSNumber)?.intValue ?? 1000
+        let failureStatus = (dict["PermanentFailureStatus"] as? NSNumber)?.intValue ?? 0
+
+        let healthPct: Int
+        if let maxCap {
+            if maxCap <= 100 {
+                healthPct = max(0, min(100, maxCap))
+            } else if let designCap, designCap > 0 {
+                let nominal = nominalCap ?? maxCap
+                healthPct = max(0, min(100, Int(round(Double(nominal) / Double(designCap) * 100.0))))
+            } else {
+                healthPct = 100
+            }
+        } else if let nominalCap, let designCap, designCap > 0 {
+            healthPct = max(0, min(100, Int(round(Double(nominalCap) / Double(designCap) * 100.0))))
+        } else {
+            healthPct = 100
+        }
+
+        let isService = healthPct < 80 || failureStatus != 0
+        let condition: String
+        if failureStatus != 0 {
+            condition = "Permanent Failure"
+        } else if isService {
+            condition = "Service Recommended"
+        } else {
+            condition = "Normal"
+        }
+
+        return BatteryDiagnostics(
+            cycleCount: cycleCount,
+            maxDesignCycles: maxDesignCycles,
+            healthPercent: healthPct,
+            nominalCapacityMilliampHours: nominalCap,
+            designCapacityMilliampHours: designCap,
+            rawCapacityMilliampHours: rawCap,
+            isServiceRecommended: isService,
+            conditionText: condition
+        )
+    }
+}
+
 // Apple Neural Engine power as a 0…1 load — the one reader that can answer "is the NPU busy?".
 // Neither CPU nor GPU can: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
 // Vision) runs on the Neural Engine while both of those sit near idle, so every other source here
@@ -3482,6 +3562,10 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     private var thermalStateObserver: NSObjectProtocol?
     private var occlusionObserver: NSObjectProtocol?
 
+    // Battery diagnostics (R22): cycle count, health %, capacities, and condition.
+    // Read statically once on menuWillOpen; cleared on menuDidClose.
+    private var batteryDiagnostics: BatteryDiagnostics?
+
     // Freeze Animation (R17): stop the frame driver, hold the current frame, hand the reading to the
     // label. Two triggers over one mechanism.
     // Intent — the Settings ▸ Freeze Animation toggle. Persisted (settings.freezeAnimation), restored
@@ -4117,6 +4201,10 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // with a saved manual freeze must never animate a few frames before the first sync.
         syncGameLoopRunning()
         refreshMenuMetrics()
+        // One shot, and only under the hook: the menu-open read (§ 4.6) is the only other caller, and a
+        // headless QA run never opens a menu. Deliberately not on the 2s sample tick — the reader's whole
+        // contract is that slow-moving hardware data is never polled.
+        logBatteryDiagnosticsIfRequested()
 
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -4771,6 +4859,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
 
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
+        refreshBatteryDiagnostics()
         refreshMenuMetrics()
         refreshPresetSelectionState()
         refreshWidthInfo()
@@ -4786,7 +4875,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
 
     func menuDidClose(_ menu: NSMenu) {
         isMenuOpen = false
+        batteryDiagnostics = nil
         syncKeepAwakeCountdownTicker()
+    }
+
+    private func refreshBatteryDiagnostics() {
+        batteryDiagnostics = BatteryDiagnosticsReader.readDiagnostics()
+        logBatteryDiagnosticsIfRequested()
     }
 
     // The countdown ticker drives the seconds-resolution readout: runs whenever a Keep Awake window is
@@ -4860,6 +4955,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // Source-conditional: usageItem/stateItem show the ACTIVE source's metric + state. The
         // inactive source isn't sampled (see sampleSystemLoad), so showing its stale line would
         // mislead — instead only the driver's figures appear. Load Avg stays (system-wide).
+        usageItem.toolTip = (activeLoadSource == .battery) ? batteryTooltipText() : nil
         switch activeLoadSource {
         case .cpu:
             if loadMonitor.hasSample {
@@ -4951,9 +5047,18 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .battery:
             if batteryMonitor.hasSample {
                 usageItem.title = batteryUsageLineText()
-                // State names the drain band while on battery (the driver), or "On AC" when plugged in
-                // (current 0 → idle animation) — more useful than a Low/Med/High of a zero draw.
-                let stateText = batteryMonitor.onBattery ? cpuStateText(for: batteryMonitor.currentLoad) : "On AC"
+                // Rich diagnostic condition + capacity when available (R22); otherwise falls back to
+                // drain band or "On AC".
+                let stateText: String
+                if let diag = batteryDiagnostics {
+                    if let nom = diag.nominalCapacityMilliampHours, let des = diag.designCapacityMilliampHours, des > 0 {
+                        stateText = "\(diag.conditionText) · \(nom)/\(des) mAh"
+                    } else {
+                        stateText = diag.conditionText
+                    }
+                } else {
+                    stateText = batteryMonitor.onBattery ? cpuStateText(for: batteryMonitor.currentLoad) : "On AC"
+                }
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .battery), stateText)
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — battery %.0f%%, %@",
@@ -5100,8 +5205,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     }
 
     // Battery line: charge % (the readout) plus the discharge current in amps while on battery — the
-    // drain that drives the animation — or "AC" when plugged in. Mirrors the memory line showing the
-    // raw figure alongside what actually drives speed (the scaler-normalized draw).
+    // drain that drives the animation — or "AC" when plugged in. When diagnostics are available
+    // (menu open on battery-capable hardware, R22), enriches with health % and cycle count.
     private func batteryUsageLineText() -> String {
         let pct = batteryMonitor.currentChargeFraction * Tuning.percentScale
         var line = String(format: "Battery: %.0f%%", pct)
@@ -5112,7 +5217,29 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         } else {
             line += " · AC"
         }
+        if let diag = batteryDiagnostics {
+            if diag.isServiceRecommended {
+                line += " · \(diag.healthPercent)% health (Service) · \(diag.cycleCount) cycles"
+            } else {
+                line += " · \(diag.healthPercent)% health · \(diag.cycleCount) cycles"
+            }
+        }
         return line
+    }
+
+    private func batteryTooltipText() -> String? {
+        guard let diag = batteryDiagnostics else { return nil }
+        var lines: [String] = []
+        lines.append("Battery Health: \(diag.healthPercent)% (\(diag.conditionText))")
+        lines.append("Cycle Count: \(diag.cycleCount) / \(diag.maxDesignCycles)")
+        if let nom = diag.nominalCapacityMilliampHours, let des = diag.designCapacityMilliampHours, des > 0 {
+            let pct = (Double(nom) / Double(des)) * 100.0
+            lines.append(String(format: "Maximum Capacity: %d mAh / %d mAh (%.1f%%)", nom, des, pct))
+        }
+        if let raw = diag.rawCapacityMilliampHours {
+            lines.append("Raw Measured Capacity: \(raw) mAh")
+        }
+        return lines.joined(separator: "\n")
     }
 
     // Neural Engine line: the rail's power draw. Two decimals because the interesting band is small
@@ -5429,6 +5556,32 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         let handoff = (effectiveLabelMode != labelMode) ? 1 : 0
         fputs("ANIM running=\(running) freeze=\(freeze) frame=\(frameIndex) "
               + String(format: "speed=%.2f", speedMultiplier) + " labelHandoff=\(handoff)\n", stderr)
+    }
+
+    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1, sibling to LOG_SLOTS/LOG_ASSERTIONS/
+    // LOG_AWAKE and there for the same reason — a shell with no TCC grant can't read an NSMenu, so
+    // static battery diagnostics derived on menu open must be assertable from stderr.
+    //
+    // Strictly read-only in both directions: it never assigns `batteryDiagnostics`, so the hook cannot
+    // make the menu render the diagnostics branch (§ 4.6) at a moment the menu was never open — an
+    // observability hook may not move a business decision. Off the menu-open path it reads its own
+    // throwaway copy, which is what lets a headless `EXIT_AFTER` run assert the reader at all.
+    private let logBatteryDiagnostics = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS"] == "1"
+
+    private func logBatteryDiagnosticsIfRequested() {
+        guard logBatteryDiagnostics else { return }
+        if let diag = batteryDiagnostics ?? BatteryDiagnosticsReader.readDiagnostics() {
+            fputs(String(
+                format: "BATTERY_DIAGNOSTICS cycles=%d health=%d%% nominal=%dmAh design=%dmAh condition=%@\n",
+                diag.cycleCount,
+                diag.healthPercent,
+                diag.nominalCapacityMilliampHours ?? 0,
+                diag.designCapacityMilliampHours ?? 0,
+                diag.conditionText
+            ), stderr)
+        } else {
+            fputs("BATTERY_DIAGNOSTICS unavailable\n", stderr)
+        }
     }
 
     // Whether a source's reader can produce a value on this machine. CPU/memory are always available
@@ -5861,8 +6014,10 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             if showAllSources, source != activeLoadSource, isSourceAvailable(source) {
                 item.isHidden = false
                 item.title = allSourcesRowText(for: source)
+                item.toolTip = (source == .battery) ? batteryTooltipText() : nil
             } else {
                 item.isHidden = true
+                item.toolTip = nil
             }
         }
     }

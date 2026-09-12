@@ -83,6 +83,7 @@ MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 ./tmp/mblr-check --label value 2>&1 | grep SLOTS
 MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS=1 ./tmp/mblr-check 2>&1 | grep ASSERTIONS     # 打印过滤与防抖后的外部睡眠断言
 MENUBAR_LOAD_RUNNER_LOG_AWAKE=1 ./tmp/mblr-check 2>&1 | grep AWAKE               # 打印睡眠阻止综合判定与菜单行文本
 MENUBAR_LOAD_RUNNER_LOG_ANIMATION=1 ./tmp/mblr-check 2>&1 | grep ANIM           # 打印动画冻结状态与游标
+MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1 ./tmp/mblr-check 2>&1 | grep BATTERY_DIAG  # 打印电池健康度/循环次数/容量（启动一次 + 每次开菜单）
 
 # 自动化测试套件
 tests/qa.sh --core                           # 核心门禁（CI 友好，不依赖 WindowServer，秒级）
@@ -135,7 +136,7 @@ pkill -f 'MenuBarLoadRunner'                 # 停止当前用户正在运行的
 ## 测试与回归约定
 
 - **驱动真实二进制**：`tests/qa.sh` 是唯一的自动化回归测试套件，分级运行：`--core`（语法、编译、CLI 解析与版本基线，无 GUI 依赖）、默认（包含 GUI 状态栏与断言检查）、`--launcher`（启动器单例与并发测试）。
-- **只使用无侵入可观测性钩子**：`MENUBAR_LOAD_RUNNER_EXIT_AFTER`（生命周期截断）、`FORCE_BATTERY`（模拟电量）、`LOG_SLOTS` / `LOG_ASSERTIONS` / `LOG_AWAKE` / `LOG_ANIMATION`（日志输出内部判定）。禁止任何改变业务决策逻辑的 hook。
+- **只使用无侵入可观测性钩子**：`MENUBAR_LOAD_RUNNER_EXIT_AFTER`（生命周期截断）、`FORCE_BATTERY`（模拟电量）、`FORCE_UNAVAILABLE`（模拟遥测源缺失）、`LOG_SLOTS` / `LOG_ASSERTIONS` / `LOG_AWAKE` / `LOG_ANIMATION` / `LOG_BATTERY_DIAGNOSTICS`（日志输出内部判定）。禁止任何改变业务决策逻辑的 hook —— `LOG_*` 只允许读取并打印，严禁回写被打印的状态字段（否则会让菜单在未打开时走上不该走的渲染分支）。
 - **环境无法测定时输出 NOTE，绝不造假 PASS/FAIL**：例如屏幕拥挤、无电池桌面机、系统自带睡眠断言等外部不可控状态，如实输出 NOTE。
 - **严禁谎称覆盖**：测试无法测定的系统边界必须诚实声明，绝不引入虚假断言。
 

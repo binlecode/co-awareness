@@ -10,7 +10,8 @@
 #             re-ported copies of the app's logic and were deleted (see §5).
 #   gui       §3 launch lifecycle · §3a Keep Awake battery conditions · §3b settings persistence ·
 #             §3c label slot geometry · §3d other sleep assertions · §3e machine sleep-hold state ·
-#             §3f Keep Awake launch arming · §3g freeze animation · §5 reader readouts · §4 error paths. These boot NSApplication + create an NSStatusItem, so
+#             §3f Keep Awake launch arming · §3g freeze animation · §3h battery diagnostics ·
+#             §5 reader readouts · §4 error paths. These boot NSApplication + create an NSStatusItem, so
 #             they need an active WindowServer (GUI) session. Fine on a logged-in Mac; best-effort on
 #             hosted runners.
 #   launcher  §6 launcher wrapper: singleton guard, `--precompile`, and the build's safety against a
@@ -807,6 +808,34 @@ else
 fi
 rm -f "$FZ"
 echo "  freeze animation: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
+
+# --- §3h Battery diagnostics [gui] -----------------------------------------
+# R22: unprivileged battery health and cycle count diagnostics via AppleSmartBattery.
+# MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1 outputs static health, cycle count,
+# and capacity. Gracefully reports unavailable when battery is forced unavailable.
+section "§3h battery diagnostics [gui — needs WindowServer]"
+pass=0; fail=0
+bk(){ [ "$2" = 1 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAIL [$1] $3"; fail=$((fail+1)); }; }
+
+# 1. Real hardware query: if on a battery-capable machine, asserts cycles, health, and capacity shape.
+out=$(MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1 MENUBAR_LOAD_RUNNER_EXIT_AFTER=3 $BIN 2>&1)
+diag=$(echo "$out" | grep '^BATTERY_DIAGNOSTICS' | tail -1)
+if echo "$diag" | grep -q 'unavailable'; then
+  echo "  NOTE [battery diagnostics unavailable on this machine (desktop Mac or virtual environment)]"
+else
+  bk "real battery diagnostics output matches expected schema" \
+     "$(echo "$diag" | grep -qE 'cycles=[0-9]+ health=[0-9]+% nominal=[0-9]+mAh design=[0-9]+mAh condition=(Normal|Service Recommended|Permanent Failure)' && echo 1 || echo 0)" \
+     "got: $diag"
+fi
+
+# 2. Desktop simulation: FORCE_UNAVAILABLE=battery cleanly yields unavailable
+out_unavail=$(MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=battery MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1 MENUBAR_LOAD_RUNNER_EXIT_AFTER=2 $BIN 2>&1)
+diag_unavail=$(echo "$out_unavail" | grep '^BATTERY_DIAGNOSTICS' | tail -1)
+bk "forced unavailable battery reports unavailable" \
+   "$(echo "$diag_unavail" | grep -q 'BATTERY_DIAGNOSTICS unavailable' && echo 1 || echo 0)" \
+   "got: $diag_unavail"
+
+echo "  battery diagnostics: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
 # --- §4 Error paths [gui] --------------------------------------------------
 section "§4 error paths (fast, no modal) [gui — needs WindowServer]"

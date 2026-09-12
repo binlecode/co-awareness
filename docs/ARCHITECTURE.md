@@ -358,6 +358,23 @@ each), which no filtering on this side reduces. Measured on the real binary over
 paid only when ANE is the active source or the Other Sources list is expanded — active-only sampling is
 unchanged — and it buys the one signal nothing else in the app can report.
 
+### 4.6 Battery Telemetry & Static Diagnostics (`BatteryDiagnosticsReader`)
+
+Battery telemetry operates across two distinct time domains to honor the unprivileged, minimal-footprint tenet:
+
+1. **High-Frequency Dynamic Telemetry (`BatteryLoadMonitor`)**:
+   - Sampled periodically during active telemetry.
+   - Reads instantaneous discharge current (`kIOPSCurrentKey`) and battery charge percentage via unprivileged `IOPSCopyPowerSourcesInfo()`.
+   - While on battery, discharge current (mA) normalizes through `ThroughputScaler` (`Tuning.batteryFloorMilliamps` = 500 mA). While plugged into AC, discharge draw is 0, driving the animation at idle speed.
+2. **Static Health & Capacity Diagnostics (`BatteryDiagnosticsReader`, R22)**:
+   - Battery health and cycle counts are slow-moving hardware metrics that degrade over months, not seconds.
+   - **Strict Zero-Polling Invariant**: Health diagnostics are **never** queried in the background 2s telemetry loop or vsync game loop.
+   - **Menu-Gated Single Read**: Queried unprivileged from `AppleSmartBattery` via `IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))` strictly once on `menuWillOpen(_:)`, and cleared on `menuDidClose(_:)`.
+   - **Normalizations**: Automatically maps Apple Silicon normalized `MaxCapacity` percentages (0..100) and legacy Intel raw mAh capacities against `DesignCapacity`. Computes service recommendation conditions when health falls below 80% or `PermanentFailureStatus != 0`.
+   - **Presentation**: Enriches the battery status row (`Battery: 80% · AC · 100% health · 113 cycles`), `stateItem` (`Battery State: Normal · 8478/8579 mAh`, replacing the drain band while the menu is open), and provides multi-line AppKit tooltips with granular mAh capacities.
+   - **Graceful Desktop Omission**: On AC-only desktop Macs lacking an `AppleSmartBattery` service, the reader cleanly returns `nil`, and the menu seamlessly preserves standard desktop AC status with zero visual defects or overhead.
+   - **Observability without behavior change**: `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1` prints one line at launch and one per menu open. It reads a throwaway copy and never assigns the cached field, so the hook cannot make the menu render the diagnostics branch at a moment the menu was never open — the reason it is not wired into `sampleSystemLoad()` where the other `LOG_*` hooks sit.
+
 ---
 
 ## 5. Power Management, Occlusion & Accessibility

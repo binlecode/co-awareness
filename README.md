@@ -277,6 +277,24 @@ source, refreshed while it's open:
 - **Numeric readouts** below — current usage, state, speed multiplier, and system load average.
 - A read-only **Width** readout, an **Other Sources** collapsible list (the load-source switcher), a **Settings** submenu (currently the **Menu Bar Label**: Off / Live Value / Custom Text), and a **Presets** submenu.
 
+### Battery health, cycles, and capacity
+
+On a Mac with a battery, the menu also reports what the battery has been through — not just what it's
+doing right now. The `Battery` row gains `100% health · 113 cycles`, the state row names the condition
+and the capacity behind it (`Normal · 8478/8579 mAh`), and hovering either row gives the full
+breakdown: health and condition, cycles against the design cycle count, maximum capacity in mAh and as
+a percentage of design, and the raw measured capacity. `Service Recommended` appears once health falls
+below 80% or the hardware reports a permanent failure — the same condition macOS itself surfaces.
+
+Two things make this different from every other reading here. It is read from `AppleSmartBattery` in
+the IORegistry with **no privileges and no helper**, and it is **never polled**: health and cycle count
+move over months, so reading them on a 2-second timer would be pure waste. The read happens when you
+open the menu and the result is dropped when you close it — a strict exception to the sampling loop,
+not a tenth load source. Nothing about the animation is driven by it.
+
+Desktop Macs with no battery are unaffected: the reader finds no `AppleSmartBattery` service, returns
+nothing, and the menu reads exactly as it did before.
+
 ## Load source (what drives the animation)
 
 ```bash
@@ -469,7 +487,7 @@ If a detached instance won't stop or a launch silently fails, check `/tmp/menuba
 
 Click the menu bar item to open:
 
-- The active source's metric + state line: `CPU Usage (smoothed)` / `CPU State`; or `Memory` (used-% + swap capacity + swap MB/s when paging) / `Memory Pressure`; or `GPU` / `GPU State`; or `Network` (MB/s) / `Network State`; or `Disk` (MB/s) / `Disk State`; or `Fan` (RPM + %) / `Fan State`; or `Battery` (charge % + discharge A, or `AC`) / `Battery State`; or `Temperature` (hottest sensor °C + the spread across sensors) / `Temperature State`
+- The active source's metric + state line: `CPU Usage (smoothed)` / `CPU State`; or `Memory` (used-% + swap capacity + swap MB/s when paging) / `Memory Pressure`; or `GPU` / `GPU State`; or `Network` (MB/s) / `Network State`; or `Disk` (MB/s) / `Disk State`; or `Fan` (RPM + %) / `Fan State`; or `Battery` (charge % + discharge A, or `AC` — plus **health % and cycle count** on a Mac with a battery) / `Battery State` (the battery's condition and the capacity behind it, `Normal · 8478/8579 mAh`, in place of the drain band while the menu is open; hover either row for the full breakdown — see [Battery health](#battery-health-cycles-and-capacity)); or `Temperature` (hottest sensor °C + the spread across sensors) / `Temperature State`
 - `Load Avg (1/5/15m)`
 - `Speed Multiplier` (shows the active load source and mode; a separate `Slowing animation — <cause>` line appears only when a self-throttle condition is active, naming the cause: thermal throttling, Low Power Mode, or memory pressure)
 - `▸ Other Sources` (disclosure row) — click to expand/collapse an inline list of every *other* available reader (`CPU` / `Memory` / `GPU` / `Network` / `Disk` / `Fan` / `Battery` / `Temperature`, minus the active one; sources with no readable hardware are omitted). Each row shows that reader's live readout; clicking it switches the driving source to it (takes effect immediately). Expanding samples every reader each tick; collapsed (the default) samples only the active source. The active source still drives the animation. Launch expanded with `--show-all-sources` / `MENUBAR_LOAD_RUNNER_SHOW_ALL=1`
@@ -537,7 +555,7 @@ Coverage is split into explicit tiers around one question — **does the check b
 | Tier | Sections | Needs a GUI session? | Role |
 |---|---|---|---|
 | `core` | §1 build (warning-clean) · §2 CLI/version | No | Primary gate — must pass before a release; headless-safe |
-| `gui` | §3 launch lifecycle · §3a–§3e Keep Awake / persistence / label geometry / sleep assertions · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
+| `gui` | §3 launch lifecycle · §3a–§3h Keep Awake / persistence / label geometry / sleep assertions / freeze / battery diagnostics · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
 | `launcher` / §7 | §6 launcher + singleton (disruptive `pkill`) · §7 interactive menu spot-check | — | Manual — run locally before a release |
 
 **All regression/QA currently runs locally** — `tests/qa.sh` is the source of truth. There are **no unit
@@ -571,7 +589,8 @@ dashboard):
 | **Load sources** | CPU, memory+swap, GPU, network, disk, fan, battery, die temperature, Neural Engine power | CPU | CPU, GPU, RAM | Full hardware suite |
 | **Unbounded rates (net/disk/swap) drive the animation** | Yes — adaptive auto-scaling | — | — | n/a (numeric display) |
 | **In-menu readout** | 60s sparkline, numerics, load averages | Minimal | Numeric dropdown | Full graphs, temps, per-process |
-| **Battery health / per-process breakdowns** | No (out of scope by design) | No | No | Yes |
+| **Battery health / cycle count** | Yes (menu-gated, unprivileged, never polled) | No | No | Yes |
+| **Per-process breakdowns** | No (out of scope by design) | No | No | Yes |
 | **Pauses when hidden; self-throttles under power/thermal pressure; honors Reduce Motion** | Yes | — | — | — |
 | **Built-in sleep inhibitor (Keep Awake)** | Yes (`caffeinate`, timed release, auto-disengage, survives relaunch) | — | — | — |
 | **CLI flags / headless install / login automation** | Yes (launcher, LaunchAgent scripts) | GUI app | GUI app | GUI app |
@@ -582,7 +601,7 @@ dashboard):
 > (no rigorous same-method measurements of other menu-bar apps exist; the only figures measured
 > here are this app's own, above). Verify each project's current state upstream.
 
-If you want per-sensor temperature lists, battery health, or per-process breakdowns, use
+If you want per-sensor temperature lists or per-process breakdowns, use
 **stats** — this app deliberately stays an unprivileged, aggregate-only indicator. If you want a graphical settings
 window over CLI flags, **zoomies** offers one.
 
