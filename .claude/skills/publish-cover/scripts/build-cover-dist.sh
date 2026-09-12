@@ -6,8 +6,10 @@
 # it, ../gifs/ rewritten to gifs/) and self-scores the pre-publish audit: path rewrite, no secrets /
 # local paths, self-contained assets (no broken srcs), outbound links, and the version badge.
 #
-# It does NOT deploy — that step needs interactive `npx wrangler login` and is left to the human
-# (see the skill's SKILL.md, "Deploy"). Exits non-zero if any audit gate fails.
+# It does NOT deploy — that is a separate step, and it runs on the OAuth creds already stored on disk,
+# NOT on the env CLOUDFLARE_API_TOKEN (which wrangler prefers and which has no Pages permission), so
+# every wrangler line needs `env -u CLOUDFLARE_API_TOKEN`. See the skill's SKILL.md §2 before
+# reaching for `wrangler login`. Exits non-zero if any audit gate fails.
 #
 # Usage (from anywhere):  .claude/skills/publish-cover/scripts/build-cover-dist.sh
 #
@@ -55,9 +57,8 @@ grep -oE 'class="badge">v[0-9.]+' "$DIST/index.html" | sed 's/class="badge">//' 
 
 echo
 if [ "$fail" -eq 0 ]; then
-  echo "AUDIT: ALL PASS. Deploy with:"
-  echo "  npx -y wrangler login            # once, interactive"
-  echo "  npx wrangler pages deploy $DIST --project-name=menubar-load-runner --commit-dirty=true"
+  echo "AUDIT: ALL PASS. Deploy with (env -u is required — see SKILL.md §2):"
+  echo "  env -u CLOUDFLARE_API_TOKEN npx wrangler pages deploy $DIST --project-name=menubar-load-runner --commit-dirty=true"
 else
   echo "AUDIT: FAIL — fix the above before deploying."
 fi
