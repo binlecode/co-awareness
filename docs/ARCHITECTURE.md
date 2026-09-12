@@ -14,8 +14,8 @@ All repository documentation lives in `docs/`. The repository root holds only `R
 
 ```
    docs/
-   +-- ARCHITECTURE.md          <-- You are here: system topology, subsystem specs (§1–§12),
-   |                              telemetry algorithms, invariants, parameter reference.
+   +-- ARCHITECTURE.md          <-- You are here: system topology, subsystem specs (§1–§13),
+   |                              telemetry algorithms, invariants, parameter reference, release hygiene.
    +-- ROADMAP.md                 The standing product tracker: candidate backlog (R<n>),
    |                              declined proposals with rationale, and verification debt.
    +-- RESEARCH-<topic>.md        External peer surveys and ecosystem research (e.g. peer-survey.md);
@@ -209,7 +209,7 @@ if advanced { renderCurrentFrame() }                                        // l
 
 ## 4. Hardware Telemetry & Scaling Subsystems
 
-The application includes eight unprivileged telemetry monitors sampling system state every 2 seconds (`Tuning.loadSampleInterval`).
+The application includes nine unprivileged telemetry monitors sampling system state every 2 seconds (`Tuning.loadSampleInterval`).
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -225,6 +225,7 @@ The application includes eight unprivileged telemetry monitors sampling system s
 │ NetworkLoadMonitor     │ getifaddrs() (AF_LINK)    │ ThroughputScaler (Bytes/Sec)      │
 │ DiskLoadMonitor        │ IOBlockStorageDriver      │ ThroughputScaler (Bytes/Sec)      │
 │ BatteryLoadMonitor     │ IOKit Power Sources       │ ThroughputScaler (Discharge mA)   │
+│ ANELoadMonitor         │ IOReport (Energy Model)   │ ThroughputScaler (Watts)          │
 └────────────────────────┴───────────────────────────┴───────────────────────────────────┘
 ```
 
@@ -291,6 +292,71 @@ For unbounded rates (network bytes/sec, disk bytes/sec, swap bytes/sec, battery 
    - Headroom Up: $1.3\times$ (`Tuning.scalerHeadroomUp`)
    - Headroom Down: $3.0\times$ (`Tuning.scalerHeadroomDown`)
 3. **Hysteresis Counters:** Rescaling requires $5$ consecutive out-of-band samples (`Tuning.scalerRescaleCount`) tracked in `overCount` and `underCount` registers, preventing single bursts from oscillating the display.
+
+### 4.5 Neural Engine Power Monitoring (`ANELoadMonitor`)
+
+The ninth reader, and the only one built on a private API. It exists because the NPU is the one busy
+state the other eight cannot see: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
+Vision) runs the Neural Engine while CPU and GPU utilization sit near idle, so every other source
+reports a quiet machine while it is working hard.
+
+**Why `IOReport` does not breach the unprivileged tenet.** `IOReport` is the user-space interface
+`powermetrics` reads energy from — no root, no kext, no entitlement, no system state mutated. What it
+lacks is a public *header*, not permission. The entry points are therefore bound at runtime with
+`dlopen`/`dlsym` behind `@convention(c)` signatures, and every failure along that path (missing dylib,
+missing symbol, missing group, missing rail) collapses into `isAvailable == false` — never a trap, and
+never a fabricated reading. This keeps the single-file, zero-dependency build intact: no bridging
+header, no linker flag, no `Package.swift`.
+
+**The dylib path is load-bearing.** As of macOS 26 there is no `IOReport.framework` on disk *or in the
+dyld shared cache*, so `dlopen` of the framework path fails outright. The symbols ship in
+`/usr/lib/libIOReport.dylib`.
+
+**Stateful delta sampling, not a point read.** Unlike every other monitor, `IOReport` is a
+subscription API. One subscription is opened over the `"Energy Model"` channel group for the life of
+the process (the `SMCClient` precedent — one long-lived handle, never a per-sample open), and a
+reading is the difference between two samples:
+
+```
+  bind: dlopen -> dlsym -> IOReportCopyChannelsInGroup("Energy Model")
+          |                         |
+          |                   filter to the "ANE" row alone
+          v                         v
+  IOReportCreateSubscription(nil, channels, &subscribed, 0, nil)   <-- see note below
+          |
+          v
+  tick:  S1 = IOReportCreateSamples(...)        (t1)
+         S2 = IOReportCreateSamples(...)        (t2)
+         D  = IOReportCreateSamplesDelta(S1, S2)
+         P  = joules(D["ANE"], unit) / (t2 - t1)     -> Watts
+         S1 <- S2
+```
+
+- **The subscribed-channels out-parameter is not optional.** Passing `nil` makes
+  `IOReportCreateSubscription` return `nil` on hardware that supports the API perfectly well — which
+  would read as "no Neural Engine" on *every* Apple Silicon Mac. It must receive a real pointer.
+- **Unit labels are read per row, never assumed.** One sample mixes units across rails — measured on an
+  M4 Max, 322 of 328 channels report `mJ`, five `uJ`, and the GPU's own row `nJ`.
+- **The channel list is filtered to the ANE rail before subscribing.** The group cannot be narrowed by
+  subgroup (every energy row reports an empty one), so the desired-channel list is filtered by hand.
+  This is a small win, not a large one — 3.6 ms → 2.8 ms per sample+delta, because the cost is the
+  kernel round trip and not the row count — but it states in code exactly which rail this reader may see.
+- **No sleep-gap special case is needed.** `elapsed` comes from `systemUptime`, which does not advance
+  while the machine is asleep, and neither does the energy counter.
+
+**Normalization.** Watts are unbounded and vary by chip tier, so the reading goes through the same
+`ThroughputScaler` as the other rate sources rather than a hardcoded per-chip cap. `Tuning.aneFloorWatts`
+= `1.0` W is the minimum ceiling, and unlike the rate floors it is not there to reject idle chatter — a
+power-gated NPU reads a hard, exact `0` — but to keep a *trivial* inference from reading as a busy one.
+Measured on an M4 Max: `0` W idle, 0.24–0.32 W under Vision accurate text recognition, and 1.4–3.7 W
+under image-featureprint, saliency, and body-pose inference.
+
+**Accepted cost.** This is the most expensive reader in the suite. `IOReportCreateSamples` costs ~2.9 ms
+per call and is effectively the entire per-tick cost (the delta and the single-row scan measure 0.001 ms
+each), which no filtering on this side reduces. Measured on the real binary over a 20-sample window:
+0.40% of a core with `--load-source ane` against 0.12% for `cpu`/`fan` and 0.18% for `temperature`. It is
+paid only when ANE is the active source or the Other Sources list is expanded — active-only sampling is
+unchanged — and it buys the one signal nothing else in the app can report.
 
 ---
 
@@ -566,6 +632,7 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 |---|---|---|
 | **Process Model** | Single binary execution per UID (`pgrep -U`) | Prevents duplicate menu bar status items across accidental terminal launches while supporting Fast User Switching. |
 | **SMC Access** | Exactly one `io_connect_t` instance | `SMCClient.shared` holds process-lifetime connection without opening redundant kernel handles. |
+| **Private API** | `IOReport` bound only by `dlopen`/`dlsym`, never linked | The one unheadered API in the build. Runtime binding keeps the zero-dependency single-file compile intact and makes every absence (dylib, symbol, group, rail) a clean `isAvailable == false` instead of a launch failure (§ 4.5). |
 | **Sleep Assertion** | Hard 5% critical battery floor | Sleep assertions unconditionally terminate at $\le 5\%$ battery, protecting laptop hardware from deep discharge. |
 | **Menu Layout** | Static slot width reservation | Status items must never resize based on live data values to guarantee zero layout jitter on the menu bar. |
 | **Game Loop** | Occlusion stops driver completely | Full occlusion (notch, inactive space, display off) must reduce render CPU utilization to exactly 0.0%. |
@@ -591,6 +658,8 @@ Comprehensive reference of values defined in `Tuning`:
 | `temperatureFloorCelsius` | `30.0` | °C | Lower anchor for die temperature speed mapping |
 | `temperatureCeilingCelsius` | `100.0` | °C | Upper anchor for die temperature speed mapping |
 | `memoryIdleFloor` | `0.55` | Fraction | Baseline RAM fraction subtracted before speed scaling |
+| `aneFloorWatts` | `1.0` | Watts | Minimum Neural Engine speed-scale ceiling (keeps trivial inference off full speed) |
+| `labelWattCeiling` | `9.9` | Watts | Reserved label width for the `ANE` readout |
 | `batteryLowThresholdDefault` | `0.20` | Fraction | Default battery release point for Keep Awake (20%) |
 | `batteryCriticalThreshold` | `0.05` | Fraction | Hard safety release floor for Keep Awake (5%) |
 | `keepAwakeBarForeignAlpha` | `0.45` | Alpha | Opacity of track line when machine is held awake externally |
@@ -619,3 +688,53 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v1.17 → v1.19** — from *our* hold to *the machine's* | Other sleep assertions, the machine-hold row, brightness-tracks-the-hold tint | Report the whole truth about sleep, not just this app's part of it (§ 7.3); the submenu's subject-grouped layout |
 | **v1.20** — the sensor tier | A shared `SMCClient` opened fan, then die temperature | The family of hardware readings the app can keep growing through without privileges (§ 4.3) |
 | **v1.21 → v1.22** — restart cost, and standing still | Build-before-restart in the update path; Freeze Animation honoring Reduce Motion | The compile moved out of the window where the app is gone (§ 9.2); a single stop/start decider total over occlusion + freeze (§ 5.1, § 5.3) |
+
+---
+
+## 13. Release Hygiene & Delivery Discipline
+
+A version bump moves five surfaces together: `AppInfo.version`, the `CHANGELOG.md` heading, the
+`README.md` version line, the `docs/cover.html` badge, and the git tag `UpdateChecker` reads.
+`tests/qa.sh` §2 enforces the first four; the tag is deliberately unchecked (qa.sh runs before it
+exists), so **pushing the commit and tag is the last manual step**. One rule with no other home: **the
+tag gates the prompt; the branch carries the code** — a behavioral change committed *after* its release
+tag is an undeliverable fix (`UpdateChecker` sees equal versions and offers nothing), resolved only by
+the next bump across all five surfaces. Never re-cut a published tag.
+
+**Cutting a release, in this order.** Steps 2, 3 and 6 look skippable and are not — each fails
+silently, and nothing upstream catches it:
+
+1. Bump `AppInfo.version`; move `CHANGELOG.md`'s `[Unreleased]` items into a dated section.
+   MAJOR/MINOR/PATCH follow the public-API definition at the top of `CHANGELOG.md` (CLI flags, env
+   vars, preset keywords + `presets.json` schema, observable behavior).
+2. Give `docs/cover.html` the release's **prose**, not just its badge, then redeploy (the
+   `publish-cover` skill; `npx wrangler whoami` first — the OAuth token usually persists, so no
+   interactive login is needed). qa.sh §2 greps the badge and nothing else, so a cover describing the
+   *previous* release passes every check while the badge reads as proof it is current. Its interactive
+   demos need the same pass and fail differently: they model app behavior in JS, so a stale demo goes
+   on *reproducing* the bug this release fixed — prose drift reads as stale, a stale demo reads as a
+   specification. Click the demo for whatever you changed.
+3. **Re-run `tests/qa.sh --core`** — §2 can only compare the version surfaces *after* you have edited
+   them; skip it and a mistyped surface ships silently.
+4. Tag `vX.Y.Z` — the fifth surface, and the only unchecked one.
+5. Push the commit **and** the tag: `git push origin main vX.Y.Z`.
+6. **Confirm it shipped with the command the app itself polls:**
+   ```bash
+   git ls-remote --tags origin 'v*' | sed 's|.*refs/tags/||; s|\^{}||' | sort -uV | tail -3
+   ```
+   A tag that never left your machine tells every installed copy the old version is current, silently,
+   with the local repo looking fully released. Sort `-V`, never plain `sort`: lexically `v1.9.1` beats
+   `v1.19.2`, which stopped being hypothetical at `v1.10.0`.
+
+Ship when `tests/qa.sh` says ALL PASS, the click-only checks in `docs/ROADMAP.md` § Verification debt are done, and **no NOTE covers what
+this release changed** — a NOTE is an unanswered case, not an accepted one, and neighbouring cases
+passing is not cover for it. Before signing off, check for a leaked keep-awake child by its `-w <pid>`
+signature, never by name (your own instance holds one legitimately), with `pgrep -fl caffeinate | grep -- "-w <pid>"`:
+
+```bash
+pgrep -fl caffeinate 2>/dev/null | grep -- '-w ' | while read -r _ pid; do
+  ps -p "$pid" >/dev/null 2>&1 || echo "  LEAK: caffeinate -w $pid"; done
+```
+
+Don't record the cover's published state in docs — fetch it. A `curl` of the live badge settles it in one command; the flow, including the two
+checks that read as a failed deploy and aren't, is the `publish-cover` skill's.

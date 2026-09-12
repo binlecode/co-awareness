@@ -102,7 +102,7 @@ $BIN foo bar >/dev/null 2>&1;                       chk "extra positional" 1 $?
 # version must agree with it, or a release ships a stale one silently — which is exactly how README sat
 # at 1.11.2 through two releases while the CHANGELOG (checked here since v1.x) stayed correct. The git
 # tag is the fifth surface and is deliberately NOT checked: qa.sh runs *before* the tag exists, so
-# asserting it would fail every pre-release run. See docs/ROADMAP.md § Release hygiene.
+# asserting it would fail every pre-release run. See docs/ARCHITECTURE.md § 13.
 VER=$(grep -Eo 'static let version = "[0-9]+\.[0-9]+\.[0-9]+"' MenuBarLoadRunner.swift | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
 vchk(){ grep -q "$2" "$3" && { echo "  PASS $1 shows $VER"; pass=$((pass+1)); } || { echo "  FAIL $1 missing $VER ($3)"; fail=$((fail+1)); }; }
 $BIN --help 2>&1 | grep -q "MenuBar Load Runner $VER" && { echo "  PASS --help shows $VER"; pass=$((pass+1)); } || { echo "  FAIL --help missing $VER"; fail=$((fail+1)); }
@@ -136,11 +136,14 @@ run "load-source fan"          "unavailable on this machine" $BIN --load-source 
 run "load-source battery"      "unavailable on this machine" $BIN --load-source battery
 # temperature is absent wherever no SMC sensor answers (VMs), so allow the same fallback line.
 run "load-source temperature"  "unavailable on this machine" $BIN --load-source temperature
+# ane needs IOReport's Energy Model group and an ANE rail in it: absent on Intel, so same fallback.
+run "load-source ane"          "unavailable on this machine" $BIN --load-source ane
 run "load-source bogus"        "Unknown --load-source" $BIN --load-source bogus
 run "force-unavail gpu->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu $BIN --load-source gpu
 run "force-unavail fan->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=fan $BIN --load-source fan
 run "force-unavail battery"    "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=battery $BIN --load-source battery
 run "force-unavail temp->cpu"  "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=temperature $BIN --load-source temperature
+run "force-unavail ane->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=ane $BIN --load-source ane
 run "fixed speed"              "" $BIN --speed-multiplier 1.5
 run "label value + gpu"        "" $BIN --label value --load-source gpu
 run "label custom text"        "" $BIN --label BUILD
@@ -825,7 +828,7 @@ RO="$PWD/tmp/qa-readout-state.json"
 rk(){ [ "$2" = 1 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAIL [$1] $3"; fail=$((fail+1)); }; }
 # `warming up` is legitimate for a counter-delta source on its first tick, so each shape allows the
 # placeholder; what must never appear is a different source's shape or an out-of-range number.
-for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:rate" "fan:FAN:%" "battery:BAT:%" "temperature:TMP:deg"; do
+for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:rate" "fan:FAN:%" "battery:BAT:%" "temperature:TMP:deg" "ane:ANE:watt"; do
   src=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; shape=${rest##*:}
   out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$RO" \
         MENUBAR_LOAD_RUNNER_EXIT_AFTER=4.5 $BIN --label value --load-source "$src" 2>&1 | grep '^SLOTS')
@@ -847,6 +850,9 @@ for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:
     # Degrees Celsius, a third shape — neither a percent nor a rate, so `%` above rejects it. The
     # reader drops any sensor outside 1…125 °C, which is what makes 1-3 digits a true bound here.
     deg)  bad=$(echo "$labels" | grep -vE "^$tag +[0-9]{1,3}°$") ;;
+    # Watts, one decimal. A power-gated Neural Engine reads a true 0.0, so the low end is not a
+    # warm-up artifact; the width ceiling is realistic rather than true, so digits are not bounded.
+    watt) bad=$(echo "$labels" | grep -vE "^$tag +[0-9]+\.[0-9]W$") ;;
   esac
   rk "$src readout has $tag's shape and an in-range value" \
      "$([ -z "$bad" ] && [ -n "$labels" ] && echo 1 || echo 0)" "unexpected: $(echo "$bad" | head -2)"

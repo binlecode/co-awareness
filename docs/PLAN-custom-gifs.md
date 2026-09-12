@@ -1151,7 +1151,7 @@ landing.
 
 R9 adds a public CLI flag, environment/path convention, preset-key namespace, and observable menu
 behavior. It requires a MINOR version release under the repository's public-API definition. Move all
-version surfaces together and complete the Roadmap release hygiene sequence.
+version surfaces together and complete the architecture release hygiene sequence (`docs/ARCHITECTURE.md` § 13).
 
 ### 14.3 Backward compatibility
 

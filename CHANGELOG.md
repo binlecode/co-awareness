@@ -241,7 +241,7 @@ A one-constant release, cut because the fix could not reach you any other way.
   and so offered no update — while `git pull --ff-only`, the thing that actually applies one, would have
   delivered it. The tag gates the prompt and the branch carries the code, so a behavioral change
   committed after its tag is not a stale tag but an undeliverable fix, and a version bump is the only
-  thing that clears it. `docs/ROADMAP.md` § Release hygiene carries the rule.
+  thing that clears it. `docs/ARCHITECTURE.md` § 13 carries the rule.
 
 ## [1.19.2] - 2026-07-31
 

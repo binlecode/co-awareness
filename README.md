@@ -5,7 +5,7 @@
 </p>
 
 Small macOS menu bar app that renders an animated GIF in the status bar.
-Animation speed automatically adapts to a system load source (CPU by default; also memory, GPU, network, disk, fan, battery, or die temperature — see Load source below).
+Animation speed automatically adapts to a system load source (CPU by default; also memory, GPU, network, disk, fan, battery, die temperature, or Neural Engine power — see Load source below).
 
 Current version: **1.23.1** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
@@ -285,7 +285,7 @@ MENUBAR_LOAD_RUNNER_LOAD_SOURCE=network ./menubar-load-runner
 ```
 
 `--load-source` (or the `MENUBAR_LOAD_RUNNER_LOAD_SOURCE` env var) selects which system reader
-drives the animation speed: `cpu` (default), `memory`, `gpu`, `network`, `disk`, `fan`, `battery`, or `temperature`. Unknown values —
+drives the animation speed: `cpu` (default), `memory`, `gpu`, `network`, `disk`, `fan`, `battery`, `temperature`, or `ane`. Unknown values —
 or a source with no readable hardware on this machine — fall back to `cpu` (unavailable sources are
 disabled in the menu). It can also be switched live by expanding the **Other Sources** list in the menu
 and clicking a reader (see below). All readers are
@@ -299,6 +299,7 @@ unprivileged (no `sudo`); the app only ever *reads* load.
 - **fan**: fan speed as a thermal/cooling signal (RPM as a fraction of the fan's max, averaged across fans — one fan spinning up doesn't dominate while the rest of the system is quiet). A lagging signal that trails actual work and only ramps under sustained thermal load, but idle fans still spin — so it keeps some visible motion (a genuinely stopped fan still crawls at the preset's minimum speed). Unavailable on fanless Macs (e.g. MacBook Air, which have zero fans), which fall back to `cpu`.
 - **battery**: discharge current (instantaneous draw, in mA) while on battery — a fast drain animates faster; on AC power the draw is zero, so the animation idles. Since every machine's draw ceiling differs, the current is normalized against the same adaptive ceiling the byte-rate sources use. The menu also shows the charge level. Unavailable on desktop Macs with no battery, which fall back to `cpu`.
 - **temperature**: die temperature — the *leading* thermal signal, where fan speed is the lagging one (the die heats in milliseconds; the fans answering it ramp over seconds). Read straight off the performance-core temperature sensors and mapped on an absolute 30 °C → 100 °C scale, so a given animation speed means the same temperature on every Mac rather than being rescaled to your machine's recent range. The driver is the *hottest* sensor, not the average — throttling responds to the hottest die, and averaging a loaded core cluster against an idle one hides the event worth watching; the menu shows the full spread it came from. A Mac that cools well may never reach the top of the speed range, which is the honest reading. Unavailable where no sensor answers (typically VMs), which fall back to `cpu`.
+- **ane**: Apple Neural Engine power draw, in watts — the one signal CPU and GPU cannot show you. When on-device inference runs on the NPU (Apple Intelligence, CoreML, MLX's ANE backend, Vision), CPU and GPU utilization stay near idle, so every other source reports a quiet machine while it is working hard. A power-gated NPU reads an exact 0 W and the animation idles; real inference measures single-digit watts and is normalized against the same adaptive ceiling the other rate sources use. This is the only reader built on a private API (`IOReport`, the unprivileged interface `powermetrics` reads energy from — still no root, still read-only), and also the most expensive: roughly 0.3 percentage points more CPU than the other readers, paid only while it is the active source. Unavailable on Intel Macs and anywhere the energy rail is absent, which fall back to `cpu`.
 
 Without `--speed-multiplier`, animation speed adapts to the selected load source. Per-preset speed
 ranges are defined in `gifs/presets.json`; edit that file to change a range or add a preset (the app
@@ -521,7 +522,7 @@ Disable the check entirely with `--no-update-check` or `MENUBAR_LOAD_RUNNER_UPDA
 
 There's no unit-test framework — the release gate is a single tiered QA harness, `tests/qa.sh`.
 What it can't reach — the clicks, the eyes-only checks, the release-cut walk — is listed in
-[`docs/ROADMAP.md`](docs/ROADMAP.md) § Verification debt and § Release hygiene. Run it from the repo root:
+[`docs/ROADMAP.md`](docs/ROADMAP.md) § Verification debt and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) § 13. Run it from the repo root:
 
 ```bash
 tests/qa.sh            # core + gui (local default)
@@ -567,7 +568,7 @@ dashboard):
 | :--- | :--- | :--- | :--- | :--- |
 | **Category** | Animated load indicator | Animated load indicator | Animated load indicator | System monitor |
 | **Packaging** | Single Swift file + shell launcher (no Xcode project) | Xcode `.app` | Xcode `.app` | Xcode `.app` |
-| **Load sources** | CPU, memory+swap, GPU, network, disk, fan, battery, die temperature | CPU | CPU, GPU, RAM | Full hardware suite |
+| **Load sources** | CPU, memory+swap, GPU, network, disk, fan, battery, die temperature, Neural Engine power | CPU | CPU, GPU, RAM | Full hardware suite |
 | **Unbounded rates (net/disk/swap) drive the animation** | Yes — adaptive auto-scaling | — | — | n/a (numeric display) |
 | **In-menu readout** | 60s sparkline, numerics, load averages | Minimal | Numeric dropdown | Full graphs, temps, per-process |
 | **Battery health / per-process breakdowns** | No (out of scope by design) | No | No | Yes |
