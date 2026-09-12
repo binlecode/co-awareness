@@ -522,7 +522,7 @@ Disable the check entirely with `--no-update-check` or `MENUBAR_LOAD_RUNNER_UPDA
 
 There's no unit-test framework — the release gate is a single tiered QA harness, `tests/qa.sh`.
 What it can't reach — the clicks, the eyes-only checks, the release-cut walk — is listed in
-[`docs/ROADMAP.md`](docs/ROADMAP.md) § Verification debt and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) § 13. Run it from the repo root:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) § 13. Run it from the repo root:
 
 ```bash
 tests/qa.sh            # core + gui (local default)

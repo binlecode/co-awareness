@@ -6,7 +6,7 @@
 --   osascript tests/menu-dump.applescript <pid>
 --
 -- Requires Accessibility permission for the calling terminal (System Settings → Privacy & Security →
--- Accessibility), which is why this is a hand-run aid (docs/ROADMAP.md § Verification debt) and not
+-- Accessibility), which is why this is a hand-run aid (docs/ARCHITECTURE.md § 13) and not
 -- part of `tests/qa.sh` — the core tier must stay runnable headless and unprivileged.
 --
 -- THREE THINGS THAT WILL BITE YOU, all found the hard way:

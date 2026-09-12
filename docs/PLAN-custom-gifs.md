@@ -997,7 +997,7 @@ Gate: headless `qa.sh --core` import succeeds/fails with exact exit/output and s
 - Update launcher/Swift help and cover-page feature prose where appropriate.
 - Add the SemVer-minor changelog entry and bump all required version surfaces.
 - Run the full verification matrix.
-- Remove R9 from Roadmap, distill any remaining verification debt there, then `git rm` this plan in
+- Remove R9 from Roadmap, then `git rm` this plan in
   the same landing change.
 
 ---
@@ -1096,7 +1096,7 @@ deep. Record click-only residue honestly:
 - very tall and exactly 6:1 art look correctly fitted;
 - imported palette quantization is acceptable on representative color/alpha fixtures.
 
-Anything Accessibility cannot prove stays in `docs/ROADMAP.md` verification debt after R9 lands; no
+Anything Accessibility cannot prove remains a manual release check after R9 lands; no
 fake PASS is added.
 
 ### 13.5 Performance checks
@@ -1192,7 +1192,7 @@ R9 is complete only when every item is true:
       environmental gaps report NOTE.
 - [ ] Peak-memory and occlusion gates pass on real binary/fixtures.
 - [ ] README/help/changelog/cover/version and as-built Architecture are synchronized.
-- [ ] R9 is removed from Roadmap, residual verification debt is recorded honestly, and this plan is
+- [ ] R9 is removed from Roadmap, and this plan is
       deleted in the landing change.
 
 No design question remains open for implementation. A request for static-image animation, another

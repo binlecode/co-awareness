@@ -17,7 +17,7 @@ All repository documentation lives in `docs/`. The repository root holds only `R
    +-- ARCHITECTURE.md          <-- You are here: system topology, subsystem specs (§1–§13),
    |                              telemetry algorithms, invariants, parameter reference, release hygiene.
    +-- ROADMAP.md                 The standing product tracker: candidate backlog (R<n>),
-   |                              declined proposals with rationale, and verification debt.
+   |                              and declined proposals with rationale.
    +-- RESEARCH-<topic>.md        External peer surveys and ecosystem research (e.g. peer-survey.md);
    |                              facts-only, dated evidence outside the ADLC landing chain.
    +-- PLAN-<topic>.md            Active feature / issue design and implementation plans;
@@ -30,7 +30,7 @@ All repository documentation lives in `docs/`. The repository root holds only `R
 
 | Document Type | Naming Convention | Lifecycle & Purpose |
 |---|---|---|
-| **Roadmap** | `docs/ROADMAP.md` | Single standing tracker for open candidate backlog (`R<n>`), declined proposals, and verification debt. Never deleted. |
+| **Roadmap** | `docs/ROADMAP.md` | Single standing tracker for open candidate backlog (`R<n>`) and declined proposals. Never deleted. |
 | **Plan / Proposal** | `docs/PLAN-<topic>.md` | Active feature design, options, and verification checklist. **Absorbed into `docs/ARCHITECTURE.md` upon landing, then immediately deleted (`git rm`)**. |
 | **As-Built Architecture** | `docs/ARCHITECTURE.md` | Canonical description of what the code actually is and why. Updated only after code lands and stabilizes. |
 | **External Research** | `docs/RESEARCH-<topic>.md` | Public surveys and external benchmarks. Does not enter the ADLC landing cycle; retained as dated evidence. |
@@ -726,7 +726,7 @@ silently, and nothing upstream catches it:
    with the local repo looking fully released. Sort `-V`, never plain `sort`: lexically `v1.9.1` beats
    `v1.19.2`, which stopped being hypothetical at `v1.10.0`.
 
-Ship when `tests/qa.sh` says ALL PASS, the click-only checks in `docs/ROADMAP.md` § Verification debt are done, and **no NOTE covers what
+Ship when `tests/qa.sh` says ALL PASS, and **no NOTE covers what
 this release changed** — a NOTE is an unanswered case, not an accepted one, and neighbouring cases
 passing is not cover for it. Before signing off, check for a leaked keep-awake child by its `-w <pid>`
 signature, never by name (your own instance holds one legitimately), with `pgrep -fl caffeinate | grep -- "-w <pid>"`:

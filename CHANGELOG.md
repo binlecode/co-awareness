@@ -166,8 +166,7 @@ of the public API and may change in any release.
   says `Temperature: ≤30 °C · every core cluster parked` rather than inventing a measurement.
 
   Rare — it did not recur in 45 sampled ticks or three targeted attempts to reproduce it — and
-  cosmetic when it fired, since the animation simply held its last speed. Recorded in
-  `docs/ROADMAP.md` § Verification debt, because the parked branch cannot be reached on demand: the
+  cosmetic when it fired, since the animation simply held its last speed. The parked branch cannot be reached on demand: the
   only hook that would force it is one that changes a decision, which this repo's testing rules bar.
 
 ## [1.20.0] - 2026-08-01
@@ -282,7 +281,7 @@ A maintenance release: a paused Keep Awake no longer looks identical to an off o
   separation — and the first value read as nearly nothing there. The shipped value clears both.
 - One honest gap: `tests/qa.sh` §3e asserts the tone via `tint=`, but that case only runs on a machine
   where nothing else holds the display, since a foreign hold correctly outranks our pause. On a busy
-  machine it reports `NOTE`. `docs/ROADMAP.md` § Verification debt tracks it.
+  machine it reports `NOTE`, keeping the limitation honest without false passes.
 
 ## [1.19.1] - 2026-07-30
 
@@ -346,8 +345,7 @@ Keep Awake now reports whether **the Mac** is being held awake — by anything, 
   type out of `MenuBarLoadRunner.swift` and asserted against the copy, so they passed while the app
   itself could be broken. Reader value ranges and the label's reserved-width guarantee are now asserted
   against the **live status item** (`tests/qa.sh` §5), and the machine sleep-hold state has its own
-  section (§3e). What lost coverage outright is recorded in `docs/ROADMAP.md` § Verification debt rather
-  than left looking covered. No user-facing behavior change.
+  section (§3e), retiring redundant copies while keeping the test suite grounded in real binary assertions. No user-facing behavior change.
 
 ## [1.18.0] - 2026-07-29
 

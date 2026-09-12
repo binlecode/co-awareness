@@ -5,7 +5,7 @@
 > **Methodology:** Public README / documentation review, live GitHub repository metadata checks (stars, tags, release histories), plus
 > **direct source-code inspection of `newmarcel/KeepingYouAwake` 1.6.8 only** (§6). Everything said about the
 > other peers is documentation-level and repository-metadata-level, not source-verified, and none of them was runtime-profiled — so no
-> claim here is a category-first claim (see `docs/ROADMAP.md` § Verification debt, the R13 row).
+> claim here is a category-first claim.
 > **Snapshot:** September 11, 2026 (live re-verification via GitHub API and web inspection; strictly pruned to established peers with ≥100 stars).
 > Star counts, activity dates, and feature sets are point-in-time reads of other people's projects and **go stale on their schedule, not ours**.
 > **Re-check or prune before 2027-03-01**, and before any public use of a comparative claim: confirm each

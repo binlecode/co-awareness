@@ -417,6 +417,13 @@ private enum Tuning {
     // resting drain from pegging the animation while still letting a real workload's multi-amp draw
     // rise through the range.
     static let batteryFloorMilliamps: Double = 500
+    // Neural Engine power ceiling floor (watts). Same adaptive ThroughputScaler, fed watts. Unlike
+    // the rate sources there is no idle chatter to reject — a power-gated NPU reads a hard 0 — so this
+    // floor exists for the other reason: to keep a *trivial* inference from reading as a busy one.
+    // Measured on an M4 Max: 0.24–0.32 W for Vision text recognition (light, and genuinely not much
+    // work), 1.4–3.7 W for featureprint / saliency / body-pose inference. A floor at 1 W therefore
+    // puts light work low in the range and lets real inference rescale the ceiling up past it.
+    static let aneFloorWatts: Double = 1.0
 
     // Die temperature is a THIRD normalization category. It is bounded, like a percentage, but it is
     // not already a 0…1 fraction, so it maps through a fixed floor/ceiling rather than through
@@ -477,6 +484,7 @@ private enum Tuning {
     // at all times.
     static let labelRateCeiling = 999.9    // network, one decimal
     static let labelDiskCeiling = 9999.0   // disk, whole MB/s
+    static let labelWattCeiling = 9.9      // Neural Engine, one decimal
     // Slack between the text and the slot's content box, on top of the ~16pt of chrome AppKit adds to
     // every status item window regardless. 4pt because that is what AppKit's own variableLength sizing
     // uses: measured with MENUBAR_LOAD_RUNNER_LOG_SLOTS, an auto-sized slot holding a 66.8pt string
@@ -647,7 +655,7 @@ private enum Tuning {
     // whether the paused tone reads as distinct from both holding and Off — a contrast ratio is a *proxy*
     // for that, and one calibrated for text legibility rather than a 2pt decorative line. When the proxy
     // and a direct look at the real bar disagree, the look wins; 0.22 is what was preferred there.
-    // So: use the measurement to compare candidates cheaply (docs/ROADMAP.md § Verification debt has
+    // So: use the measurement to compare candidates cheaply (docs/ARCHITECTURE.md § 7 has
     // the method — it works without waiting for a machine quiet enough to render the paused state at
     // all), then decide by
     // looking, in a light *and* a dark bar. Never re-tune on the ratio alone, and never on one appearance.
@@ -877,6 +885,10 @@ private enum LoadSource: Int, CaseIterable {
     // state" line reads as the same thing when it is not — one is a die reading, the other is the OS's
     // own pressure verdict.
     case temperature = 7
+    // "ANE", not "Neural Engine": menuTitle is also what the menu-bar label abbreviates to three
+    // characters, and "NEU" names nothing. Apple's own acronym sits fine next to CPU and GPU, and the
+    // --help text spells it out for anyone meeting it for the first time.
+    case ane = 8
 
     var key: String {
         switch self {
@@ -888,6 +900,7 @@ private enum LoadSource: Int, CaseIterable {
         case .fan: return "fan"
         case .battery: return "battery"
         case .temperature: return "temperature"
+        case .ane: return "ane"
         }
     }
 
@@ -901,6 +914,7 @@ private enum LoadSource: Int, CaseIterable {
         case .fan: return "Fan"
         case .battery: return "Battery"
         case .temperature: return "Temperature"
+        case .ane: return "ANE"
         }
     }
 
@@ -2603,6 +2617,183 @@ private final class BatteryLoadMonitor {
     }
 }
 
+// Apple Neural Engine power as a 0…1 load — the one reader that can answer "is the NPU busy?".
+// Neither CPU nor GPU can: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
+// Vision) runs on the Neural Engine while both of those sit near idle, so every other source here
+// reports a quiet machine while it is working hard. Measured on an M4 Max: a hard 0 W while the NPU
+// is power-gated, 0.24–0.32 W under Vision text recognition, and 1.4–3.7 W under image-featureprint,
+// saliency, and body-pose inference.
+//
+// This is the ONLY reader built on a private, unheadered API, and it stays inside the unprivileged
+// tenet: IOReport is the same user-space interface `powermetrics` reads energy from — no root, no
+// kext, no entitlement — it simply ships no header. So the entry points are bound with dlopen/dlsym
+// behind @convention(c) signatures, and every failure along that path degrades to
+// isAvailable == false, never a trap. The dylib path is deliberate and not the documented-anywhere
+// one: as of macOS 26 there is no IOReport.framework on disk OR in the dyld shared cache, so dlopen
+// of the framework path fails outright — the symbols ship in /usr/lib/libIOReport.dylib.
+//
+// Unlike every other reader, IOReport is a STATEFUL DELTA API rather than a point read: one
+// subscription is opened over the "Energy Model" channel group for the life of the process, and a
+// reading is the difference between two samples. The ANE channel accumulates ENERGY (millijoules),
+// so power is ΔE/Δt — making this a counter-delta source with a one-tick warm-up, structurally the
+// same as Disk and Network. Sleep needs no special case: `elapsed` comes from systemUptime, which
+// does not advance while the machine is asleep, and neither does the energy counter.
+@MainActor
+private final class ANELoadMonitor {
+    private(set) var currentWatts: Double = 0
+    private(set) var currentLoad: Double = 0
+    private(set) var hasSample = false
+    // Watts are unbounded and vary by chip tier, so the reading normalizes through the same adaptive
+    // scaler as the other rate sources instead of against a hardcoded per-chip cap.
+    private var scaler = ThroughputScaler(floor: Tuning.aneFloorWatts)
+    private var probed = false
+    private var binding: Binding?
+    private var previousSample: CFDictionary?
+
+    // The "Energy Model" group's channel name for the Neural Engine rail, and the key every IOReport
+    // dictionary (channel lists, samples, deltas alike) stores its channel array under.
+    private static let aneChannelName = "ANE"
+    private static let energyGroup = "Energy Model"
+    private static let channelsKey = "IOReportChannels"
+
+    private typealias CopyChannelsInGroup = @convention(c)
+        (CFString?, CFString?, UInt64, UInt64, UInt64) -> Unmanaged<CFMutableDictionary>?
+    private typealias CreateSubscription = @convention(c)
+        (UnsafeMutableRawPointer?, CFMutableDictionary,
+         UnsafeMutablePointer<Unmanaged<CFMutableDictionary>?>?, UInt64, CFTypeRef?) -> UnsafeMutableRawPointer?
+    private typealias CreateSamples = @convention(c)
+        (UnsafeMutableRawPointer, CFMutableDictionary, CFTypeRef?) -> Unmanaged<CFDictionary>?
+    private typealias CreateSamplesDelta = @convention(c)
+        (CFDictionary, CFDictionary, CFTypeRef?) -> Unmanaged<CFDictionary>?
+    private typealias ChannelGetString = @convention(c) (CFDictionary) -> Unmanaged<CFString>?
+    private typealias SimpleGetIntegerValue = @convention(c) (CFDictionary, Int32) -> Int64
+
+    // Everything the per-tick read needs, resolved exactly once. Holding it as one optional value
+    // makes "bound and subscribed" a single state: non-nil IS availability.
+    private struct Binding {
+        let createSamples: CreateSamples
+        let createSamplesDelta: CreateSamplesDelta
+        let channelName: ChannelGetString
+        let unitLabel: ChannelGetString
+        let integerValue: SimpleGetIntegerValue
+        // The subscription and the two dictionaries it was opened against live for the life of the
+        // process, exactly like SMCClient's io_connect_t. Retained here rather than dropped so the
+        // ownership is stated, not implied.
+        let channels: CFMutableDictionary
+        let subscribedChannels: CFMutableDictionary
+        let subscription: UnsafeMutableRawPointer
+    }
+
+    var isAvailable: Bool { ensureBound() != nil }
+
+    func sampleUsage(elapsed: Double?) -> Double? {
+        guard let binding = ensureBound(),
+              let sample = binding.createSamples(binding.subscription, binding.channels, nil)?
+                                  .takeRetainedValue() else {
+            hasSample = false
+            return nil
+        }
+        // Advance the baseline on every path, including the ones that produce no reading — a skipped
+        // tick must not make the next delta span two intervals.
+        defer { previousSample = sample }
+        guard let elapsed, elapsed > 0, let previous = previousSample,
+              let delta = binding.createSamplesDelta(previous, sample, nil)?.takeRetainedValue(),
+              let watts = Self.aneWatts(in: delta, elapsed: elapsed, binding: binding) else {
+            currentWatts = 0
+            hasSample = false
+            return nil
+        }
+        currentWatts = watts
+        hasSample = true
+        currentLoad = scaler.normalize(speed: watts)
+        return currentLoad
+    }
+
+    private func ensureBound() -> Binding? {
+        if !probed {
+            probed = true
+            binding = Self.bind()
+        }
+        return binding
+    }
+
+    private static func bind() -> Binding? {
+        guard let image = dlopen("/usr/lib/libIOReport.dylib", RTLD_LAZY) else { return nil }
+        func entry<T>(_ name: String, _ type: T.Type) -> T? {
+            guard let symbol = dlsym(image, name) else { return nil }
+            return unsafeBitCast(symbol, to: type)
+        }
+        guard let copyChannelsInGroup = entry("IOReportCopyChannelsInGroup", CopyChannelsInGroup.self),
+              let createSubscription = entry("IOReportCreateSubscription", CreateSubscription.self),
+              let createSamples = entry("IOReportCreateSamples", CreateSamples.self),
+              let createSamplesDelta = entry("IOReportCreateSamplesDelta", CreateSamplesDelta.self),
+              let channelName = entry("IOReportChannelGetChannelName", ChannelGetString.self),
+              let unitLabel = entry("IOReportChannelGetUnitLabel", ChannelGetString.self),
+              let integerValue = entry("IOReportSimpleGetIntegerValue", SimpleGetIntegerValue.self) else {
+            return nil
+        }
+        // Intel Macs and anything without the group answer nil here; an Apple Silicon Mac hands back
+        // its whole energy channel list (328 rows on an M4 Max).
+        guard let group = copyChannelsInGroup(energyGroup as CFString, nil, 0, 0, 0)?.takeRetainedValue(),
+              let rows = (group as NSDictionary)[channelsKey] as? [NSDictionary] else { return nil }
+        // Subscribe to the ANE row alone. The group cannot be narrowed by subgroup (every energy row
+        // reports an empty one), so the desired-channel list is filtered by hand. This is a modest
+        // win, not a large one — measured 3.6 ms → 2.8 ms per sample+delta, because the cost is the
+        // kernel round trip rather than the row count — but it also makes the per-tick scan a single
+        // row and states in code exactly which rail this reader is allowed to see.
+        let aneRows = rows.filter { name(of: $0, channelName) == aneChannelName }
+        guard !aneRows.isEmpty else { return nil }
+        let desired = NSMutableDictionary(dictionary: group as NSDictionary)
+        desired[channelsKey] = aneRows
+        let channels = desired as CFMutableDictionary
+        // The subscribed-channels out-parameter is NOT optional in practice: pass nil and
+        // IOReportCreateSubscription returns nil on hardware that supports it perfectly well, which
+        // would read as "no Neural Engine" on every Apple Silicon Mac.
+        var subscribed: Unmanaged<CFMutableDictionary>?
+        guard let subscription = createSubscription(nil, channels, &subscribed, 0, nil),
+              let subscribedChannels = subscribed?.takeRetainedValue() else { return nil }
+        return Binding(
+            createSamples: createSamples,
+            createSamplesDelta: createSamplesDelta,
+            channelName: channelName,
+            unitLabel: unitLabel,
+            integerValue: integerValue,
+            channels: channels,
+            subscribedChannels: subscribedChannels,
+            subscription: subscription
+        )
+    }
+
+    private static func name(of row: NSDictionary, _ channelName: ChannelGetString) -> String? {
+        channelName(row as CFDictionary)?.takeUnretainedValue() as String?
+    }
+
+    // Pull the ANE row out of a delta and turn its accumulated energy into watts. nil — never a
+    // fabricated 0 — when the row or its unit is not what this reader knows how to read; a genuine
+    // 0 is a real reading here, because the NPU is fully power-gated when idle.
+    private static func aneWatts(in delta: CFDictionary, elapsed: Double, binding: Binding) -> Double? {
+        guard let rows = (delta as NSDictionary)[channelsKey] as? [NSDictionary] else { return nil }
+        for row in rows where name(of: row, binding.channelName) == aneChannelName {
+            let unit = (binding.unitLabel(row as CFDictionary)?.takeUnretainedValue() as String?) ?? ""
+            guard let joules = joules(binding.integerValue(row as CFDictionary, 0), unit: unit) else { return nil }
+            return max(joules / elapsed, 0)
+        }
+        return nil
+    }
+
+    // One sample mixes units across rails — on an M4 Max most report mJ and the GPU's own row nJ — so
+    // the unit label is read from the row every time rather than assumed once.
+    private static func joules(_ raw: Int64, unit: String) -> Double? {
+        switch unit.lowercased() {
+        case "j": return Double(raw)
+        case "mj": return Double(raw) * 1e-3
+        case "uj", "\u{b5}j": return Double(raw) * 1e-6
+        case "nj": return Double(raw) * 1e-9
+        default: return nil
+        }
+    }
+}
+
 // The color ramp direction for the trace chart. For utilization sources high = alert (green→red as
 // the value rises); for the battery fuel gauge low = alert (the ramp inverts).
 private enum ColorPolarity { case highIsHot, lowIsHot }
@@ -3236,6 +3427,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     private var fanMonitor = FanLoadMonitor()
     private var batteryMonitor = BatteryLoadMonitor()
     private var temperatureMonitor = TemperatureLoadMonitor()
+    private var aneMonitor = ANELoadMonitor()
     private var activeLoadSource: LoadSource
     // Multi-source dashboard mode / other-sources disclosure state: when on (expanded), every
     // AVAILABLE reader is sampled each tick (not just the active one) and its live readout is surfaced
@@ -4525,6 +4717,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .fan: return fanMonitor.sampleUsage()
         case .battery: return batteryMonitor.sampleUsage()
         case .temperature: return temperatureMonitor.sampleUsage()
+        case .ane: return aneMonitor.sampleUsage(elapsed: elapsed)
         }
     }
 
@@ -4555,6 +4748,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .fan: return fanMonitor.hasSample
         case .battery: return batteryMonitor.hasSample
         case .temperature: return temperatureMonitor.hasSample
+        case .ane: return aneMonitor.hasSample
         }
     }
 
@@ -4571,6 +4765,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .fan: return fanMonitor.currentUtilization
         case .battery: return batteryMonitor.currentLoad
         case .temperature: return temperatureMonitor.currentLoad
+        case .ane: return aneMonitor.currentLoad
         }
     }
 
@@ -4784,6 +4979,20 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .temperature), MenuTitle.warmingUp)
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring temperature")
             }
+        case .ane:
+            if aneMonitor.hasSample {
+                usageItem.title = aneUsageLineText()
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .ane), cpuStateText(for: aneMonitor.currentLoad))
+                statusItem.button?.setAccessibilityLabel(String(
+                    format: "MenuBar Load Runner — neural engine %.2f watts, %@",
+                    aneMonitor.currentWatts,
+                    cpuStateText(for: aneMonitor.currentLoad)
+                ))
+            } else {
+                usageItem.title = MenuTitle.line(LoadSource.ane.menuTitle, MenuTitle.warmingUp)
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .ane), MenuTitle.warmingUp)
+                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring neural engine load")
+            }
         }
 
         if isAutoSpeed {
@@ -4904,6 +5113,15 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             line += " · AC"
         }
         return line
+    }
+
+    // Neural Engine line: the rail's power draw. Two decimals because the interesting band is small
+    // and low — light inference sits near 0.3 W — so "0.3 W" would round most real work to one digit.
+    // "idle" rather than a bare 0.00 W when the NPU is power-gated: the counter reads a hard zero
+    // then, which is a different statement from "measured, and it rounds to zero".
+    private func aneUsageLineText() -> String {
+        let line = String(format: "ANE: %.2f W", aneMonitor.currentWatts)
+        return aneMonitor.currentWatts > 0 ? line : line + " · idle"
     }
 
     private func refreshPresetSelectionState() {
@@ -5230,6 +5448,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .fan: return fanMonitor.isAvailable
         case .battery: return batteryMonitor.isAvailable
         case .temperature: return temperatureMonitor.isAvailable
+        case .ane: return aneMonitor.isAvailable
         }
     }
 
@@ -5505,6 +5724,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             // "TMP", not the "TEM" that menuTitle.prefix(3) yields for the warming placeholder above —
             // same small divergence disk already has (DIS while warming, DSK once reading).
             return "TMP \(Self.degreeField(temperatureMonitor.currentCelsius))°"
+        case .ane:
+            return "ANE \(Self.wattField(aneMonitor.currentWatts))W"
         }
     }
 
@@ -5524,6 +5745,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 + " W\(Self.diskField(Tuning.labelDiskCeiling * Tuning.bytesPerMiB))"
         case .temperature:
             return "TMP \(Self.degreeField(Tuning.temperatureMaxPlausibleCelsius))°"
+        case .ane:
+            return "ANE \(Self.wattField(Tuning.labelWattCeiling))W"
         }
     }
 
@@ -5540,6 +5763,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
 
     private static func diskField(_ bytesPerSec: Double) -> String {
         labelField(bytesPerSec / Tuning.bytesPerMiB, decimals: 0, ceiling: Tuning.labelDiskCeiling)
+    }
+
+    // Watts to one decimal. Like the rate ceilings this bound is realistic rather than true — an M4
+    // Max peaks near 3.7 W under sustained inference, so 9.9 leaves room without spending a digit of
+    // slot width on every Mac; a bigger chip that exceeds it widens the slot for that tick.
+    private static func wattField(_ watts: Double) -> String {
+        labelField(watts, decimals: 1, ceiling: Tuning.labelWattCeiling)
     }
 
     // Whole degrees Celsius. The plausibility ceiling doubles as the width ceiling — a reading past it
@@ -5667,6 +5897,9 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .temperature:
             guard temperatureMonitor.hasSample else { return warming }
             return temperatureUsageLineText()
+        case .ane:
+            guard aneMonitor.hasSample else { return warming }
+            return aneUsageLineText()
         }
     }
 

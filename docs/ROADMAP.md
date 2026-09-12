@@ -1,6 +1,6 @@
 # ROADMAP
 
-The product tracker: what is open, what was declined, known limits, and verification debt. Shipped
+The product tracker: what is open, what was declined, and known limits. Shipped
 work is not tracked here — it is described as-built in `docs/ARCHITECTURE.md`. Created 2026-07-26;
 current as of v1.23.0 (updated September 2026).
 
@@ -68,7 +68,3 @@ the behavior being missed.
 | Below 5% on battery the Mac sleeps regardless | Deliberate floor under the arm-anyway override: an explicit "anyway" is honored from 20% to 5%, not into a hard power-off. |
 | The interpreted-`swift` fallback isn't singleton-guarded | Runs only when `swiftc` fails; the guard matches the compiled binary's path. |
 | The menu-bar label may not sit adjacent to the icon on a **full** bar | macOS owns status-item placement and offers no reorder API — verified 2026-07-29 (6/6 scattered on a notched built-in display, 100% correct on a roomy external). Creation order decides *intent*; the bar decides the outcome. The v1.16.0 no-jitter guarantee is unaffected; `tests/qa.sh` §3c reports NOTE on scatter, so adjacency goes **unverified** on such a machine. Full account: `docs/ARCHITECTURE.md` § 6. |
-
-## Verification debt
-
-All automatable functional behaviors, state transitions, and condition recoveries are covered by `tests/qa.sh` (core + gui). No open verification debt. Manual eyes-only release checks are maintained in [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) § 13.
