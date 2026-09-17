@@ -4462,7 +4462,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         guard case .idle = updatePhase else { return }
         updatePhase = .checking
         refreshUpdateStatus()
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let latest = UpdateChecker.latestRemoteTag(repoDir: repoDir)
             // Weak capture goes on the main-queue closure (not the background one) to avoid capturing a
             // mutable `self` var across the concurrency boundary — matches the notification-handler idiom.
@@ -4524,7 +4524,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
 
         updatePhase = .checking
         refreshUpdateStatus()
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = UpdateChecker.pull(repoDir: repoDir)
             guard result.ok else {
                 DispatchQueue.main.async { [weak self] in
@@ -4920,7 +4920,10 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     @objc
     private func handleStatusItemClick(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
-        let flags = event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+        // Modern macOS (WindowServer / MenuBarAgent event forwarding) can deliver an NSEvent with
+        // modifierFlags stripped (0); union with live NSEvent.modifierFlags and isolate the 4 standard modifiers.
+        let rawFlags = (event?.modifierFlags ?? []).union(NSEvent.modifierFlags)
+        let flags = rawFlags.intersection([.option, .command, .control, .shift])
         // Exactly Option, and only on the left button: a right- or control-click is the conventional
         // "show me the menu" gesture and must never arm anything, and Command is left untouched so the
         // system keeps its own drag-to-rearrange modifier.
