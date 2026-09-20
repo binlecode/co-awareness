@@ -1,6 +1,6 @@
 # ARCHITECTURE — As-Built System Architecture & Technical Specifications
 
-> **Canonical as-built architecture document for MenuBar Load Runner (v1.24.0).**
+> **Canonical as-built architecture document for MenuBar Load Runner (v1.25.0).**
 > **Source ground truth:** `MenuBarLoadRunner.swift`, `menubar-load-runner` (launcher), `gifs/presets.json`.
 > **Scope:** Complete architectural specifications, subsystem topologies, concurrency models, telemetry algorithms, and system invariants.
 
@@ -47,43 +47,43 @@ All repository documentation lives in `docs/`. The repository root holds only `R
 MenuBar Load Runner is a single-file, unbundled native macOS menu bar application written in Swift and AppKit. It visualizes real-time hardware telemetry by driving the playback rate of an animated status-bar GIF and providing an integrated live diagnostic dashboard with built-in sleep inhibition.
 
 ```
-                                    ┌────────────────────────┐
-                                    │  menubar-load-runner   │
-                                    │     (Zsh Launcher)     │
-                                    └───────────┬────────────┘
-                                                │ fork/exec / singleton guard
-                                                ▼
-┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                       MenuBarLoadRunner (Swift)                                        │
-│                                                                                                        │
-│  ┌───────────────────────┐   ┌───────────────────────┐   ┌──────────────────────────────────────────┐  │
-│  │   Config / StateStore │   │   CADisplayLink /     │   │      Telemetry Subsystems (8 Readers)    │  │
-│  │  (CLI/Env/state.json) │   │     Timer (60Hz)      │   │  Mach / IORegistry / SMCClient / IOKit   │  │
-│  └───────────┬───────────┘   └───────────┬───────────┘   └────────────────────┬─────────────────────┘  │
-│              │                           │                                    │                        │
-│              ▼                           ▼                                    ▼                        │
-│  ┌───────────────────────┐   ┌───────────────────────┐   ┌──────────────────────────────────────────┐  │
-│  │  Status Bar Items     │   │  Render Pipeline      │   │  ThroughputScaler / Hysteresis Logic     │  │
-│  │  • Animation Item     │◄──┤  • Transparent Trim   │◄──┤  • Exponential Moving Average (EMA)      │  │
-│  │  • Left/Right Label   │   │  • Aspect-Ratio Sizing│   │  • Adaptive Window Rate Normalization    │  │
-│  │  • KeepAwake CALayer  │   │  • Vsync Game Loop    │   │  • Self-Throttling (Occlusion/Power/RM)  │  │
-│  └───────────┬───────────┘   └───────────────────────┘   └──────────────────────────────────────────┘  │
-│              │                                                                                         │
-│              ▼                                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                                  Interactive Dropdown Dashboard                                  │  │
-│  │  • LoadHistoryView (60s Sparkline)   • Load Averages (1/5/15m)   • Active / Other Sources Readout │  │
-│  │  • Keep Awake Control & Presets      • IOPMCopyAssertionsByProcess (Machine Assertion Inspector) │  │
-│  │  • Settings Submenu                  • Preset Switcher           • Self-Update (UpdateChecker)   │  │
-│  └───────────────────────────────────────────────┬──────────────────────────────────────────────────┘  │
-│                                                  │                                                     │
-└──────────────────────────────────────────────────┼─────────────────────────────────────────────────────┘
-                                                   │ spawns & binds PID
-                                                   ▼
-                                    ┌────────────────────────┐
-                                    │ caffeinate -di -w <pid>│
-                                    │    (SleepPreventer)    │
-                                    └────────────────────────┘
+                                    +------------------------+
+                                    |  menubar-load-runner   |
+                                    |     (Zsh Launcher)     |
+                                    +-----------+------------+
+                                                | fork/exec / singleton guard
+                                                v
++--------------------------------------------------------------------------------------------------------+
+|                                       MenuBarLoadRunner (Swift)                                        |
+|                                                                                                        |
+|  +-----------------------+   +-----------------------+   +------------------------------------------+  |
+|  |   Config / StateStore |   |   CADisplayLink /     |   |      Telemetry Subsystems (9 Readers)    |  |
+|  |  (CLI/Env/state.json) |   |     Timer (60Hz)      |   |  Mach / IORegistry / SMCClient / IOKit   |  |
+|  +-----------+-----------+   +-----------+-----------+   +--------------------+---------------------+  |
+|              |                           |                                    |                        |
+|              v                           v                                    v                        |
+|  +-----------------------+   +-----------------------+   +------------------------------------------+  |
+|  |  Status Bar Items     |   |  Render Pipeline      |   |  ThroughputScaler / Hysteresis Logic     |  |
+|  |  * Animation Item     |<--+  * Transparent Trim   |<--+  * Exponential Moving Average (EMA)      |  |
+|  |  * Left/Right Label   |   |  * Aspect-Ratio Sizing|   |  * Adaptive Window Rate Normalization    |  |
+|  |  * KeepAwake CALayer  |   |  * Vsync Game Loop    |   |  * Self-Throttling (Occlusion/Power/RM)  |  |
+|  +-----------+-----------+   +-----------------------+   +------------------------------------------+  |
+|              |                                                                                         |
+|              v                                                                                         |
+|  +--------------------------------------------------------------------------------------------------+  |
+|  |                                  Interactive Dropdown Dashboard                                  |  |
+|  |  * LoadHistoryView (60s Sparkline)   * Load Averages (1/5/15m)   * Active / Other Sources Readout|  |
+|  |  * Keep Awake Control & Presets      * IOPMCopyAssertionsByProcess (Machine Assertion Inspector) |  |
+|  |  * Settings Submenu                  * Preset Switcher           * Self-Update (UpdateChecker)   |  |
+|  +-----------------------------------------------+--------------------------------------------------+  |
+|                                                  |                                                     |
++--------------------------------------------------+-----------------------------------------------------+
+                                                   | spawns & binds PID
+                                                   v
+                                    +------------------------+
+                                    | caffeinate -di -w <pid>|
+                                    |    (SleepPreventer)    |
+                                    +------------------------+
 ```
 
 ### Core Design Tenets
@@ -100,46 +100,46 @@ MenuBar Load Runner is a single-file, unbundled native macOS menu bar applicatio
 Execution is governed by the `menubar-load-runner` zsh script, which manages compilation, process singletons, and detached execution.
 
 ```
-                      ┌────────────────────────────┐
-                      │     Execution Request      │
-                      └─────────────┬──────────────┘
-                                    │
-                                    ▼
-                      ┌────────────────────────────┐
-                      │  Per-User Singleton Check  │
-                      │   (pgrep -U <uid> -f ...)  │
-                      └─────────────┬──────────────┘
-                                    │
-                      ┌─────────────┴──────────────┐
+                      +----------------------------+
+                      |     Execution Request      |
+                      +-------------+--------------+
+                                    |
+                                    v
+                      +----------------------------+
+                      |  Per-User Singleton Check  |
+                      |   (pgrep -U <uid> -f ...)  |
+                      +-------------+--------------+
+                                    |
+                      +-------------+--------------+
              Instance Running?             No Instance Running
-                      │                            │
-                      ▼                            ▼
-         [Exit with notice / --extra]   ┌────────────────────────────┐
-                                        │ Is Source Newer than Mach-O│
-                                        └─────────────┬──────────────┘
-                                                      │
-                                           ┌──────────┴──────────┐
+                      |                            |
+                      v                            v
+         [Exit with notice / --extra]   +----------------------------+
+                                        | Is Source Newer than Mach-O|
+                                        +-------------+--------------+
+                                                      |
+                                           +----------+----------+
                                          Stale                Up to date
-                                           │                     │
-                                           ▼                     │
-                                ┌───────────────────────────┐    │
-                                │   swiftc -O -strict-      │    │
-                                │   concurrency=complete    │    │
-                                │   -o MenuBarLoadRunner.new│    │
-                                └──────────┬────────────────┘    │
-                                           │                     │
-                                           ▼                     │
-                                ┌───────────────────────────┐    │
-                                │ rename(2) atomically over │    │
-                                │    MenuBarLoadRunner      │    │
-                                └──────────┬────────────────┘    │
-                                           │                     │
-                                           ├─────────────────────┘
-                                           ▼
-                                ┌───────────────────────────┐
-                                │ Launch Process (Detached  │
-                                │      or Foreground)       │
-                                └───────────────────────────┘
+                                           |                     |
+                                           v                     |
+                                +---------------------------+    |
+                                |   swiftc -O -strict-      |    |
+                                |   concurrency=complete    |    |
+                                |   -o MenuBarLoadRunner.new|    |
+                                +----------+----------------+    |
+                                           |                     |
+                                           v                     |
+                                +---------------------------+    |
+                                | rename(2) atomically over |    |
+                                |    MenuBarLoadRunner      |    |
+                                +----------+----------------+    |
+                                           |                     |
+                                           +---------------------+
+                                           v
+                                +---------------------------+
+                                | Launch Process (Detached  |
+                                |      or Foreground)       |
+                                +---------------------------+
 ```
 
 ### Compilation Mechanics
@@ -212,21 +212,21 @@ if advanced { renderCurrentFrame() }                                        // l
 The application includes nine unprivileged telemetry monitors sampling system state every 2 seconds (`Tuning.loadSampleInterval`).
 
 ```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   Telemetry Monitors                                   │
-├────────────────────────┬───────────────────────────┬───────────────────────────────────┤
-│ Monitor Class          │ Primary Kernel/Mach API   │ Normalization / Scaling Model     │
-├────────────────────────┼───────────────────────────┼───────────────────────────────────┤
-│ CPULoadMonitor         │ host_processor_info()     │ Exponential Moving Average (EMA)  │
-│ MemoryLoadMonitor      │ host_statistics64()       │ Composite: max(RAM%, ScaledSwap)  │
-│ GPULoadMonitor         │ IORegistry IOAccelerator  │ Direct Percentage (0.0 .. 1.0)    │
-│ SMCClient (Fan)        │ AppleSMCKeysEndpoint      │ RPM / Max RPM (Average of Fans)   │
-│ SMCClient (Temp)       │ AppleSMCKeysEndpoint      │ Fixed 30°C .. 100°C Window        │
-│ NetworkLoadMonitor     │ getifaddrs() (AF_LINK)    │ ThroughputScaler (Bytes/Sec)      │
-│ DiskLoadMonitor        │ IOBlockStorageDriver      │ ThroughputScaler (Bytes/Sec)      │
-│ BatteryLoadMonitor     │ IOKit Power Sources       │ ThroughputScaler (Discharge mA)   │
-│ ANELoadMonitor         │ IOReport (Energy Model)   │ ThroughputScaler (Watts)          │
-└────────────────────────┴───────────────────────────┴───────────────────────────────────┘
++----------------------------------------------------------------------------------------+
+|                                   Telemetry Monitors                                   |
++------------------------+---------------------------+-----------------------------------+
+| Monitor Class          | Primary Kernel/Mach API   | Normalization / Scaling Model     |
++------------------------+---------------------------+-----------------------------------+
+| CPULoadMonitor         | host_processor_info()     | Exponential Moving Average (EMA)  |
+| MemoryLoadMonitor      | host_statistics64()       | Composite: max(RAM%, ScaledSwap)  |
+| GPULoadMonitor         | IORegistry IOAccelerator  | Direct Percentage (0.0 .. 1.0)    |
+| SMCClient (Fan)        | AppleSMCKeysEndpoint      | RPM / Max RPM (Average of Fans)   |
+| SMCClient (Temp)       | AppleSMCKeysEndpoint      | Fixed 30°C .. 100°C Window        |
+| NetworkLoadMonitor     | getifaddrs() (AF_LINK)    | ThroughputScaler (Bytes/Sec)      |
+| DiskLoadMonitor        | IOBlockStorageDriver      | ThroughputScaler (Bytes/Sec)      |
+| BatteryLoadMonitor     | IOKit Power Sources       | ThroughputScaler (Discharge mA)   |
+| ANELoadMonitor         | IOReport (Energy Model)   | ThroughputScaler (Watts)          |
++------------------------+---------------------------+-----------------------------------+
 ```
 
 ### 4.1 CPU Load Monitoring (`CPULoadMonitor`)
@@ -256,27 +256,27 @@ The application includes nine unprivileged telemetry monitors sampling system st
 `SMCClient` is a thread-safe singleton communicating with `AppleSMCKeysEndpoint` using the standard 80-byte `SMCKeyData` protocol structure.
 
 ```
-                          ┌───────────────────────────┐
-                          │   SMCClient.ensureOpen()  │
-                          │   IOServiceOpen("AppleSMC")│
-                          └─────────────┬─────────────┘
-                                        │
-                                        ▼
-                          ┌───────────────────────────┐
-                          │ Discover Key Count (#KEY) │
-                          └─────────────┬─────────────┘
-                                        │
-                                        ▼
-                          ┌───────────────────────────┐
-                          │ Binary Search Key Table   │
-                          │   for Target Prefix (Tp*) │
-                          └─────────────┬─────────────┘
-                                        │ ~115 calls (20ms) vs 3385 full scan (600ms)
-                                        ▼
-                          ┌───────────────────────────┐
-                          │ Filter & Read Sensor Data │
-                          │ (Command 8 / readBytes)   │
-                          └───────────────────────────┘
+                          +---------------------------+
+                          |   SMCClient.ensureOpen()  |
+                          | IOServiceOpen("AppleSMC")  |
+                          +-------------+-------------+
+                                        |
+                                        v
+                          +---------------------------+
+                          | Discover Key Count (#KEY) |
+                          +-------------+-------------+
+                                        |
+                                        v
+                          +---------------------------+
+                          | Binary Search Key Table   |
+                          |   for Target Prefix (Tp*) |
+                          +-------------+-------------+
+                                        | ~115 calls (20ms) vs 3385 full scan (600ms)
+                                        v
+                          +---------------------------+
+                          | Filter & Read Sensor Data |
+                          | (Command 8 / readBytes)   |
+                          +---------------------------+
 ```
 
 - **Binary Search Key Table Discovery:** Instead of sequential table scans (~600ms) or guesswork, `SMCClient.floatKeys(withPrefix:)` uses binary search across the ascending SMC key table (~20ms), discovering dynamic fan (`F{n}Ac`) and temperature (`Tp**`) keys across Intel and Apple Silicon chips.
@@ -382,23 +382,23 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
 The engine reduces its own footprint under thermal or battery strain.
 
 ```
-                                  ┌──────────────────────────┐
-                                  │   Environmental Event    │
-                                  └────────────┬─────────────┘
-                                               │
-              ┌────────────────────────────────┼────────────────────────────────┐
-              │                                │                                │
-              ▼                                ▼                                ▼
+                                  +--------------------------+
+                                  |   Environmental Event    |
+                                  +------------+-------------+
+                                               |
+              +--------------------------------+--------------------------------+
+              |                                |                                |
+              v                                v                                v
    [Occlusion State Change]       [Thermal / Power / Memory]         [Reduce Motion Toggle]
  (NSWindow Occlusion Notification)  (ProcessInfo / DispatchSource)   (NSWorkspace / Menu Toggle)
-              │                                │                                │
-              ▼                                ▼                                ▼
+              |                                |                                |
+              v                                v                                v
     Is Fully Occluded?              Is Under Power Pressure?             Is Animation Frozen?
-     • Notch Coverage               • Low Power Mode                     • System Reduce Motion
-     • Inactive Space               • Thermal Serious/Critical           • Manual Settings Toggle
-     • Display Sleep                • Memory Warning/Critical                   │
-              │                                │                                │
-              ▼                                ▼                                ▼
+     * Notch Coverage               * Low Power Mode                     * System Reduce Motion
+     * Inactive Space               * Thermal Serious/Critical           * Manual Settings Toggle
+     * Display Sleep                * Memory Warning/Critical                   |
+              |                                |                                |
+              v                                v                                v
     Halt Game Loop (0% CPU)         Cap Speed Multiplier             syncGameLoopRunning():
     Resume when visible             at Preset Midpoint (0.5×)        Hold frame, handoff to label
 ```
@@ -444,13 +444,13 @@ To prevent lateral jitter and enable flexible placement, the application impleme
                            macOS Menu Bar Item Creation Order
                    (Oldest Created = Rightmost Placement on Screen)
                    
-          ┌─────────────────────┬─────────────────────┬─────────────────────┐
-          │   labelItemRight    │     statusItem      │    labelItemLeft    │
-          │   (Status Item 1)   │   (Status Item 2)   │   (Status Item 3)   │
-          │   Created First     │   Created Second    │   Created Third     │
-          └──────────┬──────────┴──────────┬──────────┴──────────┬──────────┘
-                     │                     │                     │
-                     ▼                     ▼                     ▼
+          +---------------------+---------------------+---------------------+
+          |   labelItemRight    |     statusItem      |    labelItemLeft    |
+          |   (Status Item 1)   |   (Status Item 2)   |   (Status Item 3)   |
+          |   Created First     |   Created Second    |   Created Third     |
+          +----------+----------+----------+----------+----------+----------+
+                     |                     |                     |
+                     v                     v                     v
           [Right Slot (Active)]    [Animated GIF Art]   [Left Slot (Hidden)]
               length = 87 pt         length = 47 pt         length = 0 pt
 ```
@@ -532,32 +532,32 @@ plain click and each slot carries `handleStatusItemClick(_:)` the rest of the ti
 Sleep inhibition integrates directly into the visualizer while observing system-wide power management.
 
 ```
-                                  ┌──────────────────────────┐
-                                  │   User Arms Keep Awake   │
-                                  └────────────┬─────────────┘
-                                               │
-                                               ▼
-                                  ┌──────────────────────────┐
-                                  │ StateStore Persists      │
-                                  │ Target Deadline (JSON)   │
-                                  └────────────┬─────────────┘
-                                               │
-                                               ▼
-                                  ┌──────────────────────────┐
-                                  │  Evaluate Safety Release │
-                                  └────────────┬─────────────┘
-                                               │
-               ┌───────────────────────────────┴───────────────────────────────┐
-               │                                                               │
-               ▼                                                               ▼
+                                  +--------------------------+
+                                  |   User Arms Keep Awake   |
+                                  +------------+-------------+
+                                               |
+                                               v
+                                  +--------------------------+
+                                  | StateStore Persists      |
+                                  | Target Deadline (JSON)   |
+                                  +------------+-------------+
+                                               |
+                                               v
+                                  +--------------------------+
+                                  |  Evaluate Safety Release |
+                                  +------------+-------------+
+                                               |
+               +-------------------------------+-------------------------------+
+               |                                                               |
+               v                                                               v
    [Battery ≤ 5% Hard Floor OR]                                    [Safe Operating State]
-   [Battery ≤ Configured Threshold without Override]                           │
-               │                                                               ▼
-               ▼                                                   ┌───────────────────────────┐
-   KeepAwake Suspended / Paused                                    │ Spawns Subprocess:        │
-   (caffeinate terminated, intent kept)                            │ caffeinate -di -w <pid>   │
-                                                                   │            -t <seconds>   │
-                                                                   └───────────────────────────┘
+   [Battery ≤ Configured Threshold without Override]                           |
+               |                                                               v
+               v                                                   +---------------------------+
+   KeepAwake Suspended / Paused                                    | Spawns Subprocess:        |
+   (caffeinate terminated, intent kept)                            | caffeinate -di -w <pid>   |
+                                                                   |            -t <seconds>   |
+                                                                   +---------------------------+
 ```
 
 ### 7.1 Child Process Binding & Intent Separation
