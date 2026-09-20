@@ -3,11 +3,15 @@
 # Run from the repo root:  tests/qa.sh
 #
 # Coverage tiers (the boundary CI is built around — see README "Testing & CI"):
-#   core      §1 build (warning-clean) · §2 CLI parse + version. Never boots the GUI, so it is ALWAYS
-#             safe on any macOS (incl. a headless CI runner). This is the required gate — and it is
-#             deliberately THIN: every behavioral check here drives the real binary, and the real binary
-#             needs a status item. The five `.swift` probes that used to pad this tier asserted against
-#             re-ported copies of the app's logic and were deleted (see §5).
+#   core      §1 build (warning-clean) · §2 CLI parse + version · §2a the `--once` snapshot. Never boots
+#             the GUI, so it is ALWAYS safe on any macOS (incl. a headless CI runner). This is the
+#             required gate — and it is deliberately THIN: every check here drives the real binary,
+#             and the real binary needs a status item for anything more.
+#
+#   Every case earns its place by being able to fail for a reason no other case covers. A check that
+#   only restates another one's failure is deleted, not kept for symmetry: "flag accepted" where the
+#   flag is already launched for real, one case per source where the sources share one code path, or
+#   a second input in a shape the first already proved.
 #   gui       §3 launch lifecycle · §3a Keep Awake battery conditions · §3b settings persistence ·
 #             §3c label slot geometry · §3d other sleep assertions · §3e machine sleep-hold state ·
 #             §3f Keep Awake launch arming · §3g freeze animation · §3h battery diagnostics ·
@@ -62,28 +66,19 @@ if [ "$RUN_NONGUI" = 1 ]; then
 section "§2 CLI parse paths [core]"
 pass=0; fail=0
 chk(){ [ "$2" = "$3" ] && { echo "  PASS [$1] rc=$3"; pass=$((pass+1)); } || { echo "  FAIL [$1] want $2 got $3"; fail=$((fail+1)); }; }
+# Only the FATAL contracts live here. A "flag accepted" check (`--flag <value> --help` exits 0)
+# asserts nothing but that the parser reached --help — and every flag is launched for real, with a
+# real assertion behind it, in §3, §3f and §5. Flags removed from the CLI are likewise not worth a
+# case each: an unknown argument is rejected by one rule, asserted once.
 $BIN --help >/dev/null 2>&1;                        chk "--help" 0 $?
-$BIN --width 2 >/dev/null 2>&1;                     chk "--width removed (rejected)" 1 $?
-$BIN --overlay-text X >/dev/null 2>&1;              chk "--overlay-text removed (rejected)" 1 $?
-$BIN --speed-multiplier 0 >/dev/null 2>&1;          chk "--speed-multiplier 0" 1 $?
-$BIN --speed-multiplier -2 >/dev/null 2>&1;         chk "--speed-multiplier neg" 1 $?
+$BIN --width 2 >/dev/null 2>&1;                     chk "unknown flag rejected" 1 $?
+$BIN --speed-multiplier 0 >/dev/null 2>&1;          chk "--speed-multiplier non-positive" 1 $?
 $BIN --label >/dev/null 2>&1;                       chk "--label no value" 1 $?
 $BIN --load-source >/dev/null 2>&1;                 chk "--load-source no value" 1 $?
-$BIN --load-source bandwidth --help >/dev/null 2>&1; chk "--load-source bandwidth accepted" 0 $?
-$BIN --show-all-sources --help >/dev/null 2>&1;     chk "--show-all-sources accepted" 0 $?
-$BIN --no-update-check --help >/dev/null 2>&1;      chk "--no-update-check accepted" 0 $?
-# --keep-awake parse forms. Only the shapes that can be asserted WITHOUT booting the GUI live here:
-# a missing value is fatal (rc=1), and a valid value followed by --help short-circuits to usage. A
-# *bad* value is deliberately non-fatal (it warns and launches with keep-awake off), so that case is
-# covered by §3f, not here.
+# A *bad* --keep-awake value is deliberately non-fatal (it warns and launches with keep-awake off),
+# so that case lives in §3f where the absence of a caffeinate child can be observed.
 $BIN --keep-awake >/dev/null 2>&1;                  chk "--keep-awake no value" 1 $?
-$BIN --keep-awake off --help >/dev/null 2>&1;       chk "--keep-awake off accepted" 0 $?
-$BIN --keep-awake 3s --help >/dev/null 2>&1;        chk "--keep-awake seconds form" 0 $?
-$BIN --keep-awake 1h30m --help >/dev/null 2>&1;     chk "--keep-awake compound form" 0 $?
-# --keep-awake-pid follows the same split: a missing value is fatal, a value is not. Which pids are
-# ACCEPTED (and what a dead one does) is behavior, so it is asserted against a real process in §3f.
 $BIN --keep-awake-pid >/dev/null 2>&1;              chk "--keep-awake-pid no value" 1 $?
-$BIN --keep-awake-pid $$ --help >/dev/null 2>&1;    chk "--keep-awake-pid live pid accepted" 0 $?
 # --battery-threshold: only the fatal contract is assertable without booting. Every *value* — garbage
 # and out-of-range included — is deliberately non-fatal (it clamps or falls back and launches, since
 # this can be baked into a login item), so which value each form resolves to is asserted by behavior
@@ -203,7 +198,7 @@ if [ "$RUN_GUI" = 1 ]; then
 section "§3 launch lifecycle [gui — needs WindowServer]"
 pass=0; fail=0
 # STATE_FILE is redirected for every launch: the app persists Keep Awake intent on termination, so
-# without this each of these 21 runs writes the developer's real state file and would clobber an armed
+# without this each of these runs writes the developer's real state file and would clobber an armed
 # window. §3f requires this of its own runs; §3 never did.
 run(){ desc="$1"; allow="$2"; shift 2
   err=$(MENUBAR_LOAD_RUNNER_STATE_FILE="$PWD/tmp/qa-lifecycle-state.json" \
@@ -222,13 +217,14 @@ run "load-source battery"      "unavailable on this machine" $BIN --load-source 
 run "load-source temperature"  "unavailable on this machine" $BIN --load-source temperature
 # ane needs IOReport's Energy Model group and an ANE rail in it: absent on Intel, so same fallback.
 run "load-source ane"          "unavailable on this machine" $BIN --load-source ane
+# bandwidth needs IOReport's PMP/DCS BW group and an AMCC row in it: absent on Intel, same fallback.
+run "load-source bandwidth"    "unavailable on this machine" $BIN --load-source bandwidth
 run "load-source bogus"        "Unknown --load-source" $BIN --load-source bogus
-run "force-unavail gpu->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu $BIN --load-source gpu
-run "force-unavail fan->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=fan $BIN --load-source fan
-run "force-unavail battery"    "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=battery $BIN --load-source battery
-run "force-unavail temp->cpu"  "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=temperature $BIN --load-source temperature
-run "force-unavail ane->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=ane $BIN --load-source ane
-run "force-unavail bw->cpu"    "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=bandwidth $BIN --load-source bandwidth
+# ONE forced-unavailable case, not one per source: the hook is answered in the first line of
+# isSourceAvailable, ahead of the per-source switch, so every source's forced case walks the same
+# code to the same fallback. Which sources this machine genuinely lacks is covered by the rows above,
+# whose `allow` pattern accepts the real fallback line.
+run "force-unavail -> cpu"     "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu $BIN --load-source gpu
 run "fixed speed"              "" $BIN --speed-multiplier 1.5
 run "label value + gpu"        "" $BIN --label value --load-source gpu
 run "label custom text"        "" $BIN --label BUILD
