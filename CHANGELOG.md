@@ -12,7 +12,8 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
 - **Launcher CLI** — the positional preset keyword or GIF path, and the flags
   `--speed-multiplier`, `--label`, `--load-source`, `--keep-awake`, `--keep-awake-pid`,
   `--battery-threshold`, `--no-update-check`,
-  `--foreground` / `--no-detach`, `--detach`, `--extra`, `--precompile`, `--once`, `-h` / `--help`.
+  `--foreground` / `--no-detach`, `--detach`, `--extra`, `--precompile`, `--once`, `-h` / `--help`,
+  and the `--load-source` keyword set.
 - **The `--once` snapshot schema** — its `v` contract version, and the meaning of every key it emits.
 - **Environment variables** — `MENUBAR_LOAD_RUNNER_PATH`, `MENUBAR_LOAD_RUNNER_LOAD_SOURCE`,
   `MENUBAR_LOAD_RUNNER_LABEL`, `MENUBAR_LOAD_RUNNER_KEEP_AWAKE`,
@@ -46,6 +47,21 @@ of the public API and may change in any release.
   never a `0` standing in for "no reading"; `v` is the schema version and is always present. It must
   be the only argument, since every other flag configures a GUI this path never builds. Takes about
   0.3 s: the throughput readers are counter deltas, so it samples, waits, and samples again. (R24)
+- **`--load-source bandwidth`: the DRAM bus, the ceiling a local model actually hits.** The memory
+  reader measures capacity and paging; during inference the limit is the bus, and a Mac can sit at
+  40% RAM with the bus saturated — nothing in the app could show it. The reading comes from the
+  memory controller's own residency histogram, so it is a true GB/s rate rather than a derived one.
+  Measured on an M4 Max: 16 GB/s idle, 46–78 under ordinary desktop work, 233 under a six-thread
+  `memcpy`. Menu bar reads `BW 185.2 GB/s`, menu row `Memory Bandwidth: 185.2 GB/s`, snapshot
+  `bw_gbps`. (R25)
+- **The CPU row now says which half of the chip is busy** — `CPU (smoothed): 35.2% · P 12% · E 78%`.
+  Four saturated E-cores and four saturated P-cores both read 35% on the row above, and they are
+  different machine states with different thermal futures. Costs no new syscall: it is the per-core
+  array the whole-machine figure already sums, sliced by the cluster map each CPU publishes in
+  IODeviceTree. Snapshot `cpu_p_pct`, `cpu_e_pct`. (R25)
+- **The GPU row now says which pipeline stage is busy** — `GPU: 46% · Renderer 46% · Tiler 19%`,
+  read from the same dictionary the device figure already came from, at no additional syscall.
+  Snapshot `gpu_rend_pct`, `gpu_tiler_pct`. (R25)
 
 ### Changed
 
@@ -55,6 +71,8 @@ of the public API and may change in any release.
 - **`MENUBAR_LOAD_RUNNER_FORCE_BATTERY` now pins the charge on the reader itself**, so Keep Awake's
   suspension policy and the battery readout can no longer disagree about the same battery in the same
   run — and the hook now also works on a desktop Mac, where it previously went unread.
+- **The `IOReport` binding is now shared** by the Neural Engine and bus readers — one `dlopen`, one
+  symbol table, a separate narrow subscription each. No behavioral change to the ANE reading.
 
 ## [1.25.0] - 2026-09-12
 

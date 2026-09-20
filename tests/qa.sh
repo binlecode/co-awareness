@@ -69,6 +69,7 @@ $BIN --speed-multiplier 0 >/dev/null 2>&1;          chk "--speed-multiplier 0" 1
 $BIN --speed-multiplier -2 >/dev/null 2>&1;         chk "--speed-multiplier neg" 1 $?
 $BIN --label >/dev/null 2>&1;                       chk "--label no value" 1 $?
 $BIN --load-source >/dev/null 2>&1;                 chk "--load-source no value" 1 $?
+$BIN --load-source bandwidth --help >/dev/null 2>&1; chk "--load-source bandwidth accepted" 0 $?
 $BIN --show-all-sources --help >/dev/null 2>&1;     chk "--show-all-sources accepted" 0 $?
 $BIN --no-update-check --help >/dev/null 2>&1;      chk "--no-update-check accepted" 0 $?
 # --keep-awake parse forms. Only the shapes that can be asserted WITHOUT booting the GUI live here:
@@ -156,6 +157,32 @@ MENUBAR_LOAD_RUNNER_FORCE_BATTERY=15:battery $BIN --once >"$J" 2>/dev/null
 ok "a forced charge reaches the snapshot" \
    "$(grep -q '"battery_pct":15.0' "$J" && echo 1 || echo 0)" "got: $(cat "$J")"
 
+# R25's three readings. Each is HARDWARE-conditional — an Intel Mac publishes no cluster map, a
+# machine with no AMCC channel no bus histogram — so presence is a NOTE, not a FAIL. What IS
+# unconditional is that a split arrives whole: a row reading "P 75%" with no E beside it, or an
+# `ane_w` with a stray `bw_gbps` of 0.0, is the failure worth an assertion.
+$BIN --once >"$J" 2>/dev/null
+for pair in "cpu_p_pct:cpu_e_pct" "gpu_rend_pct:gpu_tiler_pct"; do
+  a=${pair%%:*}; b=${pair##*:}
+  ha=$(grep -c "\"$a\":" "$J"); hb=$(grep -c "\"$b\":" "$J")
+  ok "$a and $b are both present or both absent" "$([ "$ha" = "$hb" ] && echo 1 || echo 0)" "$a=$ha $b=$hb"
+  [ "$ha" = 1 ] || echo "  NOTE [$a not published by this hardware — split unavailable, whole-machine figure unaffected]"
+done
+# The bus reading, when this machine has one: a plausible rate rather than an exact one, since the
+# true figure depends on what the machine is doing while QA runs. Zero would mean a silent histogram
+# read as a reading, which the reader is supposed to report as no reading at all.
+if grep -q '"bw_gbps":' "$J"; then
+  bw=$(sed -E 's/.*"bw_gbps":([0-9.]+).*/\1/' "$J")
+  ok "bw_gbps is a plausible rate (${bw} GB/s)" \
+     "$(awk -v v="$bw" 'BEGIN{print (v>0 && v<10000) ? 1 : 0}')" "got $bw"
+else
+  echo "  NOTE [no AMCC bus histogram on this machine — bw_gbps absent]"
+fi
+# NOT asserted here: that the bucket weighting uses midpoints rather than upper edges. Its signature
+# is an idle bus pinned near a bucket edge, which only separates from a true reading on a machine
+# held idle — something a QA run on a working desktop cannot arrange. Measured instead, and recorded
+# in docs/ARCHITECTURE.md § 4.8.
+
 # Side-effect-free, which is what makes it safe beside a live instance and in parallel with itself.
 # The state file is the one thing the app owns that a second process could corrupt; the snapshot path
 # must not so much as open it. (§6 runs the same flag against a real running instance.)
@@ -201,6 +228,7 @@ run "force-unavail fan->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RU
 run "force-unavail battery"    "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=battery $BIN --load-source battery
 run "force-unavail temp->cpu"  "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=temperature $BIN --load-source temperature
 run "force-unavail ane->cpu"   "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=ane $BIN --load-source ane
+run "force-unavail bw->cpu"    "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=bandwidth $BIN --load-source bandwidth
 run "fixed speed"              "" $BIN --speed-multiplier 1.5
 run "label value + gpu"        "" $BIN --label value --load-source gpu
 run "label custom text"        "" $BIN --label BUILD
@@ -1005,7 +1033,7 @@ RO="$PWD/tmp/qa-readout-state.json"
 rk(){ [ "$2" = 1 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAIL [$1] $3"; fail=$((fail+1)); }; }
 # `warming up` is legitimate for a counter-delta source on its first tick, so each shape allows the
 # placeholder; what must never appear is a different source's shape or an out-of-range number.
-for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:rate" "fan:FAN:%" "battery:BAT:%" "temperature:TMP:deg" "ane:ANE:watt"; do
+for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:rate" "fan:FAN:%" "battery:BAT:%" "temperature:TMP:deg" "ane:ANE:watt" "bandwidth:BW:gbps"; do
   src=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; shape=${rest##*:}
   out=$(MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 MENUBAR_LOAD_RUNNER_STATE_FILE="$RO" \
         MENUBAR_LOAD_RUNNER_EXIT_AFTER=4.5 $BIN --label value --load-source "$src" 2>&1 | grep '^SLOTS')
@@ -1030,6 +1058,9 @@ for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:
     # Watts, one decimal. A power-gated Neural Engine reads a true 0.0, so the low end is not a
     # warm-up artifact; the width ceiling is realistic rather than true, so digits are not bounded.
     watt) bad=$(echo "$labels" | grep -vE "^$tag +[0-9]+\.[0-9]W$") ;;
+    # GB/s, one decimal, and the only label that spells its unit out — so the unit is part of the
+    # shape here, not an implied one.
+    gbps) bad=$(echo "$labels" | grep -vE "^$tag +[0-9]+\.[0-9] GB/s$") ;;
   esac
   rk "$src readout has $tag's shape and an in-range value" \
      "$([ -z "$bad" ] && [ -n "$labels" ] && echo 1 || echo 0)" "unexpected: $(echo "$bad" | head -2)"

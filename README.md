@@ -5,7 +5,7 @@
 </p>
 
 Small macOS menu bar app that renders an animated GIF in the status bar.
-Animation speed automatically adapts to a system load source (CPU by default; also memory, GPU, network, disk, fan, battery, die temperature, or Neural Engine power — see Load source below).
+Animation speed automatically adapts to a system load source (CPU by default; also memory, DRAM bus bandwidth, GPU, network, disk, fan, battery, die temperature, or Neural Engine power — see Load source below).
 
 Current version: **1.25.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
@@ -305,15 +305,16 @@ MENUBAR_LOAD_RUNNER_LOAD_SOURCE=network ./menubar-load-runner
 ```
 
 `--load-source` (or the `MENUBAR_LOAD_RUNNER_LOAD_SOURCE` env var) selects which system reader
-drives the animation speed: `cpu` (default), `memory`, `gpu`, `network`, `disk`, `fan`, `battery`, `temperature`, or `ane`. Unknown values —
+drives the animation speed: `cpu` (default), `memory`, `bandwidth`, `gpu`, `network`, `disk`, `fan`, `battery`, `temperature`, or `ane`. Unknown values —
 or a source with no readable hardware on this machine — fall back to `cpu` (unavailable sources are
 disabled in the menu). It can also be switched live by expanding the **Other Sources** list in the menu
 and clicking a reader (see below). All readers are
 unprivileged (no `sudo`); the app only ever *reads* load.
 
-- **cpu** (default): CPU usage across all cores.
+- **cpu** (default): CPU usage across all cores. The menu row also splits it by cluster — `P 12% · E 78%` — because four saturated efficiency cores and four saturated performance cores both read 35%, and they are not the same machine state.
 - **memory**: memory in use, combined with swap activity.
-- **gpu**: GPU utilization.
+- **bandwidth**: DRAM bus throughput, in GB/s — how hard the memory *bus* is working, which is a different question from how full the memory is. During local model inference the bus is usually the ceiling: a Mac can sit at 40% RAM with the bus saturated, and no other reader here would show it. Read from the memory controller's own bandwidth histogram, so it is a measured rate rather than one derived from RAM usage, and normalized against the same adaptive ceiling the other rate sources use (an M4 Max measures 16 GB/s idle, 46–78 under ordinary desktop work, 233 under a heavy `memcpy`). Unavailable on Intel Macs and anywhere the bus histogram is absent, which fall back to `cpu`.
+- **gpu**: GPU utilization. The menu row also splits it into the two pipeline halves — `Renderer 46% · Tiler 19%` — read from the same place the device figure comes from.
 - **network**: total interface throughput (rx+tx, loopback excluded).
 - **disk**: total block-device throughput (read+write across all drives).
 - **fan**: fan speed as a thermal/cooling signal (RPM as a fraction of the fan's max, averaged across fans — one fan spinning up doesn't dominate while the rest of the system is quiet). A lagging signal that trails actual work and only ramps under sustained thermal load, but idle fans still spin — so it keeps some visible motion (a genuinely stopped fan still crawls at the preset's minimum speed). Unavailable on fanless Macs (e.g. MacBook Air, which have zero fans), which fall back to `cpu`.
@@ -350,10 +351,10 @@ still drives the animation; the history sparkline still tracks the active source
 
 ```bash
 ./menubar-load-runner --once
-{"v":1,"cpu_pct":14.2,"mem_pct":41.0,"swap_mibs":0.00,"gpu_pct":28.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
+{"v":1,"cpu_pct":14.2,"cpu_p_pct":9.8,"cpu_e_pct":27.4,"mem_pct":41.0,"swap_mibs":0.00,"bw_gbps":58.3,"gpu_pct":28.0,"gpu_rend_pct":26.0,"gpu_tiler_pct":11.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
 ```
 
-The same nine readers the menu bar uses, printed as one line of JSON, then exit — for a script, a
+The same readers the menu bar uses, printed as one line of JSON, then exit — for a script, a
 status line, or an agent deciding whether this machine has the thermal and battery headroom for a long
 build. No menu bar, no window, no state file, and nothing to install or leave running:
 
@@ -361,10 +362,12 @@ build. No menu bar, no window, no state file, and nothing to install or leave ru
 ./menubar-load-runner --once | jq -r '"\(.temp_c) °C, \(.thermal)"'
 ```
 
-- **Physical units, named with them.** `_pct` is a percentage, `_mibs` is MiB/s, `_c` is °C, `_w` is
-  watts, `_a` is amps, `fan_rpm` is a list with one entry per fan.
+- **Physical units, named with them.** `_pct` is a percentage, `_mibs` is MiB/s, `_gbps` is GB/s,
+  `_c` is °C, `_w` is watts, `_a` is amps, `fan_rpm` is a list with one entry per fan.
 - **A reading the machine can't give you is an absent key** — never `null`, never a `0` standing in
-  for "no sensor". So `battery_pct` is missing on a desktop, `fan_rpm` on a fanless Mac. `v` is the
+  for "no sensor". So `battery_pct` is missing on a desktop, `fan_rpm` on a fanless Mac, and the
+  cluster and pipeline splits (`cpu_p_pct`/`cpu_e_pct`, `gpu_rend_pct`/`gpu_tiler_pct`) on hardware
+  that does not publish them — each pair arrives whole or not at all. `v` is the
   schema version and is the only field always present; new fields may be added, so read by key.
 - **It must be the only argument** (everything else configures a GUI this path never builds), and it
   is safe to run beside a running instance, or several at once — it writes nothing and locks nothing.
@@ -516,7 +519,7 @@ If a detached instance won't stop or a launch silently fails, check `/tmp/menuba
 
 Click the menu bar item — the creature or either number slot — to open:
 
-- The active source's metric + state line: `CPU Usage (smoothed)` / `CPU State`; or `Memory` (used-% + swap capacity + swap MB/s when paging) / `Memory Pressure`; or `GPU` / `GPU State`; or `Network` (MB/s) / `Network State`; or `Disk` (MB/s) / `Disk State`; or `Fan` (RPM + %) / `Fan State`; or `Battery` (charge % + discharge A, or `AC` — plus **health % and cycle count** on a Mac with a battery) / `Battery State` (the battery's condition and the capacity behind it, `Normal · 8478/8579 mAh`, in place of the drain band while the menu is open; hover either row for the full breakdown — see [Battery health](#battery-health-cycles-and-capacity)); or `Temperature` (hottest sensor °C + the spread across sensors — or **`Thermal Throttling`** in place of the sensor count once macOS reports serious or critical thermal pressure) / `Temperature State`
+- The active source's metric + state line: `CPU Usage (smoothed)` (plus the `P` / `E` cluster split) / `CPU State`; or `Memory` (used-% + swap capacity + swap MB/s when paging) / `Memory Pressure`; or `Memory Bandwidth` (GB/s) / `Memory Bandwidth State`; or `GPU` (plus the `Renderer` / `Tiler` split) / `GPU State`; or `Network` (MB/s) / `Network State`; or `Disk` (MB/s) / `Disk State`; or `Fan` (RPM + %) / `Fan State`; or `Battery` (charge % + discharge A, or `AC` — plus **health % and cycle count** on a Mac with a battery) / `Battery State` (the battery's condition and the capacity behind it, `Normal · 8478/8579 mAh`, in place of the drain band while the menu is open; hover either row for the full breakdown — see [Battery health](#battery-health-cycles-and-capacity)); or `Temperature` (hottest sensor °C + the spread across sensors — or **`Thermal Throttling`** in place of the sensor count once macOS reports serious or critical thermal pressure) / `Temperature State`
 - `Load Avg (1/5/15m)`
 - `Speed Multiplier` (shows the active load source and mode; a separate `Slowing animation — <cause>` line appears only when a self-throttle condition is active, naming the cause: thermal throttling, Low Power Mode, or memory pressure)
 - `▸ Other Sources` (disclosure row) — click to expand/collapse an inline list of every *other* available reader (`CPU` / `Memory` / `GPU` / `Network` / `Disk` / `Fan` / `Battery` / `Temperature`, minus the active one; sources with no readable hardware are omitted). Each row shows that reader's live readout; clicking it switches the driving source to it (takes effect immediately). Expanding samples every reader each tick; collapsed (the default) samples only the active source. The active source still drives the animation. Launch expanded with `--show-all-sources` / `MENUBAR_LOAD_RUNNER_SHOW_ALL=1`
@@ -616,7 +619,7 @@ dashboard):
 | :--- | :--- | :--- | :--- | :--- |
 | **Category** | Animated load indicator | Animated load indicator | Animated load indicator | System monitor |
 | **Packaging** | Single Swift file + shell launcher (no Xcode project) | Xcode `.app` | Xcode `.app` | Xcode `.app` |
-| **Load sources** | CPU, memory+swap, GPU, network, disk, fan, battery, die temperature, Neural Engine power | CPU | CPU, GPU, RAM | Full hardware suite |
+| **Load sources** | CPU (with P/E split), memory+swap, DRAM bus bandwidth, GPU (with Renderer/Tiler split), network, disk, fan, battery, die temperature, Neural Engine power | CPU | CPU, GPU, RAM | Full hardware suite |
 | **Unbounded rates (net/disk/swap) drive the animation** | Yes — adaptive auto-scaling | — | — | n/a (numeric display) |
 | **In-menu readout** | 60s sparkline, numerics, load averages | Minimal | Numeric dropdown | Full graphs, temps, per-process |
 | **Battery health / cycle count** | Yes (menu-gated, unprivileged, never polled) | No | No | Yes |

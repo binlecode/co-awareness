@@ -213,7 +213,7 @@ if advanced { renderCurrentFrame() }                                        // l
 
 ## 4. Hardware Telemetry & Scaling Subsystems
 
-The application includes nine unprivileged telemetry monitors, owned by `TelemetryCore` (§ 4.7) and sampled by the GUI every 2 seconds (`Tuning.loadSampleInterval`).
+The application includes ten unprivileged telemetry monitors, owned by `TelemetryCore` (§ 4.7) and sampled by the GUI every 2 seconds (`Tuning.loadSampleInterval`).
 
 ```
 +----------------------------------------------------------------------------------------+
@@ -230,8 +230,13 @@ The application includes nine unprivileged telemetry monitors, owned by `Telemet
 | DiskLoadMonitor        | IOBlockStorageDriver      | ThroughputScaler (Bytes/Sec)      |
 | BatteryLoadMonitor     | IOKit Power Sources       | ThroughputScaler (Discharge mA)   |
 | ANELoadMonitor         | IOReport (Energy Model)   | ThroughputScaler (Watts)          |
+| BandwidthLoadMonitor   | IOReport (PMP / DCS BW)   | ThroughputScaler (GB/s)           |
 +------------------------+---------------------------+-----------------------------------+
 ```
+
+Two readers publish a second figure on the row they already own rather than a row of their own: the
+CPU's P/E cluster split (§ 4.1) and the GPU's Renderer/Tiler split (§ 4.9). Neither is a source, so
+neither can drive the animation — they answer *which part* of a chip the driving figure came from.
 
 ### 4.1 CPU Load Monitoring (`CPULoadMonitor`)
 
@@ -241,6 +246,30 @@ The application includes nine unprivileged telemetry monitors, owned by `Telemet
   $$\text{rawFraction} = \frac{\Delta \text{user} + \Delta \text{system} + \Delta \text{nice}}{\Delta \text{total}}$$
 - Smoothed via EMA with smoothing factor $\alpha = 0.20$ (`Tuning.cpuSmoothingAlpha`):
   $$\text{smoothedUsage}_t = \alpha \times \text{rawFraction} + (1 - \alpha) \times \text{smoothedUsage}_{t-1}$$
+
+**The P/E cluster split (R25).** The same tick deltas, summed per cluster instead of per machine, and
+smoothed with the same $\alpha$ so a jumpy split cannot sit beside a settled total. It answers a
+different question from the figure above it: four saturated E-cores and four saturated P-cores both
+read 35% on an M4 Max, and they are different machine states with different thermal futures.
+
+The slice is by **published cluster membership**, never by index order. Each CPU appears in
+IODeviceTree as an `IOPlatformDevice` carrying `cluster-type` (`"E"` / `"P"`) alongside
+`logical-cpu-id`, which is the index into the Mach array; the map is read once, at the first sample.
+
+> Do **not** derive the grouping from `hw.perflevel<n>.logicalcpu` instead. Measured on an M4 Max,
+> `perflevel0` *is* Performance (12 cores) while the Mach index order is **E-first** (cpu0–3 are the
+> E cluster), so slicing the first `perflevel0` entries as P reports the E cluster's load as P. The
+> result is a plausible number that is wrong — the failure mode that survives review.
+
+Validated against IOReport's own per-core residency (group `CPU Stats`, subgroup
+`CPU Core Performance States`) read in the same window: under a pinned background-QoS load
+P 3.2% / E 100.0% here against P 3.6% / E 100.0% there, and under a plain spin P 68.4% / E 26.9%
+against P 68.6% / E 28.9%. Within a couple of points, for **no syscall at all** — which is why the
+split reads the array already in hand rather than opening a second IOReport subscription on the
+default source's every tick.
+
+A machine that publishes no cluster map (Intel, and anything else that answers none) has no split:
+the menu clause is omitted and the snapshot keys are absent. The whole-machine figure is unaffected.
 
 ### 4.2 Composite Memory & Swap Monitoring (`MemoryLoadMonitor`)
 
@@ -297,9 +326,9 @@ For unbounded rates (network bytes/sec, disk bytes/sec, swap bytes/sec, battery 
    - Headroom Down: $3.0\times$ (`Tuning.scalerHeadroomDown`)
 3. **Hysteresis Counters:** Rescaling requires $5$ consecutive out-of-band samples (`Tuning.scalerRescaleCount`) tracked in `overCount` and `underCount` registers, preventing single bursts from oscillating the display.
 
-### 4.5 Neural Engine Power Monitoring (`ANELoadMonitor`)
+### 4.5 The `IOReport` Binding & Neural Engine Power (`IOReportClient`, `ANELoadMonitor`)
 
-The ninth reader, and the only one built on a private API. It exists because the NPU is the one busy
+The only private API in the app, and the two readers built on it. It exists because the NPU is the one busy
 state the other eight cannot see: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
 Vision) runs the Neural Engine while CPU and GPU utilization sit near idle, so every other source
 reports a quiet machine while it is working hard.
@@ -316,10 +345,21 @@ header, no linker flag, no `Package.swift`.
 dyld shared cache*, so `dlopen` of the framework path fails outright. The symbols ship in
 `/usr/lib/libIOReport.dylib`.
 
+**One binding, one subscription per reader.** `IOReportClient` holds the `dlopen` and the symbol
+table; each reader opens its own subscription through it. The binding is shared because a second
+`dlopen` would leave two copies of the symbol list to keep in step, and `IOReportClient.shared`
+being non-nil *is* "the library is bound", so no reader carries its own probe flag for it. The
+subscriptions are **not** shared: each is narrowed to the rows its reader may see, and the per-sample
+cost is the kernel round trip over the subscribed set — measured here at ~3 ms for a single row
+against ~10 ms for the whole `DCS BW` group. A merged subscription would charge every reader for
+every other reader's rows.
+
 **Stateful delta sampling, not a point read.** Unlike every other monitor, `IOReport` is a
-subscription API. One subscription is opened over the `"Energy Model"` channel group for the life of
-the process (the `SMCClient` precedent — one long-lived handle, never a per-sample open), and a
-reading is the difference between two samples:
+subscription API. A subscription is opened for the life of the process (the `SMCClient` precedent —
+one long-lived handle, never a per-sample open), and a reading is the difference between two samples.
+Both channel shapes come through the same delta: a **simple** channel carries one accumulated integer
+(the ANE's millijoules), a **state** channel carries a residency histogram (the bus's
+time-per-bandwidth-bucket, § 4.8). For the ANE:
 
 ```
   bind: dlopen -> dlsym -> IOReportCopyChannelsInGroup("Energy Model")
@@ -343,8 +383,9 @@ reading is the difference between two samples:
   M4 Max, 322 of 328 channels report `mJ`, five `uJ`, and the GPU's own row `nJ`.
 - **The channel list is filtered to the ANE rail before subscribing.** The group cannot be narrowed by
   subgroup (every energy row reports an empty one), so the desired-channel list is filtered by hand.
-  This is a small win, not a large one — 3.6 ms → 2.8 ms per sample+delta, because the cost is the
-  kernel round trip and not the row count — but it states in code exactly which rail this reader may see.
+  This is a small win for this reader — 3.6 ms → 2.8 ms per sample+delta, because the cost is the
+  kernel round trip and not the row count — but it states in code exactly which rail this reader may
+  see, and on the bus's 94-row group (§ 4.8) the same narrowing is worth considerably more.
 - **No sleep-gap special case is needed.** `elapsed` comes from `systemUptime`, which does not advance
   while the machine is asleep, and neither does the energy counter.
 
@@ -383,13 +424,13 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
 
 ### 4.7 Telemetry Core & the `--once` Snapshot (R24)
 
-Nine unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `--once` is the one way anything else asks.
+The unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `--once` is the one way anything else asks.
 
 **Module boundaries.** Each row's *not its business* column names the canonical owner, so nothing has to be inferred:
 
 | Module | Owns | Not its business — canonical owner |
 |---|---|---|
-| `TelemetryCore` | The nine readers, their availability probes, their scalers, `sampleSource(_:elapsed:)`, `isSourceAvailable(_:)`, and one `snapshot()` returning physical units | Speed mapping, menu text, labels, Keep Awake, `state.json` — all `MenuBarLoadRunnerApp` |
+| `TelemetryCore` | Every reader, its availability probe and its scaler, plus `sampleSource(_:elapsed:)`, `isSourceAvailable(_:)`, and one `snapshot()` returning physical units | Speed mapping, menu text, labels, Keep Awake, `state.json` — all `MenuBarLoadRunnerApp` |
 | `MenuBarLoadRunnerApp` | Everything on screen and every intent that persists; asks the core for readings | How a reading is taken — `TelemetryCore` |
 | `menubar-load-runner` (launcher) | Singleton guard, `compile_if_stale`, detach — for **GUI launches only** | Telemetry; and on the `--once` path, compiling anything |
 
@@ -412,16 +453,19 @@ The rate readings (network, disk, swap, battery current, ANE) are counter deltas
 **Schema.** `v` is the contract version and the only field always present; every other key appears when its reader answered. Names carry their unit — `_mibs` is MiB/s (the menu writes "MB/s" as display shorthand: same number, not a second fact). Adding a field is not a version bump; removing one or changing what it means is, and consumers read by key and ignore what they do not know.
 
 ```json
-{"v":1,"cpu_pct":14.2,"mem_pct":41.0,"swap_mibs":0.00,"gpu_pct":28.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
+{"v":1,"cpu_pct":14.2,"cpu_p_pct":9.8,"cpu_e_pct":27.4,"mem_pct":41.0,"swap_mibs":0.00,"bw_gbps":58.3,"gpu_pct":28.0,"gpu_rend_pct":26.0,"gpu_tiler_pct":11.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
 ```
 
 | Field | Unit | Reader | Absent when |
 |---|---|---|---|
 | `v` | int | — | never |
 | `cpu_pct` | % | `CPULoadMonitor` | never (Mach always answers) |
+| `cpu_p_pct` · `cpu_e_pct` | % | `CPULoadMonitor` cluster split (§ 4.1) | no published cluster map — both absent together, never one |
 | `mem_pct` | % | `MemoryLoadMonitor` raw used fraction | never |
 | `swap_mibs` | MiB/s | `MemoryLoadMonitor` swap rate | swap counters unreadable |
+| `bw_gbps` | GB/s | `BandwidthLoadMonitor` (§ 4.8) | no AMCC bus histogram |
 | `gpu_pct` | % | `GPULoadMonitor` | no readable accelerator |
+| `gpu_rend_pct` · `gpu_tiler_pct` | % | `GPULoadMonitor` pipeline split (§ 4.9) | driver publishes no such key — both absent together |
 | `net_rx_mibs` · `net_tx_mibs` | MiB/s | `NetworkLoadMonitor` | — |
 | `disk_read_mibs` · `disk_write_mibs` | MiB/s | `DiskLoadMonitor` | — |
 | `fan_rpm` | RPM, one entry per fan | `FanLoadMonitor` (SMC) | fanless machine |
@@ -436,6 +480,80 @@ Precision follows the reader, not the field: percentages and °C carry one decim
 **Launcher interception.** `--once` is handled in the first statement of argument handling, ahead of both the singleton guard and `compile_if_stale`, and `exec`s the binary with argv unchanged (exclusivity is the binary's to enforce, since it owns the usage text). The source being newer than the binary is deliberately not consulted: a reading from the previous build is still a true reading, and compiling here would put a `swiftc` race back in front of the very guard that exists to prevent one (§ 2). A missing binary is one stderr line naming `--precompile` and exit 2.
 
 **Headless is measured, not assumed.** The GPU (IOAccelerator), SMC and IOReport readers are kernel-side and were *expected* to answer with no WindowServer connection. `tests/qa.sh` §2a is what turns that into a measurement: it runs in the core tier, which never boots a GUI, and asserts the always-present keys are there rather than only that the JSON parses — a snapshot degrading to `{"v":1}` would otherwise pass "absent when unavailable" while telling the truth about nothing.
+
+### 4.8 DRAM Bus Bandwidth (`BandwidthLoadMonitor`, R25)
+
+The one reading that shows a machine at its ceiling while every other row says it is fine. The memory
+reader beside it (§ 4.2) measures **capacity and paging**; during local model inference the limit is
+the **bus**, and a Mac can sit at 40% RAM with the bus saturated. The two are unrelated numbers.
+
+**A histogram, not a counter.** The memory controller publishes, per `IOReport` state channel, the
+time it spent in each bandwidth bucket. Channels are the `AMCC…RD+WR` rows of group `PMP`, subgroup
+`DCS BW` — one per memory-controller die.
+
+```
+  channel " AMCC RD+WR"   states:  " 32GB/s"=1547   " 64GB/s"=111   "128GB/s"=950  ...
+                                       |               |               |
+                          midpoint     16              48             112     <- (prev edge + edge)/2
+                                        \              |              /
+                                         +-- weighted mean by residency --+   -> GB/s for this die
+                                                                            (summed across dies)
+```
+
+- **The state name is the bucket's UPPER edge**, so a bucket is represented by its **midpoint** — the
+  mean of its own edge and the previous one, with 0 below the first. Weighting by the edge instead
+  pins an idle Mac at a flat 32 GB/s, because nearly all of its residency sits in the bottom bucket.
+  Taking the midpoint from *consecutive* edges rather than assuming a fixed step also survives a chip
+  that spaces its buckets differently.
+- **The result is already a rate.** A residency-weighted mean of GB/s buckets is GB/s; unlike the
+  ANE's joules it is **not** divided by the sample interval. Two samples are still needed — the
+  histogram is differenced — so the reader warms up one tick like every other delta source.
+- **Per-die means are summed, not pooled.** Each `AMCC` row is one controller; pooling their buckets
+  into one mean would report a single die's rate as the whole chip's.
+- **Only `AMCC` rows are read.** The group is 94 channels of 32 buckets on an M4 Max, and the
+  per-agent rows beside it (`EACC`/`PACC`/`AGX`/`DISP…`) cap at the bottom bucket and cannot
+  attribute a high whole-chip rate. Subscribing to the one row also keeps the sample near the ANE's
+  ~3 ms rather than the group's ~10 ms (§ 4.5).
+- **A silent histogram is no reading, not a zero.** Zero total residency returns `nil`, so the source
+  reports unavailable rather than a confident 0.0 GB/s.
+
+**Normalization.** Unbounded, and the ceiling differs by an order of magnitude across chip tiers, so
+it goes through `ThroughputScaler` rather than a per-SoC table nobody could keep current.
+`Tuning.bandwidthFloorGBps` = `150.0` is the minimum ceiling. The bus is the one rate source with **no
+idle state to speak of** — display scanout and OS housekeeping keep it moving on a machine doing
+nothing — so unlike the network and disk floors this one is not there to reject a trickle, but to put
+a resting bus low in the range. Measured on an M4 Max: **16 GB/s** idle, **46–78** under ordinary
+desktop work, **233** under a six-thread `memcpy` (the histogram's residency reaching its 480 GB/s
+bucket). A floor at 150 leaves a resting bus near a tenth of the range and still lets real work
+rescale the ceiling past it.
+
+**What is measured and not asserted.** The midpoint weighting is verified by the idle-vs-loaded pair
+above, not by `tests/qa.sh`: its failure signature is an idle bus pinned near a bucket edge, which
+only separates from a true reading on a machine held idle — something a QA run on a working desktop
+cannot arrange. The suite asserts what it honestly can (the key's presence and a plausible range) and
+says so where it stops.
+
+### 4.9 GPU Utilization & the Pipeline Split (`GPULoadMonitor`)
+
+`PerformanceStatistics` is copied from the IORegistry entry matching provider class `IOAccelerator`,
+falling back to `AGXAccelerator` — the `IOClass` itself is hardware-specific (`AGXAcceleratorG16X` on
+this chip) and is never matched on. Three figures are read from the one dictionary already in hand,
+at no additional syscall:
+
+| Key | Row clause | Meaning |
+|---|---|---|
+| `Device Utilization %` | the GPU figure itself | drives the animation when GPU is the source |
+| `Renderer Utilization %` | `· Renderer 46%` | shading and compute work |
+| `Tiler Utilization %` | `· Tiler 19%` | the geometry/binning stage a tile-based GPU runs ahead of it |
+
+- **An entry with no `Device Utilization %` is not a usable accelerator** and is skipped entirely,
+  rather than counted as an idle one — which would drag the max down on a machine that has two.
+- **The split comes from the winning entry**, not from an independent max per key: the three figures
+  describe one accelerator's pipeline, and mixing two GPUs' halves would describe neither.
+- **A missing half is an absent reading, not a zero.** The row clause is dropped and the snapshot keys
+  are absent; a `0` here is a real reading and means that half of the pipeline was idle.
+- These are driver point reads, not interval integrations — the same character as the device figure
+  beside them.
 
 ---
 
@@ -833,7 +951,9 @@ Comprehensive reference of values defined in `Tuning`:
 | `temperatureCeilingCelsius` | `100.0` | °C | Upper anchor for die temperature speed mapping |
 | `memoryIdleFloor` | `0.55` | Fraction | Baseline RAM fraction subtracted before speed scaling |
 | `aneFloorWatts` | `1.0` | Watts | Minimum Neural Engine speed-scale ceiling (keeps trivial inference off full speed) |
+| `bandwidthFloorGBps` | `150.0` | GB/s | Minimum DRAM bus speed-scale ceiling (keeps a resting bus low in the range — § 4.8) |
 | `labelWattCeiling` | `9.9` | Watts | Reserved label width for the `ANE` readout |
+| `labelBandwidthCeiling` | `999.9` | GB/s | Reserved label width for the `BW` readout |
 | `batteryLowThresholdDefault` | `0.20` | Fraction | Default battery release point for Keep Awake (20%) |
 | `batteryCriticalThreshold` | `0.05` | Fraction | Hard safety release floor for Keep Awake (5%) |
 | `keepAwakeBarForeignAlpha` | `0.45` | Alpha | Opacity of track line when machine is held awake externally |
@@ -847,6 +967,7 @@ Parameters that are not `Tuning` constants because they live on an interface rat
 | Name | Default | Unit | Role | Lives in |
 |---|---|---|---|---|
 | `--once` | off | flag | Single-shot JSON snapshot; exclusive of every other argument (§ 4.7) | binary and launcher |
+| `--load-source bandwidth` | — | enum value | Selects the DRAM bus as the speed driver (§ 4.8); the only public surface R25 adds | binary and launcher |
 | `v` | `1` | int | Snapshot contract version | output |
 | `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE` | unset | source keys | Marks readers unavailable; honored on both paths, so QA can assert an absent snapshot key | binary |
 | `MENUBAR_LOAD_RUNNER_FORCE_BATTERY` | unset | `pct[:battery\|:ac]` | Pins charge and power state on the reader itself (§ 4.6); honored on both paths | binary |

@@ -431,6 +431,14 @@ private enum Tuning {
     // work), 1.4–3.7 W for featureprint / saliency / body-pose inference. A floor at 1 W therefore
     // puts light work low in the range and lets real inference rescale the ceiling up past it.
     static let aneFloorWatts: Double = 1.0
+    // DRAM bus ceiling floor (GB/s). Same adaptive ThroughputScaler, fed a residency-weighted rate.
+    // The bus is the one rate source with no idle state to speak of: display scanout and OS
+    // housekeeping keep it moving even on a machine doing nothing, so the floor's job is to put that
+    // resting traffic low in the range rather than to reject a trickle. Measured on an M4 Max
+    // 2026-09-20: an idle bus reads 16 GB/s, ordinary desktop work 46-78, and a six-thread memcpy
+    // 233 (the histogram's residency reaches its 480 GB/s bucket). A floor at 150 therefore leaves a
+    // resting bus near a tenth of the range and still lets real work rescale the ceiling up past it.
+    static let bandwidthFloorGBps: Double = 150.0
 
     // Die temperature is a THIRD normalization category. It is bounded, like a percentage, but it is
     // not already a 0…1 fraction, so it maps through a fixed floor/ceiling rather than through
@@ -492,6 +500,7 @@ private enum Tuning {
     static let labelRateCeiling = 999.9    // network, one decimal
     static let labelDiskCeiling = 9999.0   // disk, whole MB/s
     static let labelWattCeiling = 9.9      // Neural Engine, one decimal
+    static let labelBandwidthCeiling = 999.9  // DRAM bus, one decimal
     // Slack between the text and the slot's content box, on top of the ~16pt of chrome AppKit adds to
     // every status item window regardless. 4pt because that is what AppKit's own variableLength sizing
     // uses: measured with MENUBAR_LOAD_RUNNER_LOG_SLOTS, an auto-sized slot holding a 66.8pt string
@@ -896,6 +905,9 @@ private enum LoadSource: Int, CaseIterable {
     // characters, and "NEU" names nothing. Apple's own acronym sits fine next to CPU and GPU, and the
     // --help text spells it out for anyone meeting it for the first time.
     case ane = 8
+    // "Memory Bandwidth" in the menu, because "Bandwidth" one row under "Network" reads as a network
+    // figure. The CLI keyword stays the short `bandwidth`: there is only one bus here to mean.
+    case bandwidth = 9
 
     var key: String {
         switch self {
@@ -908,6 +920,7 @@ private enum LoadSource: Int, CaseIterable {
         case .battery: return "battery"
         case .temperature: return "temperature"
         case .ane: return "ane"
+        case .bandwidth: return "bandwidth"
         }
     }
 
@@ -922,6 +935,20 @@ private enum LoadSource: Int, CaseIterable {
         case .battery: return "Battery"
         case .temperature: return "Temperature"
         case .ane: return "ANE"
+        case .bandwidth: return "Memory Bandwidth"
+        }
+    }
+
+    // The three-character tag the menu-bar label wears. Mostly the menu title's own first three
+    // letters, and named here rather than derived at the call site because three sources need a tag
+    // the title does not yield: "DSK" and "TMP" read better than DIS/TEM, and "Memory Bandwidth"
+    // would otherwise answer MEM — the same tag as Memory, on a different reading.
+    var labelTag: String {
+        switch self {
+        case .disk: return "DSK"
+        case .temperature: return "TMP"
+        case .bandwidth: return "BW"
+        default: return String(menuTitle.prefix(3)).uppercased()
         }
     }
 
@@ -1766,6 +1793,20 @@ private final class CPULoadMonitor {
     private let smoothingAlpha: Double = Tuning.cpuSmoothingAlpha
     var hasSample: Bool { hasSmoothedUsage }
 
+    // The same tick deltas, split by cluster: nil on a machine whose CPUs do not publish a cluster
+    // type (Intel, and anything else that answers no map), never a fabricated 0. Smoothed with the
+    // whole's own alpha so a row cannot show a jumpy split beside a settled total.
+    private(set) var smoothedPerformanceUsage: Double?
+    private(set) var smoothedEfficiencyUsage: Double?
+    private var lastClusterTicks: [Int: CPUTicks] = [:]
+    // Which logical CPU belongs to which cluster, read once. Empty on hardware that does not say.
+    private lazy var clusterIndices: (performance: [Int], efficiency: [Int]) = Self.readClusterIndices()
+
+    private struct CPUTicks {
+        var total: UInt64
+        var idle: UInt64
+    }
+
     func sampleUsage() -> Double? {
         guard let usage = currentUsage() else { return nil }
         if !hasSmoothedUsage {
@@ -1776,6 +1817,93 @@ private final class CPULoadMonitor {
 
         smoothedUsage = (smoothingAlpha * usage) + ((1 - smoothingAlpha) * smoothedUsage)
         return smoothedUsage
+    }
+
+    // Which half of the chip is busy, from the per-CPU array the whole-machine figure is already
+    // summing — a different question from "how busy is the CPU", and a different thermal future: four
+    // saturated E-cores and four saturated P-cores both read 35% on the row above.
+    //
+    // The slice is by PUBLISHED cluster membership, not by index order. IODeviceTree gives each cpu
+    // node a `cluster-type` of "E" or "P" alongside its `logical-cpu-id`, which is the index into the
+    // Mach array. Do not infer the grouping from `hw.perflevel<n>.logicalcpu` instead: measured on an
+    // M4 Max, perflevel0 IS Performance (12 cores) while the Mach order is E-FIRST (cpu0–3 are the E
+    // cluster), so slicing the first perflevel0 entries as P reports the E cluster's load as P — a
+    // plausible number, wrong, and invisible to review.
+    //
+    // Verified against IOReport's own per-core residency (group "CPU Stats", subgroup "CPU Core
+    // Performance States") in the same window on 2026-09-20: under a pinned background-QoS load
+    // P 3.2% / E 100.0% here against P 3.6% / E 100.0% there, and under a plain spin P 68.4% / E 26.9%
+    // against P 68.6% / E 28.9%. Within a couple of points, for no syscall at all — which is why this
+    // reads the array already in hand rather than opening a second IOReport subscription on the
+    // default source's every tick.
+    private func sampleClusters(_ perCPU: [CPUTicks]) {
+        guard !clusterIndices.performance.isEmpty || !clusterIndices.efficiency.isEmpty else { return }
+        let previous = lastClusterTicks
+        lastClusterTicks = Dictionary(uniqueKeysWithValues: perCPU.enumerated().map { ($0.offset, $0.element) })
+        guard !previous.isEmpty else { return }
+
+        func busy(_ indices: [Int]) -> Double? {
+            var total: UInt64 = 0
+            var idle: UInt64 = 0
+            for index in indices {
+                guard index < perCPU.count, let before = previous[index] else { return nil }
+                total &+= perCPU[index].total &- before.total
+                idle &+= perCPU[index].idle &- before.idle
+            }
+            guard total > 0, idle <= total else { return nil }
+            return Double(total - idle) / Double(total)
+        }
+
+        smoothedPerformanceUsage = smooth(busy(clusterIndices.performance), into: smoothedPerformanceUsage)
+        smoothedEfficiencyUsage = smooth(busy(clusterIndices.efficiency), into: smoothedEfficiencyUsage)
+    }
+
+    private func smooth(_ sample: Double?, into previous: Double?) -> Double? {
+        guard let sample else { return previous }
+        guard let previous else { return sample }
+        return (smoothingAlpha * sample) + ((1 - smoothingAlpha) * previous)
+    }
+
+    // Read once, at the first sample. Every CPU is an IOPlatformDevice carrying both properties;
+    // anything that carries neither is not a CPU node and is skipped, which is also how this comes
+    // back empty (and the split unavailable) on hardware that does not publish the map.
+    private static func readClusterIndices() -> (performance: [Int], efficiency: [Int]) {
+        var performance: [Int] = []
+        var efficiency: [Int] = []
+        guard let matching = IOServiceMatching("IOPlatformDevice") else { return ([], []) }
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
+            return ([], [])
+        }
+        defer { IOObjectRelease(iterator) }
+        var entry = IOIteratorNext(iterator)
+        while entry != 0 {
+            defer {
+                IOObjectRelease(entry)
+                entry = IOIteratorNext(iterator)
+            }
+            guard let rawType = IORegistryEntryCreateCFProperty(
+                    entry, "cluster-type" as CFString, kCFAllocatorDefault, 0
+                  )?.takeRetainedValue(),
+                  let rawIndex = IORegistryEntryCreateCFProperty(
+                    entry, "logical-cpu-id" as CFString, kCFAllocatorDefault, 0
+                  )?.takeRetainedValue(),
+                  let index = (rawIndex as? NSNumber)?.intValue else { continue }
+            // The property is a one-character device-tree blob on Apple Silicon; accept a string too
+            // rather than depend on which of the two a future OS hands back.
+            let type: String?
+            if let data = rawType as? Data {
+                type = String(bytes: data.prefix { $0 != 0 }, encoding: .utf8)
+            } else {
+                type = rawType as? String
+            }
+            switch type {
+            case "P": performance.append(index)
+            case "E": efficiency.append(index)
+            default: continue
+            }
+        }
+        return (performance.sorted(), efficiency.sorted())
     }
 
     private func currentUsage() -> Double? {
@@ -1800,6 +1928,8 @@ private final class CPULoadMonitor {
         var totalTicks: UInt64 = 0
         var idleTicks: UInt64 = 0
         let stride = Int(CPU_STATE_MAX)
+        var perCPU: [CPUTicks] = []
+        perCPU.reserveCapacity(Int(cpuCount))
 
         for cpu in 0..<Int(cpuCount) {
             let base = cpu * stride
@@ -1808,9 +1938,13 @@ private final class CPULoadMonitor {
             let nice = UInt64(cpuInfo[base + Int(CPU_STATE_NICE)])
             let idle = UInt64(cpuInfo[base + Int(CPU_STATE_IDLE)])
 
+            perCPU.append(CPUTicks(total: user + system + nice + idle, idle: idle))
             totalTicks += user + system + nice + idle
             idleTicks += idle
         }
+        // Before the whole-machine guard below: the split keeps its own baseline, and must warm up on
+        // the same tick rather than one later.
+        sampleClusters(perCPU)
 
         defer {
             lastTotalTicks = totalTicks
@@ -1954,10 +2088,22 @@ private final class MemoryLoadMonitor {
 @MainActor
 private final class GPULoadMonitor {
     private(set) var currentUtilization: Double = 0
+    // The two pipeline halves behind the device figure, from the same dictionary and the same
+    // accelerator: Renderer is shading and compute work, Tiler is the geometry/binning stage a
+    // tile-based GPU runs ahead of it. nil — never 0 — on a driver that publishes the device figure
+    // without them; a 0 here is a real reading and means that half was idle.
+    private(set) var currentRendererUtilization: Double?
+    private(set) var currentTilerUtilization: Double?
     private(set) var hasSample = false
     // Availability probed once and cached: a machine with no readable accelerator disables the source.
     private var availabilityChecked = false
     private var available = false
+
+    private struct Reading {
+        var device: Double
+        var renderer: Double?
+        var tiler: Double?
+    }
 
     var isAvailable: Bool {
         if !availabilityChecked {
@@ -1968,26 +2114,28 @@ private final class GPULoadMonitor {
     }
 
     func sampleUsage() -> Double? {
-        guard let util = readUtilization() else {
+        guard let reading = readUtilization() else {
             hasSample = false
             return nil
         }
-        currentUtilization = util
+        currentUtilization = reading.device
+        currentRendererUtilization = reading.renderer
+        currentTilerUtilization = reading.tiler
         hasSample = true
-        return util
+        return reading.device
     }
 
     // Max "Device Utilization %" across matched accelerators. The IOClass is HW-specific
     // (e.g. AGXAcceleratorG16X on Apple Silicon), so match the provider class "IOAccelerator" first,
     // then fall back to "AGXAccelerator".
-    private func readUtilization() -> Double? {
+    private func readUtilization() -> Reading? {
         for matchKey in ["IOAccelerator", "AGXAccelerator"] {
-            if let util = readUtilization(matching: matchKey) { return util }
+            if let reading = readUtilization(matching: matchKey) { return reading }
         }
         return nil
     }
 
-    private func readUtilization(matching className: String) -> Double? {
+    private func readUtilization(matching className: String) -> Reading? {
         guard let matching = IOServiceMatching(className) else { return nil }
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
@@ -1995,7 +2143,7 @@ private final class GPULoadMonitor {
         }
         defer { IOObjectRelease(iterator) }
 
-        var best: Double?
+        var best: Reading?
         var entry = IOIteratorNext(iterator)
         while entry != 0 {
             defer {
@@ -2005,12 +2153,24 @@ private final class GPULoadMonitor {
             guard let prop = IORegistryEntryCreateCFProperty(
                 entry, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0
             ) else { continue }
+            // An entry with no device figure is not a usable accelerator — skipped entirely rather
+            // than counted as an idle one, which would drag the max down on a machine that has both.
             guard let stats = prop.takeRetainedValue() as? [String: Any],
                   let pct = (stats["Device Utilization %"] as? NSNumber)?.doubleValue else { continue }
-            let util = min(max(pct / Tuning.percentScale, 0), 1)
-            best = max(best ?? 0, util)
+            let reading = Reading(
+                device: Self.fraction(pct),
+                // Taken from the WINNING entry, not maxed independently: the three figures describe
+                // one accelerator's pipeline, and mixing two GPUs' halves would describe neither.
+                renderer: (stats["Renderer Utilization %"] as? NSNumber).map { Self.fraction($0.doubleValue) },
+                tiler: (stats["Tiler Utilization %"] as? NSNumber).map { Self.fraction($0.doubleValue) }
+            )
+            if reading.device >= (best?.device ?? -1) { best = reading }
         }
         return best
+    }
+
+    private static func fraction(_ percent: Double) -> Double {
+        min(max(percent / Tuning.percentScale, 0), 1)
     }
 }
 
@@ -2793,107 +2953,61 @@ enum BatteryDiagnosticsReader {
     }
 }
 
-// Apple Neural Engine power as a 0…1 load — the one reader that can answer "is the NPU busy?".
-// Neither CPU nor GPU can: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
-// Vision) runs on the Neural Engine while both of those sit near idle, so every other source here
-// reports a quiet machine while it is working hard. Measured on an M4 Max: a hard 0 W while the NPU
-// is power-gated, 0.24–0.32 W under Vision text recognition, and 1.4–3.7 W under image-featureprint,
-// saliency, and body-pose inference.
+// One binding of /usr/lib/libIOReport.dylib, shared by every reader built on it — the Neural
+// Engine's energy rail and the DRAM bus's residency histogram. Two readers, one dlopen: a second
+// would work, but it would also leave two copies of the symbol list to keep in step, and this is
+// the only place in the file where a missing symbol has to degrade rather than trap.
 //
-// This is the ONLY reader built on a private, unheadered API, and it stays inside the unprivileged
-// tenet: IOReport is the same user-space interface `powermetrics` reads energy from — no root, no
-// kext, no entitlement — it simply ships no header. So the entry points are bound with dlopen/dlsym
-// behind @convention(c) signatures, and every failure along that path degrades to
-// isAvailable == false, never a trap. The dylib path is deliberate and not the documented-anywhere
-// one: as of macOS 26 there is no IOReport.framework on disk OR in the dyld shared cache, so dlopen
-// of the framework path fails outright — the symbols ship in /usr/lib/libIOReport.dylib.
+// This is the ONLY private, unheadered API in the app, and it stays inside the unprivileged tenet:
+// IOReport is the same user-space interface `powermetrics` reads from — no root, no kext, no
+// entitlement — it simply ships no header. So the entry points are bound with dlopen/dlsym behind
+// @convention(c) signatures, and every failure along that path degrades to a nil client, never a
+// trap. The dylib path is deliberate and not the documented-anywhere one: as of macOS 26 there is no
+// IOReport.framework on disk OR in the dyld shared cache, so dlopen of the framework path fails
+// outright — the symbols ship in /usr/lib/libIOReport.dylib.
 //
-// Unlike every other reader, IOReport is a STATEFUL DELTA API rather than a point read: one
-// subscription is opened over the "Energy Model" channel group for the life of the process, and a
-// reading is the difference between two samples. The ANE channel accumulates ENERGY (millijoules),
-// so power is ΔE/Δt — making this a counter-delta source with a one-tick warm-up, structurally the
-// same as Disk and Network. Sleep needs no special case: `elapsed` comes from systemUptime, which
-// does not advance while the machine is asleep, and neither does the energy counter.
+// Unlike every other reader here, IOReport is a STATEFUL DELTA API rather than a point read: a
+// subscription is opened over a channel group for the life of the process, and a reading is the
+// difference between two samples. Both shapes of channel come through the same delta — a SIMPLE
+// channel carries one accumulated integer (the ANE's millijoules), a STATE channel carries a
+// residency histogram (the bus's time-per-bandwidth-bucket).
 @MainActor
-private final class ANELoadMonitor {
-    private(set) var currentWatts: Double = 0
-    private(set) var currentLoad: Double = 0
-    private(set) var hasSample = false
-    // Watts are unbounded and vary by chip tier, so the reading normalizes through the same adaptive
-    // scaler as the other rate sources instead of against a hardcoded per-chip cap.
-    private var scaler = ThroughputScaler(floor: Tuning.aneFloorWatts)
-    private var probed = false
-    private var binding: Binding?
-    private var previousSample: CFDictionary?
-
-    // The "Energy Model" group's channel name for the Neural Engine rail, and the key every IOReport
-    // dictionary (channel lists, samples, deltas alike) stores its channel array under.
-    private static let aneChannelName = "ANE"
-    private static let energyGroup = "Energy Model"
-    private static let channelsKey = "IOReportChannels"
-
-    private typealias CopyChannelsInGroup = @convention(c)
+private final class IOReportClient {
+    typealias CopyChannelsInGroup = @convention(c)
         (CFString?, CFString?, UInt64, UInt64, UInt64) -> Unmanaged<CFMutableDictionary>?
-    private typealias CreateSubscription = @convention(c)
+    typealias CreateSubscription = @convention(c)
         (UnsafeMutableRawPointer?, CFMutableDictionary,
          UnsafeMutablePointer<Unmanaged<CFMutableDictionary>?>?, UInt64, CFTypeRef?) -> UnsafeMutableRawPointer?
-    private typealias CreateSamples = @convention(c)
+    typealias CreateSamples = @convention(c)
         (UnsafeMutableRawPointer, CFMutableDictionary, CFTypeRef?) -> Unmanaged<CFDictionary>?
-    private typealias CreateSamplesDelta = @convention(c)
+    typealias CreateSamplesDelta = @convention(c)
         (CFDictionary, CFDictionary, CFTypeRef?) -> Unmanaged<CFDictionary>?
-    private typealias ChannelGetString = @convention(c) (CFDictionary) -> Unmanaged<CFString>?
-    private typealias SimpleGetIntegerValue = @convention(c) (CFDictionary, Int32) -> Int64
+    typealias ChannelGetString = @convention(c) (CFDictionary) -> Unmanaged<CFString>?
+    typealias SimpleGetIntegerValue = @convention(c) (CFDictionary, Int32) -> Int64
+    typealias StateGetCount = @convention(c) (CFDictionary) -> Int32
+    typealias StateGetNameForIndex = @convention(c) (CFDictionary, Int32) -> Unmanaged<CFString>?
+    typealias StateGetResidency = @convention(c) (CFDictionary, Int32) -> Int64
 
-    // Everything the per-tick read needs, resolved exactly once. Holding it as one optional value
-    // makes "bound and subscribed" a single state: non-nil IS availability.
-    private struct Binding {
-        let createSamples: CreateSamples
-        let createSamplesDelta: CreateSamplesDelta
-        let channelName: ChannelGetString
-        let unitLabel: ChannelGetString
-        let integerValue: SimpleGetIntegerValue
-        // The subscription and the two dictionaries it was opened against live for the life of the
-        // process, exactly like SMCClient's io_connect_t. Retained here rather than dropped so the
-        // ownership is stated, not implied.
-        let channels: CFMutableDictionary
-        let subscribedChannels: CFMutableDictionary
-        let subscription: UnsafeMutableRawPointer
-    }
+    // nil on an Intel Mac, on a toolchain where a symbol has moved, or anywhere the dylib is absent.
+    // Resolved once: "the library is bound" IS non-nil, so no reader carries its own probe flag for it.
+    static let shared: IOReportClient? = IOReportClient()
 
-    var isAvailable: Bool { ensureBound() != nil }
+    // The key every IOReport dictionary — channel lists, samples, deltas alike — stores its channel
+    // array under.
+    private static let channelsKey = "IOReportChannels"
 
-    func sampleUsage(elapsed: Double?) -> Double? {
-        guard let binding = ensureBound(),
-              let sample = binding.createSamples(binding.subscription, binding.channels, nil)?
-                                  .takeRetainedValue() else {
-            hasSample = false
-            return nil
-        }
-        // Advance the baseline on every path, including the ones that produce no reading — a skipped
-        // tick must not make the next delta span two intervals.
-        defer { previousSample = sample }
-        guard let elapsed, elapsed > 0, let previous = previousSample,
-              let delta = binding.createSamplesDelta(previous, sample, nil)?.takeRetainedValue(),
-              let watts = Self.aneWatts(in: delta, elapsed: elapsed, binding: binding) else {
-            currentWatts = 0
-            hasSample = false
-            return nil
-        }
-        currentWatts = watts
-        hasSample = true
-        currentLoad = scaler.normalize(speed: watts)
-        return currentLoad
-    }
+    private let copyChannelsInGroup: CopyChannelsInGroup
+    private let createSubscription: CreateSubscription
+    fileprivate let createSamples: CreateSamples
+    fileprivate let createSamplesDelta: CreateSamplesDelta
+    private let channelNameOf: ChannelGetString
+    private let unitLabelOf: ChannelGetString
+    private let integerValueOf: SimpleGetIntegerValue
+    private let stateCountOf: StateGetCount
+    private let stateNameOf: StateGetNameForIndex
+    private let stateResidencyOf: StateGetResidency
 
-    private func ensureBound() -> Binding? {
-        if !probed {
-            probed = true
-            binding = Self.bind()
-        }
-        return binding
-    }
-
-    private static func bind() -> Binding? {
+    private init?() {
         guard let image = dlopen("/usr/lib/libIOReport.dylib", RTLD_LAZY) else { return nil }
         func entry<T>(_ name: String, _ type: T.Type) -> T? {
             guard let symbol = dlsym(image, name) else { return nil }
@@ -2905,53 +3019,183 @@ private final class ANELoadMonitor {
               let createSamplesDelta = entry("IOReportCreateSamplesDelta", CreateSamplesDelta.self),
               let channelName = entry("IOReportChannelGetChannelName", ChannelGetString.self),
               let unitLabel = entry("IOReportChannelGetUnitLabel", ChannelGetString.self),
-              let integerValue = entry("IOReportSimpleGetIntegerValue", SimpleGetIntegerValue.self) else {
+              let integerValue = entry("IOReportSimpleGetIntegerValue", SimpleGetIntegerValue.self),
+              let stateCount = entry("IOReportStateGetCount", StateGetCount.self),
+              let stateName = entry("IOReportStateGetNameForIndex", StateGetNameForIndex.self),
+              let stateResidency = entry("IOReportStateGetResidency", StateGetResidency.self) else {
             return nil
         }
-        // Intel Macs and anything without the group answer nil here; an Apple Silicon Mac hands back
-        // its whole energy channel list (328 rows on an M4 Max).
-        guard let group = copyChannelsInGroup(energyGroup as CFString, nil, 0, 0, 0)?.takeRetainedValue(),
-              let rows = (group as NSDictionary)[channelsKey] as? [NSDictionary] else { return nil }
-        // Subscribe to the ANE row alone. The group cannot be narrowed by subgroup (every energy row
-        // reports an empty one), so the desired-channel list is filtered by hand. This is a modest
-        // win, not a large one — measured 3.6 ms → 2.8 ms per sample+delta, because the cost is the
-        // kernel round trip rather than the row count — but it also makes the per-tick scan a single
-        // row and states in code exactly which rail this reader is allowed to see.
-        let aneRows = rows.filter { name(of: $0, channelName) == aneChannelName }
-        guard !aneRows.isEmpty else { return nil }
-        let desired = NSMutableDictionary(dictionary: group as NSDictionary)
-        desired[channelsKey] = aneRows
+        self.copyChannelsInGroup = copyChannelsInGroup
+        self.createSubscription = createSubscription
+        self.createSamples = createSamples
+        self.createSamplesDelta = createSamplesDelta
+        self.channelNameOf = channelName
+        self.unitLabelOf = unitLabel
+        self.integerValueOf = integerValue
+        self.stateCountOf = stateCount
+        self.stateNameOf = stateName
+        self.stateResidencyOf = stateResidency
+    }
+
+    // Open a subscription over exactly the rows of one group (optionally narrowed to one subgroup)
+    // whose channel name passes `keeping`, and nil when none does — which is how both readers probe
+    // their own availability.
+    //
+    // Filtering the desired-channel list by hand is not cosmetic. A group is wide: "Energy Model" is
+    // 328 rows on an M4 Max and "PMP"/"DCS BW" is 94, and the per-sample cost is the kernel round
+    // trip over the subscribed set — measured here at ~10 ms for the whole DCS BW group against
+    // ~3 ms for a single row. Subscribing to one row also states in code exactly which rail a reader
+    // is allowed to see.
+    func subscribe(group: String, subgroup: String? = nil, keeping: (String) -> Bool) -> IOReportSubscription? {
+        guard let all = copyChannelsInGroup(group as CFString, subgroup as CFString?, 0, 0, 0)?.takeRetainedValue(),
+              let rows = (all as NSDictionary)[Self.channelsKey] as? [NSDictionary] else { return nil }
+        let wanted = rows.filter { row in name(of: row).map(keeping) ?? false }
+        guard !wanted.isEmpty else { return nil }
+        let desired = NSMutableDictionary(dictionary: all as NSDictionary)
+        desired[Self.channelsKey] = wanted
         let channels = desired as CFMutableDictionary
         // The subscribed-channels out-parameter is NOT optional in practice: pass nil and
         // IOReportCreateSubscription returns nil on hardware that supports it perfectly well, which
-        // would read as "no Neural Engine" on every Apple Silicon Mac.
+        // would read as "no such rail" on every Apple Silicon Mac.
         var subscribed: Unmanaged<CFMutableDictionary>?
-        guard let subscription = createSubscription(nil, channels, &subscribed, 0, nil),
+        guard let handle = createSubscription(nil, channels, &subscribed, 0, nil),
               let subscribedChannels = subscribed?.takeRetainedValue() else { return nil }
-        return Binding(
-            createSamples: createSamples,
-            createSamplesDelta: createSamplesDelta,
-            channelName: channelName,
-            unitLabel: unitLabel,
-            integerValue: integerValue,
-            channels: channels,
-            subscribedChannels: subscribedChannels,
-            subscription: subscription
+        return IOReportSubscription(
+            client: self, channels: channels, subscribedChannels: subscribedChannels, handle: handle
         )
     }
 
-    private static func name(of row: NSDictionary, _ channelName: ChannelGetString) -> String? {
-        channelName(row as CFDictionary)?.takeUnretainedValue() as String?
+    // Row accessors. Each reader picks its own rows out of a delta by name, so these are the whole
+    // vocabulary a reader needs and none of them knows what a rail means.
+    func rows(in dictionary: CFDictionary) -> [NSDictionary]? {
+        (dictionary as NSDictionary)[Self.channelsKey] as? [NSDictionary]
+    }
+
+    func name(of row: NSDictionary) -> String? {
+        channelNameOf(row as CFDictionary)?.takeUnretainedValue() as String?
+    }
+
+    func unit(of row: NSDictionary) -> String {
+        (unitLabelOf(row as CFDictionary)?.takeUnretainedValue() as String?) ?? ""
+    }
+
+    func integerValue(of row: NSDictionary) -> Int64 {
+        integerValueOf(row as CFDictionary, 0)
+    }
+
+    // A state channel's residency histogram, in channel order — the order carries meaning for the
+    // bus reader, whose bucket midpoints come from consecutive edges.
+    func residencies(of row: NSDictionary) -> [(state: String, ticks: Int64)] {
+        let channel = row as CFDictionary
+        let count = stateCountOf(channel)
+        var out: [(state: String, ticks: Int64)] = []
+        out.reserveCapacity(Int(count))
+        for index in 0..<count {
+            let state = (stateNameOf(channel, index)?.takeUnretainedValue() as String?) ?? ""
+            out.append((state, stateResidencyOf(channel, index)))
+        }
+        return out
+    }
+}
+
+// One open subscription, and the two dictionaries it was opened against. All three live for the life
+// of the process, exactly like SMCClient's io_connect_t — retained here rather than dropped so the
+// ownership is stated, not implied.
+@MainActor
+private final class IOReportSubscription {
+    let client: IOReportClient
+    private let channels: CFMutableDictionary
+    private let subscribedChannels: CFMutableDictionary
+    private let handle: UnsafeMutableRawPointer
+
+    fileprivate init(
+        client: IOReportClient,
+        channels: CFMutableDictionary,
+        subscribedChannels: CFMutableDictionary,
+        handle: UnsafeMutableRawPointer
+    ) {
+        self.client = client
+        self.channels = channels
+        self.subscribedChannels = subscribedChannels
+        self.handle = handle
+    }
+
+    func sample() -> CFDictionary? {
+        client.createSamples(handle, channels, nil)?.takeRetainedValue()
+    }
+
+    func delta(from previous: CFDictionary, to current: CFDictionary) -> CFDictionary? {
+        client.createSamplesDelta(previous, current, nil)?.takeRetainedValue()
+    }
+}
+
+// Apple Neural Engine power as a 0…1 load — the one reader that can answer "is the NPU busy?".
+// Neither CPU nor GPU can: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
+// Vision) runs on the Neural Engine while both of those sit near idle, so every other source here
+// reports a quiet machine while it is working hard. Measured on an M4 Max: a hard 0 W while the NPU
+// is power-gated, 0.24–0.32 W under Vision text recognition, and 1.4–3.7 W under image-featureprint,
+// saliency, and body-pose inference.
+//
+// The ANE channel accumulates ENERGY (millijoules), so power is ΔE/Δt — a counter-delta source with
+// a one-tick warm-up, structurally the same as Disk and Network. Sleep needs no special case:
+// `elapsed` comes from systemUptime, which does not advance while the machine is asleep, and neither
+// does the energy counter.
+@MainActor
+private final class ANELoadMonitor {
+    private(set) var currentWatts: Double = 0
+    private(set) var currentLoad: Double = 0
+    private(set) var hasSample = false
+    // Watts are unbounded and vary by chip tier, so the reading normalizes through the same adaptive
+    // scaler as the other rate sources instead of against a hardcoded per-chip cap.
+    private var scaler = ThroughputScaler(floor: Tuning.aneFloorWatts)
+    private var probed = false
+    private var subscription: IOReportSubscription?
+    private var previousSample: CFDictionary?
+
+    // The "Energy Model" group's channel name for the Neural Engine rail.
+    private static let channelName = "ANE"
+    private static let energyGroup = "Energy Model"
+
+    var isAvailable: Bool { ensureSubscribed() != nil }
+
+    func sampleUsage(elapsed: Double?) -> Double? {
+        guard let subscription = ensureSubscribed(), let sample = subscription.sample() else {
+            hasSample = false
+            return nil
+        }
+        // Advance the baseline on every path, including the ones that produce no reading — a skipped
+        // tick must not make the next delta span two intervals.
+        defer { previousSample = sample }
+        guard let elapsed, elapsed > 0, let previous = previousSample,
+              let delta = subscription.delta(from: previous, to: sample),
+              let watts = Self.watts(in: delta, elapsed: elapsed, client: subscription.client) else {
+            currentWatts = 0
+            hasSample = false
+            return nil
+        }
+        currentWatts = watts
+        hasSample = true
+        currentLoad = scaler.normalize(speed: watts)
+        return currentLoad
+    }
+
+    private func ensureSubscribed() -> IOReportSubscription? {
+        if !probed {
+            probed = true
+            // The group cannot be narrowed by subgroup — every energy row reports an empty one — so
+            // the single ANE row is picked out by name.
+            subscription = IOReportClient.shared?.subscribe(group: Self.energyGroup) { $0 == Self.channelName }
+        }
+        return subscription
     }
 
     // Pull the ANE row out of a delta and turn its accumulated energy into watts. nil — never a
     // fabricated 0 — when the row or its unit is not what this reader knows how to read; a genuine
     // 0 is a real reading here, because the NPU is fully power-gated when idle.
-    private static func aneWatts(in delta: CFDictionary, elapsed: Double, binding: Binding) -> Double? {
-        guard let rows = (delta as NSDictionary)[channelsKey] as? [NSDictionary] else { return nil }
-        for row in rows where name(of: row, binding.channelName) == aneChannelName {
-            let unit = (binding.unitLabel(row as CFDictionary)?.takeUnretainedValue() as String?) ?? ""
-            guard let joules = joules(binding.integerValue(row as CFDictionary, 0), unit: unit) else { return nil }
+    private static func watts(in delta: CFDictionary, elapsed: Double, client: IOReportClient) -> Double? {
+        guard let rows = client.rows(in: delta) else { return nil }
+        for row in rows where client.name(of: row) == channelName {
+            guard let joules = joules(client.integerValue(of: row), unit: client.unit(of: row)) else { return nil }
             return max(joules / elapsed, 0)
         }
         return nil
@@ -2970,6 +3214,120 @@ private final class ANELoadMonitor {
     }
 }
 
+// DRAM bus bandwidth as a 0…1 load — the ceiling a local model actually runs into. The memory reader
+// next to it measures CAPACITY and PAGING, which is a different machine state entirely: during
+// inference a Mac can sit at 40% RAM with the bus saturated, and nothing else here would show it.
+// Measured on an M4 Max: 16 GB/s on an idle bus, 46–78 under ordinary desktop work, 233 under a
+// six-thread memcpy.
+//
+// The reading is a residency histogram, not a counter. The memory controller publishes time spent in
+// each bandwidth bucket, so the rate falls out of a weighted mean of the buckets and is ALREADY
+// GB/s — it is not divided by the sample interval the way the ANE's joules are. Two samples are
+// still needed (the histogram is differenced), so this warms up one tick like every other delta
+// source.
+@MainActor
+private final class BandwidthLoadMonitor {
+    private(set) var currentGigabytesPerSec: Double = 0
+    private(set) var currentLoad: Double = 0
+    private(set) var hasSample = false
+    // Unbounded, and the ceiling differs by an order of magnitude across chip tiers, so it normalizes
+    // through the adaptive scaler rather than a per-SoC table nobody could keep current.
+    private var scaler = ThroughputScaler(floor: Tuning.bandwidthFloorGBps)
+    private var probed = false
+    private var subscription: IOReportSubscription?
+    private var previousSample: CFDictionary?
+
+    // One AMCC row per memory-controller die, carrying that die's combined read+write histogram. The
+    // per-agent rows beside it (EACC/PACC/AGX/DISP…) are deliberately not read: they saturate at the
+    // bottom bucket and cannot attribute a high whole-chip rate.
+    private static let group = "PMP"
+    private static let subgroup = "DCS BW"
+    private static let channelPrefix = "AMCC"
+    private static let channelSuffix = "RD+WR"
+    private static let bucketUnit = "GB/s"
+
+    var isAvailable: Bool { ensureSubscribed() != nil }
+
+    func sampleUsage() -> Double? {
+        guard let subscription = ensureSubscribed(), let sample = subscription.sample() else {
+            hasSample = false
+            return nil
+        }
+        defer { previousSample = sample }
+        guard let previous = previousSample,
+              let delta = subscription.delta(from: previous, to: sample),
+              let gigabytesPerSec = Self.gigabytesPerSec(in: delta, client: subscription.client) else {
+            currentGigabytesPerSec = 0
+            hasSample = false
+            return nil
+        }
+        currentGigabytesPerSec = gigabytesPerSec
+        hasSample = true
+        currentLoad = scaler.normalize(speed: gigabytesPerSec)
+        return currentLoad
+    }
+
+    private func ensureSubscribed() -> IOReportSubscription? {
+        if !probed {
+            probed = true
+            subscription = IOReportClient.shared?.subscribe(group: Self.group, subgroup: Self.subgroup) {
+                $0.hasPrefix(Self.channelPrefix) && $0.hasSuffix(Self.channelSuffix)
+            }
+        }
+        return subscription
+    }
+
+    // Whole-chip rate: each die's mean computed on its own and the means SUMMED. Pooling every die's
+    // buckets into one mean would report a single controller's rate as the whole machine's.
+    private static func gigabytesPerSec(in delta: CFDictionary, client: IOReportClient) -> Double? {
+        guard let rows = client.rows(in: delta) else { return nil }
+        var total = 0.0
+        var answered = false
+        for row in rows {
+            guard let name = client.name(of: row),
+                  name.hasPrefix(channelPrefix), name.hasSuffix(channelSuffix),
+                  let mean = mean(of: client.residencies(of: row)) else { continue }
+            total += mean
+            answered = true
+        }
+        return answered ? total : nil
+    }
+
+    // One histogram's residency-weighted mean rate. A state's NAME is its bucket's UPPER edge
+    // (" 32GB/s", " 64GB/s", …, right-aligned by IOReport) and its value is the time spent there, so
+    // each bucket is represented by its MIDPOINT — the mean of its own edge and the previous one,
+    // with 0 below the first.
+    //
+    // Weighting by the upper edge instead pins an idle Mac at a flat 32 GB/s, because nearly all of
+    // its residency sits in the bottom bucket; that is the bug this shape exists to avoid, and the
+    // idle-vs-busy assertion in tests/qa.sh is what catches it coming back. Taking the midpoint from
+    // consecutive edges rather than assuming a fixed step also survives a chip that spaces its
+    // buckets differently.
+    private static func mean(of residencies: [(state: String, ticks: Int64)]) -> Double? {
+        var weighted = 0.0
+        var total = 0.0
+        var previousEdge = 0.0
+        for (state, ticks) in residencies {
+            guard ticks >= 0, let edge = bucketEdge(state) else { continue }
+            weighted += (previousEdge + edge) / 2 * Double(ticks)
+            previousEdge = edge
+            total += Double(ticks)
+        }
+        // A present-but-silent histogram is not a 0 GB/s reading, it is no reading at all.
+        guard total > 0 else { return nil }
+        return weighted / total
+    }
+
+    // " 32GB/s" → 32. nil for any state name that is not a bandwidth bucket, so a future group that
+    // mixes other states into the same channel contributes nothing rather than a wrong edge.
+    private static func bucketEdge(_ state: String) -> Double? {
+        let unpadded = state.drop { $0 == " " }
+        let digits = unpadded.prefix { $0.isNumber }
+        guard !digits.isEmpty, unpadded.dropFirst(digits.count).elementsEqual(bucketUnit) else { return nil }
+        return Double(digits)
+    }
+}
+
 // The color ramp direction for the trace chart. For utilization sources high = alert (green→red as
 // the value rises); for the battery fuel gauge low = alert (the ramp inverts).
 // One whole-machine reading in physical units — %, MiB/s, RPM, A, °C, W — as `--once` prints it.
@@ -2981,9 +3339,14 @@ private struct TelemetrySnapshot {
     static let version = 1
 
     var cpuPercent: Double?
+    var cpuPerformancePercent: Double?
+    var cpuEfficiencyPercent: Double?
     var memoryPercent: Double?
     var swapMiBPerSec: Double?
+    var bandwidthGBPerSec: Double?
     var gpuPercent: Double?
+    var gpuRendererPercent: Double?
+    var gpuTilerPercent: Double?
     var netRxMiBPerSec: Double?
     var netTxMiBPerSec: Double?
     var diskReadMiBPerSec: Double?
@@ -3007,9 +3370,14 @@ private struct TelemetrySnapshot {
             fields.append("\"\(key)\":" + String(format: "%.\(decimals)f", value))
         }
         add("cpu_pct", cpuPercent, decimals: 1)
+        add("cpu_p_pct", cpuPerformancePercent, decimals: 1)
+        add("cpu_e_pct", cpuEfficiencyPercent, decimals: 1)
         add("mem_pct", memoryPercent, decimals: 1)
         add("swap_mibs", swapMiBPerSec, decimals: 2)
+        add("bw_gbps", bandwidthGBPerSec, decimals: 1)
         add("gpu_pct", gpuPercent, decimals: 1)
+        add("gpu_rend_pct", gpuRendererPercent, decimals: 1)
+        add("gpu_tiler_pct", gpuTilerPercent, decimals: 1)
         add("net_rx_mibs", netRxMiBPerSec, decimals: 2)
         add("net_tx_mibs", netTxMiBPerSec, decimals: 2)
         add("disk_read_mibs", diskReadMiBPerSec, decimals: 2)
@@ -3047,6 +3415,7 @@ private final class TelemetryCore {
     let batteryMonitor = BatteryLoadMonitor()
     let temperatureMonitor = TemperatureLoadMonitor()
     let aneMonitor = ANELoadMonitor()
+    let bandwidthMonitor = BandwidthLoadMonitor()
 
     // Sample one specific reader, returning its 0…1 driving fraction. Used by the active-source read,
     // by the show-all-sources fan-out, by the baseline-priming pass, and by `snapshot()` — which
@@ -3063,6 +3432,9 @@ private final class TelemetryCore {
         case .battery: return batteryMonitor.sampleUsage()
         case .temperature: return temperatureMonitor.sampleUsage()
         case .ane: return aneMonitor.sampleUsage(elapsed: elapsed)
+        // No `elapsed`: the bus reading is a residency-weighted rate, already GB/s, so it needs two
+        // samples but not the gap between them.
+        case .bandwidth: return bandwidthMonitor.sampleUsage()
         }
     }
 
@@ -3084,6 +3456,7 @@ private final class TelemetryCore {
         case .battery: return batteryMonitor.isAvailable
         case .temperature: return temperatureMonitor.isAvailable
         case .ane: return aneMonitor.isAvailable
+        case .bandwidth: return bandwidthMonitor.isAvailable
         }
     }
 
@@ -3108,12 +3481,22 @@ private final class TelemetryCore {
         var snap = TelemetrySnapshot()
         // The kernel's own level, not a reader — always answers, on every Mac.
         snap.thermal = KernelThermalPressure.current()
-        if loadMonitor.hasSample { snap.cpuPercent = loadMonitor.smoothedUsage * Tuning.percentScale }
+        if loadMonitor.hasSample {
+            snap.cpuPercent = loadMonitor.smoothedUsage * Tuning.percentScale
+            // Absent, not 0, on a chip that publishes no cluster map — the whole-machine figure is
+            // still true there, so the split's absence is the only thing the consumer learns.
+            snap.cpuPerformancePercent = loadMonitor.smoothedPerformanceUsage.map { $0 * Tuning.percentScale }
+            snap.cpuEfficiencyPercent = loadMonitor.smoothedEfficiencyUsage.map { $0 * Tuning.percentScale }
+        }
         if memoryMonitor.hasSample { snap.memoryPercent = memoryMonitor.currentUsedFraction * Tuning.percentScale }
         if memoryMonitor.hasSwapRateSample {
             snap.swapMiBPerSec = memoryMonitor.currentSwapRateBytesPerSec / Tuning.bytesPerMiB
         }
-        if gpuMonitor.hasSample { snap.gpuPercent = gpuMonitor.currentUtilization * Tuning.percentScale }
+        if gpuMonitor.hasSample {
+            snap.gpuPercent = gpuMonitor.currentUtilization * Tuning.percentScale
+            snap.gpuRendererPercent = gpuMonitor.currentRendererUtilization.map { $0 * Tuning.percentScale }
+            snap.gpuTilerPercent = gpuMonitor.currentTilerUtilization.map { $0 * Tuning.percentScale }
+        }
         if networkMonitor.hasSample {
             snap.netRxMiBPerSec = networkMonitor.currentInboundBytesPerSec / Tuning.bytesPerMiB
             snap.netTxMiBPerSec = networkMonitor.currentOutboundBytesPerSec / Tuning.bytesPerMiB
@@ -3135,6 +3518,7 @@ private final class TelemetryCore {
         }
         if temperatureMonitor.hasSample { snap.temperatureCelsius = temperatureMonitor.currentCelsius }
         if aneMonitor.hasSample { snap.aneWatts = aneMonitor.currentWatts }
+        if bandwidthMonitor.hasSample { snap.bandwidthGBPerSec = bandwidthMonitor.currentGigabytesPerSec }
         return snap
     }
 
@@ -5091,6 +5475,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .battery: return telemetry.batteryMonitor.hasSample
         case .temperature: return telemetry.temperatureMonitor.hasSample
         case .ane: return telemetry.aneMonitor.hasSample
+        case .bandwidth: return telemetry.bandwidthMonitor.hasSample
         }
     }
 
@@ -5108,6 +5493,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .battery: return telemetry.batteryMonitor.currentLoad
         case .temperature: return telemetry.temperatureMonitor.currentLoad
         case .ane: return telemetry.aneMonitor.currentLoad
+        case .bandwidth: return telemetry.bandwidthMonitor.currentLoad
         }
     }
 
@@ -5260,7 +5646,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         switch activeLoadSource {
         case .cpu:
             if telemetry.loadMonitor.hasSample {
-                usageItem.title = MenuTitle.line(MenuTitle.cpuUsageQualified, String(format: "%.1f%%", telemetry.loadMonitor.smoothedUsage * Tuning.percentScale))
+                usageItem.title = cpuUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .cpu), cpuStateText(for: telemetry.loadMonitor.smoothedUsage))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — CPU %.0f%%, %@",
@@ -5289,7 +5675,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             }
         case .gpu:
             if telemetry.gpuMonitor.hasSample {
-                usageItem.title = MenuTitle.line(LoadSource.gpu.menuTitle, String(format: "%.0f%%", telemetry.gpuMonitor.currentUtilization * Tuning.percentScale))
+                usageItem.title = gpuUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .gpu), cpuStateText(for: telemetry.gpuMonitor.currentUtilization))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — GPU %.0f%%, %@",
@@ -5399,6 +5785,20 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .ane), MenuTitle.warmingUp)
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring neural engine load")
             }
+        case .bandwidth:
+            if telemetry.bandwidthMonitor.hasSample {
+                usageItem.title = bandwidthUsageLineText()
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .bandwidth), cpuStateText(for: telemetry.bandwidthMonitor.currentLoad))
+                statusItem.button?.setAccessibilityLabel(String(
+                    format: "MenuBar Load Runner — memory bandwidth %.1f gigabytes per second, %@",
+                    telemetry.bandwidthMonitor.currentGigabytesPerSec,
+                    cpuStateText(for: telemetry.bandwidthMonitor.currentLoad)
+                ))
+            } else {
+                usageItem.title = MenuTitle.line(LoadSource.bandwidth.menuTitle, MenuTitle.warmingUp)
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .bandwidth), MenuTitle.warmingUp)
+                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring memory bandwidth")
+            }
         }
 
         if isAutoSpeed {
@@ -5438,6 +5838,51 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         if memoryPressureLevel.contains(.critical) { return "Critical" }
         if memoryPressureLevel.contains(.warning) { return "Warning" }
         return "Normal"
+    }
+
+    // The CPU row carries the whole-machine figure the animation runs on, then WHICH HALF of the
+    // chip is carrying it — same number split two ways, so the clause is appended rather than given
+    // a row of its own. Omitted entirely where no cluster map exists: a machine that cannot answer
+    // says nothing, rather than showing two zeroes.
+    private func cpuUsageLineText() -> String {
+        var line = MenuTitle.line(
+            MenuTitle.cpuUsageQualified,
+            String(format: "%.1f%%", telemetry.loadMonitor.smoothedUsage * Tuning.percentScale)
+        )
+        if let performance = telemetry.loadMonitor.smoothedPerformanceUsage,
+           let efficiency = telemetry.loadMonitor.smoothedEfficiencyUsage {
+            line += String(
+                format: " · P %.0f%% · E %.0f%%",
+                performance * Tuning.percentScale,
+                efficiency * Tuning.percentScale
+            )
+        }
+        return line
+    }
+
+    // Same shape for the GPU: the device figure, then the two pipeline halves behind it, from the
+    // dictionary the device figure was already read out of. Either half missing drops the clause.
+    private func gpuUsageLineText() -> String {
+        var line = MenuTitle.line(
+            LoadSource.gpu.menuTitle,
+            String(format: "%.0f%%", telemetry.gpuMonitor.currentUtilization * Tuning.percentScale)
+        )
+        if let renderer = telemetry.gpuMonitor.currentRendererUtilization,
+           let tiler = telemetry.gpuMonitor.currentTilerUtilization {
+            line += String(
+                format: " · Renderer %.0f%% · Tiler %.0f%%",
+                renderer * Tuning.percentScale,
+                tiler * Tuning.percentScale
+            )
+        }
+        return line
+    }
+
+    private func bandwidthUsageLineText() -> String {
+        MenuTitle.line(
+            LoadSource.bandwidth.menuTitle,
+            String(format: "%.1f GB/s", telemetry.bandwidthMonitor.currentGigabytesPerSec)
+        )
     }
 
     private func memoryUsageLineText() -> String {
@@ -6159,8 +6604,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Every number goes through labelField, so each is padded to a constant width (see there) — the
     // reading is a fixed-width readout with the digits in columns, not a string that grows and shrinks.
     private func compactLabelText(for source: LoadSource) -> String {
-        let tag = source.menuTitle.prefix(3).uppercased()
-        guard activeSourceHasSample else { return "\(tag) …" }
+        guard activeSourceHasSample else { return "\(source.labelTag) …" }
         switch source {
         case .cpu:
             return "CPU \(Self.percentField(telemetry.loadMonitor.smoothedUsage))%"
@@ -6179,11 +6623,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .battery:
             return "BAT \(Self.percentField(telemetry.batteryMonitor.currentChargeFraction))%"
         case .temperature:
-            // "TMP", not the "TEM" that menuTitle.prefix(3) yields for the warming placeholder above —
-            // same small divergence disk already has (DIS while warming, DSK once reading).
             return "TMP \(Self.degreeField(telemetry.temperatureMonitor.currentCelsius))°"
         case .ane:
             return "ANE \(Self.wattField(telemetry.aneMonitor.currentWatts))W"
+        case .bandwidth:
+            // The one label that spells its unit out. GB/s next to a bare number would read as a
+            // percentage like the four above it, and the bus is the only source here measured in it.
+            return "BW \(Self.bandwidthField(telemetry.bandwidthMonitor.currentGigabytesPerSec)) GB/s"
         }
     }
 
@@ -6194,7 +6640,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     private func labelWidthTemplate(for source: LoadSource) -> String {
         switch source {
         case .cpu, .memory, .gpu, .fan, .battery:
-            return "\(source.menuTitle.prefix(3).uppercased()) \(Self.percentField(1))%"
+            return "\(source.labelTag) \(Self.percentField(1))%"
         case .network:
             return "NET ↓\(Self.rateField(Tuning.labelRateCeiling * Tuning.bytesPerMiB))"
                 + " ↑\(Self.rateField(Tuning.labelRateCeiling * Tuning.bytesPerMiB))"
@@ -6205,6 +6651,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             return "TMP \(Self.degreeField(Tuning.temperatureMaxPlausibleCelsius))°"
         case .ane:
             return "ANE \(Self.wattField(Tuning.labelWattCeiling))W"
+        case .bandwidth:
+            return "BW \(Self.bandwidthField(Tuning.labelBandwidthCeiling)) GB/s"
         }
     }
 
@@ -6226,6 +6674,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Watts to one decimal. Like the rate ceilings this bound is realistic rather than true — an M4
     // Max peaks near 3.7 W under sustained inference, so 9.9 leaves room without spending a digit of
     // slot width on every Mac; a bigger chip that exceeds it widens the slot for that tick.
+    // GB/s to one decimal. Same realistic-rather-than-true bound as the rate ceilings: 999.9 covers
+    // every Apple Silicon tier shipping today, and a machine that exceeds it widens the slot for
+    // that tick.
+    private static func bandwidthField(_ gigabytesPerSec: Double) -> String {
+        labelField(gigabytesPerSec, decimals: 1, ceiling: Tuning.labelBandwidthCeiling)
+    }
+
     private static func wattField(_ watts: Double) -> String {
         labelField(watts, decimals: 1, ceiling: Tuning.labelWattCeiling)
     }
@@ -6335,13 +6790,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         switch source {
         case .cpu:
             guard telemetry.loadMonitor.hasSample else { return warming }
-            return String(format: "CPU: %.1f%%", telemetry.loadMonitor.smoothedUsage * Tuning.percentScale)
+            return cpuUsageLineText()
         case .memory:
             guard telemetry.memoryMonitor.hasSample else { return warming }
             return memoryUsageLineText()
         case .gpu:
             guard telemetry.gpuMonitor.hasSample else { return warming }
-            return String(format: "GPU: %.0f%%", telemetry.gpuMonitor.currentUtilization * Tuning.percentScale)
+            return gpuUsageLineText()
         case .network:
             guard telemetry.networkMonitor.hasSample else { return warming }
             return networkUsageLineText()
@@ -6360,6 +6815,9 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         case .ane:
             guard telemetry.aneMonitor.hasSample else { return warming }
             return aneUsageLineText()
+        case .bandwidth:
+            guard telemetry.bandwidthMonitor.hasSample else { return warming }
+            return bandwidthUsageLineText()
         }
     }
 
