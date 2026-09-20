@@ -523,15 +523,20 @@ it goes through `ThroughputScaler` rather than a per-SoC table nobody could keep
 idle state to speak of** — display scanout and OS housekeeping keep it moving on a machine doing
 nothing — so unlike the network and disk floors this one is not there to reject a trickle, but to put
 a resting bus low in the range. Measured on an M4 Max: **16 GB/s** idle, **46–78** under ordinary
-desktop work, **233** under a six-thread `memcpy` (the histogram's residency reaching its 480 GB/s
-bucket). A floor at 150 leaves a resting bus near a tenth of the range and still lets real work
-rescale the ceiling past it.
+desktop work, **335** under eight threads streaming buffers far larger than cache (the histogram's
+residency reaching its 480 GB/s bucket). A floor at 150 leaves a resting bus near a tenth of the
+range and still lets real work rescale the ceiling past it.
 
 **What is measured and not asserted.** The midpoint weighting is verified by the idle-vs-loaded pair
 above, not by `tests/qa.sh`: its failure signature is an idle bus pinned near a bucket edge, which
 only separates from a true reading on a machine held idle — something a QA run on a working desktop
 cannot arrange. The suite asserts what it honestly can (the key's presence and a plausible range) and
 says so where it stops.
+
+> The load side of that pair needs a stressor that actually moves the bus, and the obvious one does
+> not: a `memcpy` loop whose destination is never read is dead-store-eliminated at `-O2`, leaving
+> threads spinning at 50% CPU over an idle bus. A first attempt here recorded that as a *measurement*
+> before the reading had been checked against a second implementation. Read the destination back.
 
 ### 4.9 GPU Utilization & the Pipeline Split (`GPULoadMonitor`)
 

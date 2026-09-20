@@ -51,8 +51,8 @@ of the public API and may change in any release.
   reader measures capacity and paging; during inference the limit is the bus, and a Mac can sit at
   40% RAM with the bus saturated — nothing in the app could show it. The reading comes from the
   memory controller's own residency histogram, so it is a true GB/s rate rather than a derived one.
-  Measured on an M4 Max: 16 GB/s idle, 46–78 under ordinary desktop work, 233 under a six-thread
-  `memcpy`. Menu bar reads `BW 185.2 GB/s`, menu row `Memory Bandwidth: 185.2 GB/s`, snapshot
+  Measured on an M4 Max: 16 GB/s idle, 46–78 under ordinary desktop work, 335 under eight threads
+  streaming buffers far larger than cache. Menu bar reads `BW 185.2 GB/s`, menu row `Memory Bandwidth: 185.2 GB/s`, snapshot
   `bw_gbps`. (R25)
 - **The CPU row now says which half of the chip is busy** — `CPU (smoothed): 35.2% · P 12% · E 78%`.
   Four saturated E-cores and four saturated P-cores both read 35% on the row above, and they are

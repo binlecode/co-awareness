@@ -435,9 +435,9 @@ private enum Tuning {
     // The bus is the one rate source with no idle state to speak of: display scanout and OS
     // housekeeping keep it moving even on a machine doing nothing, so the floor's job is to put that
     // resting traffic low in the range rather than to reject a trickle. Measured on an M4 Max
-    // 2026-09-20: an idle bus reads 16 GB/s, ordinary desktop work 46-78, and a six-thread memcpy
-    // 233 (the histogram's residency reaches its 480 GB/s bucket). A floor at 150 therefore leaves a
-    // resting bus near a tenth of the range and still lets real work rescale the ceiling up past it.
+    // 2026-09-20: an idle bus reads 16 GB/s, ordinary desktop work 46-78, and eight threads streaming
+    // buffers far larger than cache 335. A floor at 150 therefore leaves a resting bus near a tenth of
+    // the range and still lets real work rescale the ceiling up past it.
     static let bandwidthFloorGBps: Double = 150.0
 
     // Die temperature is a THIRD normalization category. It is bounded, like a percentage, but it is
@@ -3217,8 +3217,8 @@ private final class ANELoadMonitor {
 // DRAM bus bandwidth as a 0…1 load — the ceiling a local model actually runs into. The memory reader
 // next to it measures CAPACITY and PAGING, which is a different machine state entirely: during
 // inference a Mac can sit at 40% RAM with the bus saturated, and nothing else here would show it.
-// Measured on an M4 Max: 16 GB/s on an idle bus, 46–78 under ordinary desktop work, 233 under a
-// six-thread memcpy.
+// Measured on an M4 Max: 16 GB/s on an idle bus, 46–78 under ordinary desktop work, 335 under eight
+// threads streaming buffers far larger than cache.
 //
 // The reading is a residency histogram, not a counter. The memory controller publishes time spent in
 // each bandwidth bucket, so the rate falls out of a weighted mean of the buckets and is ALREADY
