@@ -8,6 +8,58 @@ launcher on 2026-09-20.
 
 ---
 
+## 0. The system after R24
+
+The topology once this is done, and what `docs/ARCHITECTURE.md` § 1 gets redrawn to on landing. Two
+entry paths, one set of readers, and nothing shared between the paths except the core.
+
+```
+                      +---------------------------------+
+                      |       menubar-load-runner       |
+                      |         (Zsh launcher)          |
+                      +---------------------------------+
+                                       |
+                       +---------------+---------------------+
+                       |  --once, intercepted first          |  GUI launch
+                       |  no guard, no compile               |  singleton -> compile -> detach
+                       v                                     v
+      +---------------------------------+   +---------------------------------+
+      | snapshot path                   |   | MenuBarLoadRunnerApp (GUI)      |
+      |                                 |   |                                 |
+      | sample, wait, sample again      |   | status items, menu, labels      |
+      | one JSON line, exit 0           |   | Keep Awake, state.json          |
+      |                                 |   | CADisplayLink game loop         |
+      | no NSApplication                |   | speed mapping 0..1              |
+      | no state.json                   |   |                                 |
+      +---------------------------------+   +---------------------------------+
+                       |                                     |
+                       +---------------+---------------------+
+                                       v
+              +--------------------------------------------------+
+              | TelemetryCore                                    |
+              |                                                  |
+              | the nine readers, their probes and scalers       |
+              | one snapshot(), physical units only              |
+              |                                                  |
+              | not its business: AppKit, speed mapping,         |
+              | Keep Awake, state.json                           |
+              +--------------------------------------------------+
+                                       |
+         +-----------------+-----------+-----+-----------------+
+         v                 v                 v                 v
+  +---------------+ +---------------+ +---------------+ +---------------+
+  | Mach          | | IOKit         | | SMCClient     | | IOReport      |
+  | CPU, memory   | | GPU, disk,    | | fan, die      | | ANE watts     |
+  |               | | network,      | | temperature   | |               |
+  |               | | battery       | |               | |               |
+  +---------------+ +---------------+ +---------------+ +---------------+
+```
+
+Read it as two claims. **Downward:** nothing above the core can be reached from below — a reader cannot
+ask what the menu is showing or whether Keep Awake is armed. **Sideways:** the two paths never meet. The
+snapshot path builds no `NSApplication` and touches no file, which is what lets it run beside a live GUI
+instance, in parallel with itself, over SSH, with nothing to lock.
+
 ## 1. What is wrong
 
 Nine unprivileged readers run inside an app that has to be on screen to answer. A script, `co-cli`, or an
@@ -31,34 +83,6 @@ are how a rate reader produces its own number) while the snapshot carries only w
 
 **The core never reads or writes `state.json`.** A snapshot describes the machine, not this app's
 intent, and a second writer would break the single-writer model (`ARCHITECTURE.md` § 8.2).
-
-```
-              GUI launch                          --once
-                  |                                  |
-                  v                                  v
-      +-----------------------+          +------------------------+
-      | launcher              |          | launcher               |
-      | singleton guard       |          | exec, no guard,        |
-      | compile_if_stale      |          | no compile, no detach  |
-      | detach                |          +-----------+------------+
-      +-----------+-----------+                      |
-                  |                                  |
-                  v                                  v
-      +-----------------------+          +------------------------+
-      | MenuBarLoadRunnerApp  |          | snapshot path          |
-      | NSApplication.run()   |          | sample, wait, sample,  |
-      | status items, menu,   |          | print one line, exit 0 |
-      | Keep Awake, state.json|          | no NSApplication       |
-      +-----------+-----------+          +-----------+------------+
-                  |                                  |
-                  +---------------+------------------+
-                                  v
-                       +---------------------+
-                       |   TelemetryCore     |
-                       |  Mach · IOKit · SMC |
-                       |  · IOReport         |
-                       +---------------------+
-```
 
 ## 3. Interface
 

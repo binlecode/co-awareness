@@ -11,6 +11,36 @@ three readings in `~/workspace_fullstack/actop`.
 
 ---
 
+## 0. Where the three readings attach
+
+R25 changes the shape of the core in exactly one place: the IOReport binding stops belonging to the ANE
+reader and becomes something both readers hold. Everything else hangs off acquisition points that are
+already there.
+
+```
+                      +--------------------------------------+
+                      |         TelemetryCore (R24)          |
+                      +--------------------------------------+
+                                         |
+                   +---------------------+---------------------+
+                   v                     v                     v
+        +---------------------+  +---------------+  +---------------------+
+        | IOReportClient      |  | Mach ticks    |  | IOAccelerator       |
+        | one dlopen, shared  |  | cluster slice |  | PerformanceStatis-  |
+        | by both readers     |  |               |  | tics, already read  |
+        +---------------------+  +---------------+  +---------------------+
+             |           |               |                     |
+             v           v               v                     v
+           ANE W      BW GB/s         P and E          Renderer / Tiler
+          (have)       (new)           (new)                 (new)
+```
+
+Three of the four arrows are new and only one box is: the GPU split costs no syscall, the cluster split
+costs a `sysctl` at most, and bandwidth is the one reading that needs the histogram half of IOReport —
+which is why the binding has to be shared rather than opened twice. The Mach column is provisional: § 3
+has not decided whether the cluster split arrives from there or from a second IOReport group, and that
+is the only structural question R25 still has open.
+
 ## 1. What is added, and what interface it costs
 
 Three readings the hardware already publishes to unprivileged callers.
