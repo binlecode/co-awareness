@@ -23,8 +23,8 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 established which invariant — is as-built and lives in `docs/ARCHITECTURE.md` § 12; a completed item's
 durable outcome moves there and its row leaves this file.
 
-The Open items sit on the same arc: R24/R25 let something other than a pair of eyes read what the
-readers already know; R9 extends preset identity beyond the repo.
+The Open items sit on the same arc: R25 deepens what the readers know, now that `--once` lets
+something other than a pair of eyes get at it; R9 extends preset identity beyond the repo.
 
 ## Open
 
@@ -34,9 +34,8 @@ in the linked plan — never restated here.
 
 | ID | Item | Pri | Blocked by |
 |---|---|---|---|
-| R24 | **The readings exist but only a pair of eyes can get at them.** Nine unprivileged readers run behind a GUI that has to be on screen; nothing else on the machine — a script, `co-cli`, an agent about to start a long build — can ask what the hardware is doing. Extract the readers into a telemetry core the GUI owns but does not define, and add exactly one flag: `--once`, a single-line JSON snapshot of every available source, then exit. One flag, one schema, one sampling window, no `NSApplication`, no `state.json`, no launcher singleton or compile. Module boundary, snapshot contract and parameter table: [`PLAN-telemetry-core-and-snapshot.md`](PLAN-telemetry-core-and-snapshot.md). | P2 | — |
-| R25 | **Three readings the hardware publishes and the app does not take.** DRAM bus bandwidth — the actual ceiling during local LLM inference, invisible to a RAM-capacity reader; the CPU P/E cluster split, which says *which half* of the chip is busy; the GPU Renderer/Tiler split. Bandwidth is a new `--load-source` enum value, the other two are fields on rows that already exist — no new flags. Mechanisms, the one unverified assumption and its probe: [`PLAN-telemetry-depth.md`](PLAN-telemetry-depth.md). | P3 | R24 |
-| R26 | **Rename to `co-load-runner`, retire `actop`.** A name and a public deprecation, not a capability. Held below (§ R26) with its cost, until the `--once` contract has a caller that actually exercises it. | P4 | R24, R25 |
+| R25 | **Three readings the hardware publishes and the app does not take.** DRAM bus bandwidth — the actual ceiling during local LLM inference, invisible to a RAM-capacity reader; the CPU P/E cluster split, which says *which half* of the chip is busy; the GPU Renderer/Tiler split. Bandwidth is a new `--load-source` enum value, the other two are fields on rows that already exist — no new flags. Mechanisms, the one unverified assumption and its probe: [`PLAN-telemetry-depth.md`](PLAN-telemetry-depth.md). | P3 | — |
+| R26 | **Rename to `co-load-runner`, retire `actop`.** A name and a public deprecation, not a capability. Held below (§ R26) with its cost, until the `--once` contract has a caller that actually exercises it. | P4 | R25 |
 | R9 | **Custom GIFs are launch-only, not reusable presets.** Add first-class local animated-GIF presets under `~/.config/menubar-load-runner/presets/`, with drop-in discovery plus native menu/CLI import that validates, alpha-union crops, bounds, normalizes, atomically installs, and immediately selects the result. Static images and non-GIF animation formats stay out of the first cut; a raw positional GIF path remains the no-install escape hatch. Full accepted-input contract, resource budgets, identity/merge rules, failure semantics, symbol-level implementation order, and real-binary QA matrix: [`PLAN-custom-gifs.md`](PLAN-custom-gifs.md). | P4 | — |
 
 ### R26 — the rename, and what it costs
@@ -47,7 +46,7 @@ No plan file: nothing here is a design, it is one decision held open.
 this binary would be its hardware sense and its lifecycle guard. `actop` (Python, PyPI, CI, `actop.pages.dev`)
 reads the same chip through the same unprivileged interfaces, and once R25 lands, the overlap is most of it.
 
-**Why it is not bundled into R24/R25.** Integration is a *contract*, not a name — `co-cli` can call any
+**Why it is not bundled into R25.** Integration is a *contract*, not a name — `co-cli` can call any
 binary. The rename buys nothing the `--once` schema does not already buy, and it is charged separately:
 the `MENUBAR_LOAD_RUNNER_*` hook names that `AGENTS.md` and `tests/qa.sh` hold as canonical, the
 `state.json` directory, the launcher filename, the LaunchAgent label in `scripts/`, the self-update

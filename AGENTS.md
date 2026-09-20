@@ -83,6 +83,7 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 ./menubar-load-runner                       # 默认预设 (horse-white)，后台脱离终端运行
 ./menubar-load-runner --foreground           # 前台运行（查看 stderr / print 输出）
 ./menubar-load-runner dog-black --label value   # 指定预设 + 状态栏数值标签
+./menubar-load-runner --once                 # 单行 JSON 快照（九路读数，物理单位），随即退出；无 GUI / 无 state.json / 无编译
 ./menubar-load-runner --help
 
 # 编译与无启动检查
@@ -117,6 +118,7 @@ pkill -f 'MenuBarLoadRunner'                 # 停止当前用户正在运行的
 
 ## 架构要点（正本见 docs/ARCHITECTURE.md）
 
+- **遥测核心与单发快照** (`docs/ARCHITECTURE.md` §4.7)：九路读数由 `TelemetryCore` 统一持有，GUI 与 `--once` 两条入口路径共用同一套 reader，互不定义；`--once` 只输出一份 schema（缺读数即缺键），且必须是唯一参数。
 - **9 种无特权硬件遥测源** (`docs/ARCHITECTURE.md` §4)：CPU (Mach)、Memory + Swap (Mach `vm_statistics64`)、GPU (IOAccelerator)、Network/Disk (IOKit 计数器增量)、Fan RPM (SMC)、Battery mA (IOKit PS)、Max Die Temp (SMC 二分查找 `Tp**`/`Tpx*` 传感器集群最大值)、ANE Watts (`IOReport` "Energy Model" 订阅式增量采样，唯一的私有 API，经 `dlopen`/`dlsym` 运行时绑定；正本见 §4.5)。每种源均具备 `isAvailable` 探测，不可用时平滑降级。
 - **ThroughputScaler 速率归一化** (`docs/ARCHITECTURE.md` §4.2)：无界速率（网速/磁盘/swap/电池电流）经自适应滑动窗口归一化到 0..1，双向非对称裕量 + 迟滞计数器防抖；有界百分比与绝对温度映射不走 Scaler。
 - **CADisplayLink 与自限流** (`docs/ARCHITECTURE.md` §3, §5)：屏幕刷新率同步的 vsync 游戏循环；全遮挡（刘海/隐藏/灭屏）时完全暂停渲染（0% CPU）；高热/低电量/内存压力下自动减半自身帧率；尊重系统 Reduce Motion 与手动 Freeze（冻结时读数自动交接给标签栏，R17）。

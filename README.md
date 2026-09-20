@@ -118,7 +118,9 @@ ln -s "$PWD/menubar-load-runner" ~/.local/bin/menubar-load-runner
 
 `menubar-load-runner` supports the same flags (`--foreground`, `--no-detach`, `--detach`, `--extra`),
 plus `--precompile` — build the binary if the source is newer, then exit without launching. It's safe
-to run while the app is going; the in-app updater uses it so a restart doesn't wait on a compile.
+to run while the app is going; the in-app updater uses it so a restart doesn't wait on a compile. And
+`--once`, which prints the sensors as one line of JSON and exits without touching the menu bar at all
+(see [Read the sensors from a script](#read-the-sensors-from-a-script---once)).
 
 ## Start at login (personal, optional)
 
@@ -344,6 +346,33 @@ still drives the animation; the history sparkline still tracks the active source
 > throughput is. Under Low Power Mode, thermal, or memory pressure the app caps its own animation
 > speed at half the preset's range.
 
+## Read the sensors from a script (`--once`)
+
+```bash
+./menubar-load-runner --once
+{"v":1,"cpu_pct":14.2,"mem_pct":41.0,"swap_mibs":0.00,"gpu_pct":28.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
+```
+
+The same nine readers the menu bar uses, printed as one line of JSON, then exit — for a script, a
+status line, or an agent deciding whether this machine has the thermal and battery headroom for a long
+build. No menu bar, no window, no state file, and nothing to install or leave running:
+
+```bash
+./menubar-load-runner --once | jq -r '"\(.temp_c) °C, \(.thermal)"'
+```
+
+- **Physical units, named with them.** `_pct` is a percentage, `_mibs` is MiB/s, `_c` is °C, `_w` is
+  watts, `_a` is amps, `fan_rpm` is a list with one entry per fan.
+- **A reading the machine can't give you is an absent key** — never `null`, never a `0` standing in
+  for "no sensor". So `battery_pct` is missing on a desktop, `fan_rpm` on a fanless Mac. `v` is the
+  schema version and is the only field always present; new fields may be added, so read by key.
+- **It must be the only argument** (everything else configures a GUI this path never builds), and it
+  is safe to run beside a running instance, or several at once — it writes nothing and locks nothing.
+- **Takes about 0.3 s.** Throughput readings are counter deltas, so it samples, waits, and samples
+  again; that window is nearly the whole runtime.
+- Needs the binary built (`./menubar-load-runner --precompile` once, if you have never launched it);
+  it deliberately won't compile one for you, so a snapshot never turns into a 30-second build.
+
 ## Keep Awake at launch (`--keep-awake`)
 
 ```bash
@@ -554,7 +583,7 @@ Coverage is split into explicit tiers around one question — **does the check b
 
 | Tier | Sections | Needs a GUI session? | Role |
 |---|---|---|---|
-| `core` | §1 build (warning-clean) · §2 CLI/version | No | Primary gate — must pass before a release; headless-safe |
+| `core` | §1 build (warning-clean) · §2 CLI/version · §2a `--once` snapshot | No | Primary gate — must pass before a release; headless-safe |
 | `gui` | §3 launch lifecycle · §3a–§3h Keep Awake / persistence / label geometry / sleep assertions / freeze / battery diagnostics · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
 | `launcher` / §7 | §6 launcher + singleton (disruptive `pkill`) · §7 interactive menu spot-check | — | Manual — run locally before a release |
 
@@ -562,8 +591,9 @@ Coverage is split into explicit tiers around one question — **does the check b
 tests**, by policy: every check launches the real binary and asserts a real side effect (a `caffeinate`
 child, a state file, the live status item's own geometry and readout). Five standalone `.swift` probes that
 re-ported app logic and asserted against the copy were deleted in favor of that — the copy passes while the
-app is broken. This is why the `core` tier is thin: the real binary needs a status item, so the behavioral
-checks live in `gui`.
+app is broken. This is why the `core` tier is thin: most of the real binary needs a status item, so the behavioral
+checks live in `gui`. The exception is `--once` (§2a), which builds no GUI at all — running it in the
+headless tier *is* the proof that the readers answer with no WindowServer behind them.
 
 A GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) mirrors these tiers
 on `macos-14` (`core` job + best-effort `gui` job), but its automatic push/PR triggers are **disabled

@@ -372,6 +372,11 @@ private enum Tuning {
 
     static let cpuSmoothingAlpha: Double = 0.2
     static let loadSampleInterval: TimeInterval = 2.0
+    // Delta window between the two samples the `--once` snapshot takes. The rate readers (network,
+    // disk, swap, battery current, ANE) are counter deltas and have no value at a single instant, so
+    // a snapshot has to span one. Long enough for a counter to move on an idle machine, short enough
+    // that a script can call this between other work — it is what the snapshot's whole latency is.
+    static let snapshotWindow: TimeInterval = 0.2
     static let speedUpdateHysteresis: Double = 0.08
     // When the system is under power/thermal pressure (Low Power Mode, or serious/
     // critical thermal state), THIS APP caps ITS OWN animation speed to this fraction
@@ -407,6 +412,8 @@ private enum Tuning {
     // Byte-unit divisors, shared by the ceiling floors below and the MB/GB menu readouts.
     static let bytesPerMiB: Double = 1_048_576
     static let bytesPerGiB: Double = 1_073_741_824
+    static let milliampsPerAmp: Double = 1000
+    static let msPerSecond: Double = 1000
     // Per-source ceiling floors. btop uses 10 KiB/s; we raise them so idle background chatter
     // (keepalive packets, housekeeping I/O, lazy swap) doesn't peg a menu-bar toy at full speed.
     static let networkFloorBytesPerSec: Double = 1 * bytesPerMiB
@@ -1270,6 +1277,9 @@ private struct Config {
     enum ParseResult {
         case config(Config)
         case help
+        // `--once`: print one JSON line of telemetry and exit. Carries no Config, because there is
+        // nothing to configure — no GIF, no label, no Keep Awake, no window.
+        case snapshot
     }
 
     // A built-in preset keyword (e.g. "horse-white") or an absolute/tilde GIF path. Empty means
@@ -1340,6 +1350,19 @@ private struct Config {
 
     static func parse() -> ParseResult? {
         let args = CommandLine.arguments.dropFirst()
+
+        // `--once` first, and exclusive. Every other flag configures a GUI this path never builds, so
+        // a companion argument is a usage error rather than something to ignore — and the error goes
+        // to stderr WITHOUT the usage block, because the contract is that stdout carries the JSON
+        // line or nothing at all.
+        if args.contains("--once") {
+            guard args.count == 1 else {
+                fputs("--once must be the only argument: it prints one line of JSON telemetry to stdout and exits, with no GUI to configure.\n", stderr)
+                return nil
+            }
+            return .snapshot
+        }
+
         var presetOrPath: String?
         var speedMultiplierOverride: Double?
         var labelArg: String?
@@ -1566,6 +1589,7 @@ private struct Config {
         print("Keep awake: --keep-awake <off|on|30m|2h|1h30m> arms sleep prevention at launch (a unit is required; up to \(Tuning.keepAwakeMaxHours)h). Also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE. Off by default; switchable from the menu. An armed window is saved and resumed on the next launch — passing this flag (even as off) overrides what was saved.")
         print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
         print("Battery threshold: --battery-threshold <pct|off> sets the charge at or below which Keep Awake releases on battery (default \(Int(Tuning.batteryLowThresholdDefault * Tuning.percentScale))%; off never releases on charge alone). Whole percents only — 20 or 20%, not 0.20. Also via MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD. Out-of-range values are clamped to \(Int(Tuning.batteryThresholdMin * Tuning.percentScale))–\(Int(Tuning.batteryThresholdMax * Tuning.percentScale))%, and below \(Int(Tuning.batteryCriticalThreshold * Tuning.percentScale))% on battery the Mac sleeps regardless — that floor is not configurable.")
+        print("Snapshot: --once prints one line of JSON with every reading this machine answers for (physical units; an unavailable source is an absent key) and exits, with no GUI and no state file. Must be the only argument. Takes about \(Int(Tuning.snapshotWindow * Tuning.msPerSecond)) ms — the rate readers need a delta window.")
         print("Width: the menu-bar item sizes itself to the GIF's aspect ratio at menu-bar height — not configurable.")
         print("Default speed: auto (preset-dependent; per-preset ranges defined in gifs/presets.json).")
         print("Updates: on launch, checks the git origin's release tags for a newer version (network access). Apply is a menu click; disable with --no-update-check or MENUBAR_LOAD_RUNNER_UPDATE_CHECK=0.")
@@ -2629,19 +2653,49 @@ private final class BatteryLoadMonitor {
     }
 
     private static func batteryPresent() -> Bool {
+        if forcedState != nil { return true }
+        return powerSourceDescription() != nil
+    }
+
+    // The first power source's description dictionary, or nil on a Mac that has none.
+    private static func powerSourceDescription() -> [String: Any]? {
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [Any] else { return false }
-        return !list.isEmpty
+              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [Any],
+              let first = list.first else { return nil }
+        return IOPSGetPowerSourceDescription(blob, first as CFTypeRef)?
+                   .takeUnretainedValue() as? [String: Any]
     }
 
     private struct Reading { let charge: Double; let currentMilliamps: Double; let onBattery: Bool }
 
+    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_BATTERY=<pct>[:battery|:ac] pins the power-source read
+    // so the low-battery and critical-floor paths are testable without draining a real battery — the
+    // reason they went unverified long enough for arming below 20% to stay a silent no-op. Power state
+    // defaults to `battery` (the interesting case); `:ac` exercises "threshold irrelevant". Unset or
+    // unparseable = no override, real IOKit read. Mirrors MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE.
+    //
+    // It lives HERE, on the reader, rather than on the one caller that first needed it: two places in
+    // this app read IOPS — Keep Awake's suspension policy and this monitor's charge readout — and a
+    // hook that only one of them honored would have them disagree about the same battery under the
+    // same run. Current (mA) is left real: the hook simulates a charge and a power state, nothing else.
+    static let forcedState: (onBattery: Bool, percent: Double)? = {
+        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_BATTERY"],
+              !raw.isEmpty else { return nil }
+        let parts = raw.lowercased().split(separator: ":", omittingEmptySubsequences: false)
+        guard let percent = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+              percent >= 0, percent <= Tuning.percentScale else { return nil }
+        let onBattery = parts.count < 2 || parts[1].trimmingCharacters(in: .whitespaces) != "ac"
+        return (onBattery: onBattery, percent: percent)
+    }()
+
     private static func readBattery() -> Reading? {
-        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [Any],
-              let first = list.first,
-              let dict = IOPSGetPowerSourceDescription(blob, first as CFTypeRef)?
-                            .takeUnretainedValue() as? [String: Any] else { return nil }
+        guard let dict = powerSourceDescription() else {
+            // No power source. A forced state still answers — it is how a desktop exercises the
+            // battery reader at all — and there is no current to report there.
+            guard let forced = forcedState else { return nil }
+            return Reading(charge: forced.percent / Tuning.percentScale,
+                           currentMilliamps: 0, onBattery: forced.onBattery)
+        }
         // Capacity/max are percentages in IOPS (max is typically 100); their ratio is the charge
         // fraction, matching how evaluateBatteryState reads kIOPSCurrentCapacityKey as 0–100.
         let capacity = (dict[kIOPSCurrentCapacityKey] as? NSNumber)?.doubleValue ?? 0
@@ -2651,7 +2705,11 @@ private final class BatteryLoadMonitor {
         // "Current" (mA) is instantaneous and signed (negative while discharging); may be absent on
         // some sources → treat as 0 (the source stays available for the charge readout, animation idles).
         let mA = (dict[kIOPSCurrentKey] as? NSNumber)?.doubleValue ?? 0
-        return Reading(charge: charge, currentMilliamps: mA, onBattery: onBattery)
+        guard let forced = forcedState else {
+            return Reading(charge: charge, currentMilliamps: mA, onBattery: onBattery)
+        }
+        return Reading(charge: forced.percent / Tuning.percentScale,
+                       currentMilliamps: mA, onBattery: forced.onBattery)
     }
 }
 
@@ -2914,6 +2972,183 @@ private final class ANELoadMonitor {
 
 // The color ramp direction for the trace chart. For utilization sources high = alert (green→red as
 // the value rises); for the battery fuel gauge low = alert (the ramp inverts).
+// One whole-machine reading in physical units — %, MiB/s, RPM, A, °C, W — as `--once` prints it.
+// Every reading is optional and a reader that did not answer is ABSENT from the JSON, never `null`
+// and never a zero standing in for "no reading": a consumer that sees a key can trust the number.
+// `v` is the contract version and the only field always present. Adding a field is not a version
+// bump; removing one or changing what it means is.
+private struct TelemetrySnapshot {
+    static let version = 1
+
+    var cpuPercent: Double?
+    var memoryPercent: Double?
+    var swapMiBPerSec: Double?
+    var gpuPercent: Double?
+    var netRxMiBPerSec: Double?
+    var netTxMiBPerSec: Double?
+    var diskReadMiBPerSec: Double?
+    var diskWriteMiBPerSec: Double?
+    var fanRPM: [Double]?
+    var batteryPercent: Double?
+    var batteryAmps: Double?
+    var temperatureCelsius: Double?
+    var thermal: KernelThermalPressure = .nominal
+    var aneWatts: Double?
+
+    // Hand-rolled rather than JSONEncoder, because the contract is one line with a fixed key order
+    // and a fixed precision per unit, and an encoder gives neither: Codable's dictionary ordering is
+    // not ours to pin, and Swift prints a Double at full precision (0.30000000000000004). Precision
+    // follows the reader, not the field: percentages and °C carry one decimal, rates, watts and amps
+    // two, RPM none — every one of them finer than the hardware's own resolution.
+    var jsonLine: String {
+        var fields = ["\"v\":\(Self.version)"]
+        func add(_ key: String, _ value: Double?, decimals: Int) {
+            guard let value else { return }
+            fields.append("\"\(key)\":" + String(format: "%.\(decimals)f", value))
+        }
+        add("cpu_pct", cpuPercent, decimals: 1)
+        add("mem_pct", memoryPercent, decimals: 1)
+        add("swap_mibs", swapMiBPerSec, decimals: 2)
+        add("gpu_pct", gpuPercent, decimals: 1)
+        add("net_rx_mibs", netRxMiBPerSec, decimals: 2)
+        add("net_tx_mibs", netTxMiBPerSec, decimals: 2)
+        add("disk_read_mibs", diskReadMiBPerSec, decimals: 2)
+        add("disk_write_mibs", diskWriteMiBPerSec, decimals: 2)
+        if let fanRPM {
+            fields.append("\"fan_rpm\":[" + fanRPM.map { String(format: "%.0f", $0) }.joined(separator: ",") + "]")
+        }
+        add("battery_pct", batteryPercent, decimals: 1)
+        add("battery_a", batteryAmps, decimals: 2)
+        add("temp_c", temperatureCelsius, decimals: 1)
+        fields.append("\"thermal\":\"\(thermal.rawValue)\"")
+        add("ane_w", aneWatts, decimals: 2)
+        return "{" + fields.joined(separator: ",") + "}\n"
+    }
+}
+
+// The nine unprivileged readers behind one owner, plus the two questions every consumer has: can
+// this machine answer for a source, and what does it say. It owns HOW a reading is taken and nothing
+// about what is done with one — no AppKit, no speed mapping, no menu text, no `state.json`. That is
+// what lets the same readers serve a status item that has to be on screen and a `--once` process
+// that builds no NSApplication.
+//
+// Physical units come out of `snapshot()`; the 0…1 value `sampleSource` returns is the animation's
+// driver, and normalizing to it is speed mapping's business — which is why the scalers live inside
+// the readers (they are how a rate reader produces its own number) and nothing in the snapshot
+// reads one.
+@MainActor
+private final class TelemetryCore {
+    let loadMonitor = CPULoadMonitor()
+    let memoryMonitor = MemoryLoadMonitor()
+    let gpuMonitor = GPULoadMonitor()
+    let networkMonitor = NetworkLoadMonitor()
+    let diskMonitor = DiskLoadMonitor()
+    let fanMonitor = FanLoadMonitor()
+    let batteryMonitor = BatteryLoadMonitor()
+    let temperatureMonitor = TemperatureLoadMonitor()
+    let aneMonitor = ANELoadMonitor()
+
+    // Sample one specific reader, returning its 0…1 driving fraction. Used by the active-source read,
+    // by the show-all-sources fan-out, by the baseline-priming pass, and by `snapshot()` — which
+    // calls it for its side effect (every reader parks its physical reading on itself) rather than
+    // for the fraction, so a menu row and a snapshot field can never disagree.
+    func sampleSource(_ source: LoadSource, elapsed: Double?) -> Double? {
+        switch source {
+        case .cpu: return loadMonitor.sampleUsage()
+        case .memory: return memoryMonitor.sampleUsage(elapsed: elapsed)
+        case .gpu: return gpuMonitor.sampleUsage()
+        case .network: return networkMonitor.sampleUsage(elapsed: elapsed)
+        case .disk: return diskMonitor.sampleUsage(elapsed: elapsed)
+        case .fan: return fanMonitor.sampleUsage()
+        case .battery: return batteryMonitor.sampleUsage()
+        case .temperature: return temperatureMonitor.sampleUsage()
+        case .ane: return aneMonitor.sampleUsage(elapsed: elapsed)
+        }
+    }
+
+    // Whether a source's reader can produce a value on this machine. CPU/memory are always available
+    // (core Mach/sysctl); the rest defer to their monitor's probe. Availability is static, so an
+    // unavailable source is disabled in the menu and, if requested at launch, falls back to CPU —
+    // no per-tick fallback loop is needed (a reader erroring mid-run just yields nil that tick and the
+    // animation holds its last speed; it never crashes).
+    func isSourceAvailable(_ source: LoadSource) -> Bool {
+        // Test hook: force listed sources unavailable so QA can exercise the disable + launch-fallback
+        // path on hardware where every reader actually works.
+        if forcedUnavailableSources.contains(source.key) { return false }
+        switch source {
+        case .cpu, .memory: return true
+        case .gpu: return gpuMonitor.isAvailable
+        case .network: return networkMonitor.isAvailable
+        case .disk: return diskMonitor.isAvailable
+        case .fan: return fanMonitor.isAvailable
+        case .battery: return batteryMonitor.isAvailable
+        case .temperature: return temperatureMonitor.isAvailable
+        case .ane: return aneMonitor.isAvailable
+        }
+    }
+
+    // One reading of everything this machine will answer for. The rate readers are counter deltas
+    // and do not exist at an instant, so this samples, sleeps `Tuning.snapshotWindow`, and samples
+    // again, differencing against the MEASURED gap rather than the nominal one. A blocking sleep is
+    // right here and only here: the caller is a one-shot process with no run loop and nothing else
+    // to do — the GUI never calls this, it samples on its own tick.
+    //
+    // A source that stays `hasSample == false` after both passes contributes no key. That is the
+    // honest answer for a reader that is present but did not produce a delta, and it is the same
+    // answer as for one that is not present at all, because the consumer can do nothing different
+    // with the distinction.
+    func snapshot() -> TelemetrySnapshot {
+        let sources = LoadSource.allCases.filter { isSourceAvailable($0) }
+        let start = ProcessInfo.processInfo.systemUptime
+        for source in sources { _ = sampleSource(source, elapsed: nil) }
+        Thread.sleep(forTimeInterval: Tuning.snapshotWindow)
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        for source in sources { _ = sampleSource(source, elapsed: elapsed) }
+
+        var snap = TelemetrySnapshot()
+        // The kernel's own level, not a reader — always answers, on every Mac.
+        snap.thermal = KernelThermalPressure.current()
+        if loadMonitor.hasSample { snap.cpuPercent = loadMonitor.smoothedUsage * Tuning.percentScale }
+        if memoryMonitor.hasSample { snap.memoryPercent = memoryMonitor.currentUsedFraction * Tuning.percentScale }
+        if memoryMonitor.hasSwapRateSample {
+            snap.swapMiBPerSec = memoryMonitor.currentSwapRateBytesPerSec / Tuning.bytesPerMiB
+        }
+        if gpuMonitor.hasSample { snap.gpuPercent = gpuMonitor.currentUtilization * Tuning.percentScale }
+        if networkMonitor.hasSample {
+            snap.netRxMiBPerSec = networkMonitor.currentInboundBytesPerSec / Tuning.bytesPerMiB
+            snap.netTxMiBPerSec = networkMonitor.currentOutboundBytesPerSec / Tuning.bytesPerMiB
+        }
+        if diskMonitor.hasSample {
+            snap.diskReadMiBPerSec = diskMonitor.currentReadBytesPerSec / Tuning.bytesPerMiB
+            snap.diskWriteMiBPerSec = diskMonitor.currentWriteBytesPerSec / Tuning.bytesPerMiB
+        }
+        if fanMonitor.hasSample, !fanMonitor.perFan.isEmpty {
+            snap.fanRPM = fanMonitor.perFan.map(\.rpm)
+        }
+        if batteryMonitor.hasSample {
+            snap.batteryPercent = batteryMonitor.currentChargeFraction * Tuning.percentScale
+            // Only while actually discharging: on AC there is no battery current to report, and a 0
+            // here would read as "an idle battery" rather than "no such reading".
+            if batteryMonitor.onBattery, batteryMonitor.currentDischargeMilliamps > 0 {
+                snap.batteryAmps = batteryMonitor.currentDischargeMilliamps / Tuning.milliampsPerAmp
+            }
+        }
+        if temperatureMonitor.hasSample { snap.temperatureCelsius = temperatureMonitor.currentCelsius }
+        if aneMonitor.hasSample { snap.aneWatts = aneMonitor.currentWatts }
+        return snap
+    }
+
+    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu,network,disk marks those sources
+    // unavailable regardless of hardware, so QA can verify the disabled menu item, the launch-time
+    // fallback-to-cpu, and the absent snapshot key. Empty/unset = no override. Mirrors the EXIT_AFTER
+    // hook convention.
+    private let forcedUnavailableSources: Set<String> = {
+        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE"] else { return [] }
+        return Set(raw.lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    }()
+}
+
+
 private enum ColorPolarity { case highIsHot, lowIsHot }
 
 // A compact bar-chart trace of the active load source's recent 0…1 fraction, shown as the top item
@@ -3537,15 +3772,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // network/disk later). nil until the first tick / after a source switch, so rate-based signals
     // warm up one sample. systemUptime (not Date) — immune to wall-clock changes.
     private var lastSampleUptime: Double?
-    private var loadMonitor = CPULoadMonitor()
-    private var memoryMonitor = MemoryLoadMonitor()
-    private var gpuMonitor = GPULoadMonitor()
-    private var networkMonitor = NetworkLoadMonitor()
-    private var diskMonitor = DiskLoadMonitor()
-    private var fanMonitor = FanLoadMonitor()
-    private var batteryMonitor = BatteryLoadMonitor()
-    private var temperatureMonitor = TemperatureLoadMonitor()
-    private var aneMonitor = ANELoadMonitor()
+    // Every hardware reading the app has, behind one owner (see TelemetryCore).
+    private let telemetry = TelemetryCore()
     private var activeLoadSource: LoadSource
     // Multi-source dashboard mode / other-sources disclosure state: when on (expanded), every
     // AVAILABLE reader is sampled each tick (not just the active one) and its live readout is surfaced
@@ -3874,7 +4102,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // Availability fallback: if the requested source (--load-source / env) can't produce a value on
         // this hardware — realistically only GPU — degrade to CPU rather than driving off a dead reader.
         // An absent source never fails launch (design principle 4); its row stays hidden.
-        if !isSourceAvailable(activeLoadSource) {
+        if !telemetry.isSourceAvailable(activeLoadSource) {
             fputs("Load source \"\(activeLoadSource.key)\" is unavailable on this machine; falling back to cpu.\n", stderr)
             activeLoadSource = .cpu
         }
@@ -4796,8 +5024,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // are kept fresh by priming on engage). Return values are ignored — only the active source
         // drives speed. Skipped when off, preserving active-only sampling by default.
         if showAllSources {
-            for source in LoadSource.allCases where source != activeLoadSource && isSourceAvailable(source) {
-                _ = sampleSource(source, elapsed: elapsed)
+            for source in LoadSource.allCases where source != activeLoadSource && telemetry.isSourceAvailable(source) {
+                _ = telemetry.sampleSource(source, elapsed: elapsed)
             }
         }
 
@@ -4832,23 +5060,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Sample whichever reader currently drives the animation, returning its 0…1 fraction (or nil
     // if unavailable / not warmed up). The single point where the active source is read for speed.
     private func sampleActiveSource(elapsed: Double?) -> Double? {
-        sampleSource(activeLoadSource, elapsed: elapsed)
-    }
-
-    // Sample one specific reader (any source, not just the active one), returning its 0…1 fraction.
-    // Used by sampleActiveSource, by the show-all-sources fan-out, and by the baseline-priming pass.
-    private func sampleSource(_ source: LoadSource, elapsed: Double?) -> Double? {
-        switch source {
-        case .cpu: return loadMonitor.sampleUsage()
-        case .memory: return memoryMonitor.sampleUsage(elapsed: elapsed)
-        case .gpu: return gpuMonitor.sampleUsage()
-        case .network: return networkMonitor.sampleUsage(elapsed: elapsed)
-        case .disk: return diskMonitor.sampleUsage(elapsed: elapsed)
-        case .fan: return fanMonitor.sampleUsage()
-        case .battery: return batteryMonitor.sampleUsage()
-        case .temperature: return temperatureMonitor.sampleUsage()
-        case .ane: return aneMonitor.sampleUsage(elapsed: elapsed)
-        }
+        telemetry.sampleSource(activeLoadSource, elapsed: elapsed)
     }
 
     // The 0…1 value the trace chart should plot for the active source. Identical to the driving
@@ -4856,7 +5068,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // than the discharge-current driver — because on a battery LOW is the alert, not high. Charge is
     // valid whether plugged in or not, so this works on AC too. The driver still governs speed.
     private func chartSample(forDriver driver: Double) -> Double {
-        activeLoadSource == .battery ? batteryMonitor.currentChargeFraction : driver
+        activeLoadSource == .battery ? telemetry.batteryMonitor.currentChargeFraction : driver
     }
 
     // Append a 0…1 chart value to the trace-chart ring buffer, trimming to capacity.
@@ -4870,15 +5082,15 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Whether the active source has produced at least one usable sample.
     private var activeSourceHasSample: Bool {
         switch activeLoadSource {
-        case .cpu: return loadMonitor.hasSample
-        case .memory: return memoryMonitor.hasSample
-        case .gpu: return gpuMonitor.hasSample
-        case .network: return networkMonitor.hasSample
-        case .disk: return diskMonitor.hasSample
-        case .fan: return fanMonitor.hasSample
-        case .battery: return batteryMonitor.hasSample
-        case .temperature: return temperatureMonitor.hasSample
-        case .ane: return aneMonitor.hasSample
+        case .cpu: return telemetry.loadMonitor.hasSample
+        case .memory: return telemetry.memoryMonitor.hasSample
+        case .gpu: return telemetry.gpuMonitor.hasSample
+        case .network: return telemetry.networkMonitor.hasSample
+        case .disk: return telemetry.diskMonitor.hasSample
+        case .fan: return telemetry.fanMonitor.hasSample
+        case .battery: return telemetry.batteryMonitor.hasSample
+        case .temperature: return telemetry.temperatureMonitor.hasSample
+        case .ane: return telemetry.aneMonitor.hasSample
         }
     }
 
@@ -4887,15 +5099,15 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // normalized value — matching what sampleActiveSource returns, not the raw metric shown in the menu.
     private var activeSourceCurrentUsage: Double {
         switch activeLoadSource {
-        case .cpu: return loadMonitor.smoothedUsage
-        case .memory: return memoryMonitor.currentMemoryLoad
-        case .gpu: return gpuMonitor.currentUtilization
-        case .network: return networkMonitor.currentLoad
-        case .disk: return diskMonitor.currentLoad
-        case .fan: return fanMonitor.currentUtilization
-        case .battery: return batteryMonitor.currentLoad
-        case .temperature: return temperatureMonitor.currentLoad
-        case .ane: return aneMonitor.currentLoad
+        case .cpu: return telemetry.loadMonitor.smoothedUsage
+        case .memory: return telemetry.memoryMonitor.currentMemoryLoad
+        case .gpu: return telemetry.gpuMonitor.currentUtilization
+        case .network: return telemetry.networkMonitor.currentLoad
+        case .disk: return telemetry.diskMonitor.currentLoad
+        case .fan: return telemetry.fanMonitor.currentUtilization
+        case .battery: return telemetry.batteryMonitor.currentLoad
+        case .temperature: return telemetry.temperatureMonitor.currentLoad
+        case .ane: return telemetry.aneMonitor.currentLoad
         }
     }
 
@@ -5047,13 +5259,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         usageItem.toolTip = (activeLoadSource == .battery) ? batteryTooltipText() : nil
         switch activeLoadSource {
         case .cpu:
-            if loadMonitor.hasSample {
-                usageItem.title = MenuTitle.line(MenuTitle.cpuUsageQualified, String(format: "%.1f%%", loadMonitor.smoothedUsage * Tuning.percentScale))
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .cpu), cpuStateText(for: loadMonitor.smoothedUsage))
+            if telemetry.loadMonitor.hasSample {
+                usageItem.title = MenuTitle.line(MenuTitle.cpuUsageQualified, String(format: "%.1f%%", telemetry.loadMonitor.smoothedUsage * Tuning.percentScale))
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .cpu), cpuStateText(for: telemetry.loadMonitor.smoothedUsage))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — CPU %.0f%%, %@",
-                    loadMonitor.smoothedUsage * Tuning.percentScale,
-                    cpuStateText(for: loadMonitor.smoothedUsage)
+                    telemetry.loadMonitor.smoothedUsage * Tuning.percentScale,
+                    cpuStateText(for: telemetry.loadMonitor.smoothedUsage)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(MenuTitle.cpuUsageQualified, MenuTitle.warmingUp)
@@ -5064,11 +5276,11 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             // Memory pressure (state line) reflects the cached dispatch-source level and is valid
             // even before the first used-fraction sample, so it's shown unconditionally.
             stateItem.title = MenuTitle.line(MenuTitle.memoryPressurePrefix, memoryPressureText())
-            if memoryMonitor.hasSample {
+            if telemetry.memoryMonitor.hasSample {
                 usageItem.title = memoryUsageLineText()
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — memory %.0f%%, pressure %@",
-                    memoryMonitor.currentUsedFraction * Tuning.percentScale,
+                    telemetry.memoryMonitor.currentUsedFraction * Tuning.percentScale,
                     memoryPressureText()
                 ))
             } else {
@@ -5076,13 +5288,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring memory load")
             }
         case .gpu:
-            if gpuMonitor.hasSample {
-                usageItem.title = MenuTitle.line(LoadSource.gpu.menuTitle, String(format: "%.0f%%", gpuMonitor.currentUtilization * Tuning.percentScale))
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .gpu), cpuStateText(for: gpuMonitor.currentUtilization))
+            if telemetry.gpuMonitor.hasSample {
+                usageItem.title = MenuTitle.line(LoadSource.gpu.menuTitle, String(format: "%.0f%%", telemetry.gpuMonitor.currentUtilization * Tuning.percentScale))
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .gpu), cpuStateText(for: telemetry.gpuMonitor.currentUtilization))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — GPU %.0f%%, %@",
-                    gpuMonitor.currentUtilization * Tuning.percentScale,
-                    cpuStateText(for: gpuMonitor.currentUtilization)
+                    telemetry.gpuMonitor.currentUtilization * Tuning.percentScale,
+                    cpuStateText(for: telemetry.gpuMonitor.currentUtilization)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.gpu.menuTitle, MenuTitle.warmingUp)
@@ -5090,14 +5302,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring GPU load")
             }
         case .network:
-            if networkMonitor.hasSample {
+            if telemetry.networkMonitor.hasSample {
                 usageItem.title = networkUsageLineText()
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .network), cpuStateText(for: networkMonitor.currentLoad))
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .network), cpuStateText(for: telemetry.networkMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — network ↓%.1f MB/s ↑%.1f MB/s, %@",
-                    networkMonitor.currentInboundBytesPerSec / Tuning.bytesPerMiB,
-                    networkMonitor.currentOutboundBytesPerSec / Tuning.bytesPerMiB,
-                    cpuStateText(for: networkMonitor.currentLoad)
+                    telemetry.networkMonitor.currentInboundBytesPerSec / Tuning.bytesPerMiB,
+                    telemetry.networkMonitor.currentOutboundBytesPerSec / Tuning.bytesPerMiB,
+                    cpuStateText(for: telemetry.networkMonitor.currentLoad)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.network.menuTitle, MenuTitle.warmingUp)
@@ -5105,14 +5317,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring network load")
             }
         case .disk:
-            if diskMonitor.hasSample {
+            if telemetry.diskMonitor.hasSample {
                 usageItem.title = diskUsageLineText()
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .disk), cpuStateText(for: diskMonitor.currentLoad))
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .disk), cpuStateText(for: telemetry.diskMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — disk read %.1f MB/s write %.1f MB/s, %@",
-                    diskMonitor.currentReadBytesPerSec / Tuning.bytesPerMiB,
-                    diskMonitor.currentWriteBytesPerSec / Tuning.bytesPerMiB,
-                    cpuStateText(for: diskMonitor.currentLoad)
+                    telemetry.diskMonitor.currentReadBytesPerSec / Tuning.bytesPerMiB,
+                    telemetry.diskMonitor.currentWriteBytesPerSec / Tuning.bytesPerMiB,
+                    cpuStateText(for: telemetry.diskMonitor.currentLoad)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.disk.menuTitle, MenuTitle.warmingUp)
@@ -5120,13 +5332,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring disk load")
             }
         case .fan:
-            if fanMonitor.hasSample {
+            if telemetry.fanMonitor.hasSample {
                 usageItem.title = fanUsageLineText()
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .fan), cpuStateText(for: fanMonitor.currentUtilization))
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .fan), cpuStateText(for: telemetry.fanMonitor.currentUtilization))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — fan avg %.0f%%, %@",
-                    fanMonitor.currentUtilization * Tuning.percentScale,
-                    cpuStateText(for: fanMonitor.currentUtilization)
+                    telemetry.fanMonitor.currentUtilization * Tuning.percentScale,
+                    cpuStateText(for: telemetry.fanMonitor.currentUtilization)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.fan.menuTitle, MenuTitle.warmingUp)
@@ -5134,7 +5346,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring fan load")
             }
         case .battery:
-            if batteryMonitor.hasSample {
+            if telemetry.batteryMonitor.hasSample {
                 usageItem.title = batteryUsageLineText()
                 // Rich diagnostic condition + capacity when available (R22); otherwise falls back to
                 // drain band or "On AC".
@@ -5146,12 +5358,12 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                         stateText = diag.conditionText
                     }
                 } else {
-                    stateText = batteryMonitor.onBattery ? cpuStateText(for: batteryMonitor.currentLoad) : "On AC"
+                    stateText = telemetry.batteryMonitor.onBattery ? cpuStateText(for: telemetry.batteryMonitor.currentLoad) : "On AC"
                 }
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .battery), stateText)
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — battery %.0f%%, %@",
-                    batteryMonitor.currentChargeFraction * Tuning.percentScale,
+                    telemetry.batteryMonitor.currentChargeFraction * Tuning.percentScale,
                     stateText
                 ))
             } else {
@@ -5160,13 +5372,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring battery load")
             }
         case .temperature:
-            if temperatureMonitor.hasSample {
+            if telemetry.temperatureMonitor.hasSample {
                 usageItem.title = temperatureUsageLineText()
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .temperature), cpuStateText(for: temperatureMonitor.currentLoad))
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .temperature), cpuStateText(for: telemetry.temperatureMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — temperature %.0f degrees Celsius, %@",
-                    temperatureMonitor.currentCelsius,
-                    cpuStateText(for: temperatureMonitor.currentLoad)
+                    telemetry.temperatureMonitor.currentCelsius,
+                    cpuStateText(for: telemetry.temperatureMonitor.currentLoad)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.temperature.menuTitle, MenuTitle.warmingUp)
@@ -5174,13 +5386,13 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring temperature")
             }
         case .ane:
-            if aneMonitor.hasSample {
+            if telemetry.aneMonitor.hasSample {
                 usageItem.title = aneUsageLineText()
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .ane), cpuStateText(for: aneMonitor.currentLoad))
+                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .ane), cpuStateText(for: telemetry.aneMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
                     format: "MenuBar Load Runner — neural engine %.2f watts, %@",
-                    aneMonitor.currentWatts,
-                    cpuStateText(for: aneMonitor.currentLoad)
+                    telemetry.aneMonitor.currentWatts,
+                    cpuStateText(for: telemetry.aneMonitor.currentLoad)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.ane.menuTitle, MenuTitle.warmingUp)
@@ -5229,19 +5441,19 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     }
 
     private func memoryUsageLineText() -> String {
-        let pct = memoryMonitor.currentUsedFraction * Tuning.percentScale
+        let pct = telemetry.memoryMonitor.currentUsedFraction * Tuning.percentScale
         var line = String(format: "Memory: %.0f%%", pct)
-        if memoryMonitor.hasSwapSample, memoryMonitor.swapTotalBytes > 0 {
+        if telemetry.memoryMonitor.hasSwapSample, telemetry.memoryMonitor.swapTotalBytes > 0 {
             line += String(
                 format: " · swap %.1f/%.1f GB",
-                Double(memoryMonitor.swapUsedBytes) / Tuning.bytesPerGiB,
-                Double(memoryMonitor.swapTotalBytes) / Tuning.bytesPerGiB
+                Double(telemetry.memoryMonitor.swapUsedBytes) / Tuning.bytesPerGiB,
+                Double(telemetry.memoryMonitor.swapTotalBytes) / Tuning.bytesPerGiB
             )
         }
         // Show the swap *rate* when actively paging — it's part of what drives the animation, so the
         // dashboard shouldn't read "Memory: 40%" while swap activity pushes the speed higher.
-        if memoryMonitor.hasSwapRateSample, memoryMonitor.currentSwapRateBytesPerSec > 0 {
-            line += String(format: " · %.1f MB/s", memoryMonitor.currentSwapRateBytesPerSec / Tuning.bytesPerMiB)
+        if telemetry.memoryMonitor.hasSwapRateSample, telemetry.memoryMonitor.currentSwapRateBytesPerSec > 0 {
+            line += String(format: " · %.1f MB/s", telemetry.memoryMonitor.currentSwapRateBytesPerSec / Tuning.bytesPerMiB)
         }
         return line
     }
@@ -5253,23 +5465,23 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     private func networkUsageLineText() -> String {
         String(
             format: "Network: ↓%.1f MB/s ↑%.1f MB/s",
-            networkMonitor.currentInboundBytesPerSec / Tuning.bytesPerMiB,
-            networkMonitor.currentOutboundBytesPerSec / Tuning.bytesPerMiB
+            telemetry.networkMonitor.currentInboundBytesPerSec / Tuning.bytesPerMiB,
+            telemetry.networkMonitor.currentOutboundBytesPerSec / Tuning.bytesPerMiB
         )
     }
 
     private func diskUsageLineText() -> String {
         String(
             format: "Disk: read %.1f MB/s write %.1f MB/s",
-            diskMonitor.currentReadBytesPerSec / Tuning.bytesPerMiB,
-            diskMonitor.currentWriteBytesPerSec / Tuning.bytesPerMiB
+            telemetry.diskMonitor.currentReadBytesPerSec / Tuning.bytesPerMiB,
+            telemetry.diskMonitor.currentWriteBytesPerSec / Tuning.bytesPerMiB
         )
     }
 
     // One "RPM (util%)" segment per fan, joined with " · " — mirrors memoryUsageLineText's
     // multi-clause style.
     private func fanUsageLineText() -> String {
-        let segments = fanMonitor.perFan.enumerated().map { index, reading in
+        let segments = telemetry.fanMonitor.perFan.enumerated().map { index, reading in
             String(format: "Fan %d: %.0f RPM (%.0f%%)", index + 1, reading.rpm, reading.utilization * Tuning.percentScale)
         }
         return segments.joined(separator: " · ")
@@ -5280,7 +5492,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // reads 12 clusters here and up to 102 on the full-family fallback, which would run off the menu.
     // The range is what the per-fan segments were for: it shows the max isn't a lone outlier.
     private func temperatureUsageLineText() -> String {
-        let values = temperatureMonitor.perSensor.map(\.celsius)
+        let values = telemetry.temperatureMonitor.perSensor.map(\.celsius)
         // No sensor reporting means every cluster is power-gated. Say so and bound the reading with
         // "≤" — the floor is the number the animation runs on, but nothing measured it, so the row
         // must not present it as a measurement (see TemperatureLoadMonitor.sampleUsage).
@@ -5293,12 +5505,12 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         let throttling = KernelThermalPressure.current().isThrottling
         guard let coolest = values.min(), let hottest = values.max() else {
             let parked = String(format: "Temperature: ≤%.0f °C · every core cluster parked",
-                                temperatureMonitor.currentCelsius)
+                                telemetry.temperatureMonitor.currentCelsius)
             // Here it ADDS a clause instead of replacing one: "parked" is the honesty about the number
             // itself and cannot step aside, where the sensor count below is incidental and can.
             return throttling ? parked + " · Thermal Throttling" : parked
         }
-        var line = String(format: "Temperature: %.0f °C", temperatureMonitor.currentCelsius)
+        var line = String(format: "Temperature: %.0f °C", telemetry.temperatureMonitor.currentCelsius)
         line += String(format: " · P-cores %.0f–%.0f °C", coolest, hottest)
         line += throttling ? " · Thermal Throttling"
                            : " · \(values.count) sensor\(values.count == 1 ? "" : "s")"
@@ -5309,11 +5521,11 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // drain that drives the animation — or "AC" when plugged in. When diagnostics are available
     // (menu open on battery-capable hardware, R22), enriches with health % and cycle count.
     private func batteryUsageLineText() -> String {
-        let pct = batteryMonitor.currentChargeFraction * Tuning.percentScale
+        let pct = telemetry.batteryMonitor.currentChargeFraction * Tuning.percentScale
         var line = String(format: "Battery: %.0f%%", pct)
-        if batteryMonitor.onBattery {
-            if batteryMonitor.currentDischargeMilliamps > 0 {
-                line += String(format: " · %.1f A", batteryMonitor.currentDischargeMilliamps / 1000)
+        if telemetry.batteryMonitor.onBattery {
+            if telemetry.batteryMonitor.currentDischargeMilliamps > 0 {
+                line += String(format: " · %.1f A", telemetry.batteryMonitor.currentDischargeMilliamps / 1000)
             }
         } else {
             line += " · AC"
@@ -5348,8 +5560,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // "idle" rather than a bare 0.00 W when the NPU is power-gated: the counter reads a hard zero
     // then, which is a different statement from "measured, and it rounds to zero".
     private func aneUsageLineText() -> String {
-        let line = String(format: "ANE: %.2f W", aneMonitor.currentWatts)
-        return aneMonitor.currentWatts > 0 ? line : line + " · idle"
+        let line = String(format: "ANE: %.2f W", telemetry.aneMonitor.currentWatts)
+        return telemetry.aneMonitor.currentWatts > 0 ? line : line + " · idle"
     }
 
     private func refreshPresetSelectionState() {
@@ -5706,35 +5918,6 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         }
     }
 
-    // Whether a source's reader can produce a value on this machine. CPU/memory are always available
-    // (core Mach/sysctl); gpu/network/disk defer to their monitor's probe. Availability is static, so
-    // an unavailable source is disabled in the menu and, if requested at launch, falls back to CPU —
-    // no per-tick fallback loop is needed (a reader erroring mid-run just yields nil that tick and the
-    // animation holds its last speed; it never crashes).
-    private func isSourceAvailable(_ source: LoadSource) -> Bool {
-        // Test hook: force listed sources unavailable so QA can exercise the disable + launch-fallback
-        // path on hardware where every reader actually works.
-        if forcedUnavailableSources.contains(source.key) { return false }
-        switch source {
-        case .cpu, .memory: return true
-        case .gpu: return gpuMonitor.isAvailable
-        case .network: return networkMonitor.isAvailable
-        case .disk: return diskMonitor.isAvailable
-        case .fan: return fanMonitor.isAvailable
-        case .battery: return batteryMonitor.isAvailable
-        case .temperature: return temperatureMonitor.isAvailable
-        case .ane: return aneMonitor.isAvailable
-        }
-    }
-
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu,network,disk marks those sources
-    // unavailable regardless of hardware, so §3/§7 QA can verify the disabled menu item and the
-    // launch-time fallback-to-cpu. Empty/unset = no override. Mirrors the EXIT_AFTER hook convention.
-    private let forcedUnavailableSources: Set<String> = {
-        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE"] else { return [] }
-        return Set(raw.lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
-    }()
-
     // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 prints every status item's frame in SCREEN
     // coordinates on each 2s tick. Mirrors the EXIT_AFTER hook convention, and exists because the two
     // properties it measures are otherwise unverifiable outside a human's eyes:
@@ -5980,27 +6163,27 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         guard activeSourceHasSample else { return "\(tag) …" }
         switch source {
         case .cpu:
-            return "CPU \(Self.percentField(loadMonitor.smoothedUsage))%"
+            return "CPU \(Self.percentField(telemetry.loadMonitor.smoothedUsage))%"
         case .memory:
-            return "MEM \(Self.percentField(memoryMonitor.currentUsedFraction))%"
+            return "MEM \(Self.percentField(telemetry.memoryMonitor.currentUsedFraction))%"
         case .gpu:
-            return "GPU \(Self.percentField(gpuMonitor.currentUtilization))%"
+            return "GPU \(Self.percentField(telemetry.gpuMonitor.currentUtilization))%"
         case .network:
-            return "NET ↓\(Self.rateField(networkMonitor.currentInboundBytesPerSec))"
-                + " ↑\(Self.rateField(networkMonitor.currentOutboundBytesPerSec))"
+            return "NET ↓\(Self.rateField(telemetry.networkMonitor.currentInboundBytesPerSec))"
+                + " ↑\(Self.rateField(telemetry.networkMonitor.currentOutboundBytesPerSec))"
         case .disk:
-            return "DSK R\(Self.diskField(diskMonitor.currentReadBytesPerSec))"
-                + " W\(Self.diskField(diskMonitor.currentWriteBytesPerSec))"
+            return "DSK R\(Self.diskField(telemetry.diskMonitor.currentReadBytesPerSec))"
+                + " W\(Self.diskField(telemetry.diskMonitor.currentWriteBytesPerSec))"
         case .fan:
-            return "FAN \(Self.percentField(fanMonitor.currentUtilization))%"
+            return "FAN \(Self.percentField(telemetry.fanMonitor.currentUtilization))%"
         case .battery:
-            return "BAT \(Self.percentField(batteryMonitor.currentChargeFraction))%"
+            return "BAT \(Self.percentField(telemetry.batteryMonitor.currentChargeFraction))%"
         case .temperature:
             // "TMP", not the "TEM" that menuTitle.prefix(3) yields for the warming placeholder above —
             // same small divergence disk already has (DIS while warming, DSK once reading).
-            return "TMP \(Self.degreeField(temperatureMonitor.currentCelsius))°"
+            return "TMP \(Self.degreeField(telemetry.temperatureMonitor.currentCelsius))°"
         case .ane:
-            return "ANE \(Self.wattField(aneMonitor.currentWatts))W"
+            return "ANE \(Self.wattField(telemetry.aneMonitor.currentWatts))W"
         }
     }
 
@@ -6118,8 +6301,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // on the next 2s tick); instantaneous readers (cpu/gpu/fan/battery) are point reads, so this is a
     // harmless refresh for them. lastSampleUptime is reset so the next tick starts a fresh interval.
     private func primeInactiveSources() {
-        for source in LoadSource.allCases where source != activeLoadSource && isSourceAvailable(source) {
-            _ = sampleSource(source, elapsed: nil)
+        for source in LoadSource.allCases where source != activeLoadSource && telemetry.isSourceAvailable(source) {
+            _ = telemetry.sampleSource(source, elapsed: nil)
         }
         lastSampleUptime = nil
     }
@@ -6133,7 +6316,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         otherSourcesHeaderView.isExpanded = showAllSources
         for item in otherSourceRowItems {
             guard let source = LoadSource(rawValue: item.tag) else { continue }
-            if showAllSources, source != activeLoadSource, isSourceAvailable(source) {
+            if showAllSources, source != activeLoadSource, telemetry.isSourceAvailable(source) {
                 item.isHidden = false
                 item.title = allSourcesRowText(for: source)
                 item.toolTip = (source == .battery) ? batteryTooltipText() : nil
@@ -6151,31 +6334,31 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         let warming = MenuTitle.line(source.menuTitle, MenuTitle.warmingUp)
         switch source {
         case .cpu:
-            guard loadMonitor.hasSample else { return warming }
-            return String(format: "CPU: %.1f%%", loadMonitor.smoothedUsage * Tuning.percentScale)
+            guard telemetry.loadMonitor.hasSample else { return warming }
+            return String(format: "CPU: %.1f%%", telemetry.loadMonitor.smoothedUsage * Tuning.percentScale)
         case .memory:
-            guard memoryMonitor.hasSample else { return warming }
+            guard telemetry.memoryMonitor.hasSample else { return warming }
             return memoryUsageLineText()
         case .gpu:
-            guard gpuMonitor.hasSample else { return warming }
-            return String(format: "GPU: %.0f%%", gpuMonitor.currentUtilization * Tuning.percentScale)
+            guard telemetry.gpuMonitor.hasSample else { return warming }
+            return String(format: "GPU: %.0f%%", telemetry.gpuMonitor.currentUtilization * Tuning.percentScale)
         case .network:
-            guard networkMonitor.hasSample else { return warming }
+            guard telemetry.networkMonitor.hasSample else { return warming }
             return networkUsageLineText()
         case .disk:
-            guard diskMonitor.hasSample else { return warming }
+            guard telemetry.diskMonitor.hasSample else { return warming }
             return diskUsageLineText()
         case .fan:
-            guard fanMonitor.hasSample else { return warming }
+            guard telemetry.fanMonitor.hasSample else { return warming }
             return fanUsageLineText()
         case .battery:
-            guard batteryMonitor.hasSample else { return warming }
+            guard telemetry.batteryMonitor.hasSample else { return warming }
             return batteryUsageLineText()
         case .temperature:
-            guard temperatureMonitor.hasSample else { return warming }
+            guard telemetry.temperatureMonitor.hasSample else { return warming }
             return temperatureUsageLineText()
         case .ane:
-            guard aneMonitor.hasSample else { return warming }
+            guard telemetry.aneMonitor.hasSample else { return warming }
             return aneUsageLineText()
         }
     }
@@ -7041,7 +7224,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // A forced state is static, so there is nothing to observe: adopt it and skip the run-loop
         // source. Checked BEFORE the power-source probe so the hook also works on a desktop, where
         // the probe below bails out and would otherwise leave the forced value unread.
-        if let forced = Self.forcedBatteryState {
+        if let forced = BatteryLoadMonitor.forcedState {
             batteryState = forced
             updateSleepPrevention()   // see below — apply, don't just record
             return
@@ -7074,7 +7257,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // in keepAwakeSuspension (one place), and the paused menu row needs the number to display.
     // `nil` = no battery (desktop) or an unreadable power source → battery never suspends keep-awake.
     private static func evaluateBatteryState() -> (onBattery: Bool, percent: Double)? {
-        if let forced = forcedBatteryState { return forced }
+        if let forced = BatteryLoadMonitor.forcedState { return forced }
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [Any],
               let first = list.first,
@@ -7084,21 +7267,6 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         let onBattery = (dict[kIOPSPowerSourceStateKey] as? String) == kIOPSBatteryPowerValue
         return (onBattery: onBattery, percent: capacity)   // capacity is 0–100
     }
-
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_BATTERY=<pct>[:battery|:ac] pins the power-source read
-    // so the low-battery and critical-floor paths are testable without draining a real battery — the
-    // reason they went unverified long enough for arming below 20% to stay a silent no-op. Power state
-    // defaults to `battery` (the interesting case); `:ac` exercises "threshold irrelevant". Unset or
-    // unparseable = no override, real IOKit read. Mirrors MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE.
-    private static let forcedBatteryState: (onBattery: Bool, percent: Double)? = {
-        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_BATTERY"],
-              !raw.isEmpty else { return nil }
-        let parts = raw.lowercased().split(separator: ":", omittingEmptySubsequences: false)
-        guard let percent = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-              percent >= 0, percent <= Tuning.percentScale else { return nil }
-        let onBattery = parts.count < 2 || parts[1].trimmingCharacters(in: .whitespaces) != "ac"
-        return (onBattery: onBattery, percent: percent)
-    }()
 
     // Built once during animation-view setup. A sibling sublayer ON TOP of the frame-content layer,
     // hidden by default. It NEVER touches the frame contents, so a toggle costs no re-rasterization.
@@ -7587,6 +7755,11 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
 }
 
 switch Config.parse() {
+case .snapshot:
+    // No NSApplication, no status item, no state file, no update check — just the readers. This is
+    // what lets `--once` run beside a live GUI instance, in parallel with itself, or over SSH.
+    FileHandle.standardOutput.write(Data(TelemetryCore().snapshot().jsonLine.utf8))
+    exit(0)
 case .config(let config):
     let app = NSApplication.shared
     let delegate = MenuBarLoadRunnerApp(config: config)

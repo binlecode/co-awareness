@@ -7,7 +7,8 @@ three readings in `~/workspace_fullstack/actop`.
 **Lifecycle:** when R25 ships, the three readers join `docs/ARCHITECTURE.md` § 4 and their constants
 § 11, R25 leaves `docs/ROADMAP.md`, and this file is `git rm`'d in the same commit.
 
-**Depends on R24** for the module boundary and for the snapshot that carries the new fields.
+**Builds on the R24 telemetry core** (`docs/ARCHITECTURE.md` § 4.7) for the module boundary and for the
+snapshot that carries the new fields.
 
 ---
 
@@ -19,7 +20,7 @@ already there.
 
 ```
                       +--------------------------------------+
-                      |         TelemetryCore (R24)          |
+                      |             TelemetryCore            |
                       +--------------------------------------+
                                          |
                    +---------------------+---------------------+
@@ -136,7 +137,7 @@ measured idle/peak pair on this hardware before landing (a `mlx` or `llama.cpp` 
 | `$BIN --load-source bandwidth` | Exits 0, starts with the bandwidth reader engaged |
 | `LOG_SLOTS=1 $BIN --load-source bandwidth --label value` | Label text matches `... GB/s` |
 | `FORCE_UNAVAILABLE=bandwidth $BIN --load-source bandwidth` | Falls back like any other unavailable source, exit 0 |
-| `$BIN --once` (R24) | `bw_gbps`, `cpu_p_pct`, `cpu_e_pct`, `gpu_rend_pct`, `gpu_tiler_pct` present on hardware that has them |
+| `$BIN --once` | `bw_gbps`, `cpu_p_pct`, `cpu_e_pct`, `gpu_rend_pct`, `gpu_tiler_pct` present on hardware that has them |
 | Idle-bus sanity | `$BIN --once` on an idle Mac reports `bw_gbps` well below the busy figure taken during an inference run — the one assertion that catches the upper-edge weighting bug |
 | CPU split probe (§ 3) | Under a pinned E-cluster load, `cpu_e_pct` is the higher of the two; under a spin, `cpu_p_pct` is |
 | GPU split | With the menu open under GPU load, the row carries `Renderer` |

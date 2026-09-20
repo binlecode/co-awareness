@@ -88,7 +88,7 @@ $BIN --keep-awake-pid $$ --help >/dev/null 2>&1;    chk "--keep-awake-pid live p
 # this can be baked into a login item), so which value each form resolves to is asserted by behavior
 # in §3a. A bare "rc=0, flag accepted" check here would restate that without observing anything.
 $BIN --battery-threshold >/dev/null 2>&1;           chk "--battery-threshold no value" 1 $?
-for f in --speed-multiplier --label --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check; do
+for f in --speed-multiplier --label --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --once; do
   $BIN --help 2>&1 | grep -q -- "$f" && { echo "  PASS --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL --help missing $f"; fail=$((fail+1)); }
 done
 # The launcher's OWN flags, against the launcher's own help — the app binary never sees these and its
@@ -96,7 +96,7 @@ done
 # handled before the singleton guard and before any compile, so this neither builds nor touches a
 # running instance. `--precompile` earns a listing like any other: it is in the CHANGELOG's public-API
 # surface, so an undocumented one is a semver-governed flag nobody can find.
-for f in --foreground --no-detach --detach --extra --precompile; do
+for f in --foreground --no-detach --detach --extra --precompile --once; do
   ./menubar-load-runner --help 2>&1 | grep -q -- "$f" && { echo "  PASS launcher --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL launcher --help missing $f"; fail=$((fail+1)); }
 done
 $BIN foo bar >/dev/null 2>&1;                       chk "extra positional" 1 $?
@@ -114,6 +114,61 @@ vchk "cover badge" ">v$VER<"                         docs/cover.html
 echo "  parse: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 else
 skip "§2 CLI parse paths [core]" "core tier not selected (--gui)"
+fi
+
+# --- §2a `--once` snapshot [core] ------------------------------------------
+# R24's contract. It belongs in THIS tier and not the GUI one: the snapshot path builds no
+# NSApplication, so a PASS with no WindowServer behind it is the headless proof itself — the nine
+# readers answering a script, which is the whole point of the flag.
+if [ "$RUN_NONGUI" = 1 ]; then
+section "§2a --once snapshot [core — headless proof]"
+pass=0; fail=0
+ok(){ [ "$2" = 1 ] && { echo "  PASS $1"; pass=$((pass+1)); } || { echo "  FAIL $1 ($3)"; fail=$((fail+1)); }; }
+J=tmp/qa-once.json; E=tmp/qa-once.err
+
+# One reading, timed. /usr/bin/time -p rather than $SECONDS: the whole budget is sub-second.
+# The rc has to be stashed from INSIDE the braces: the pipeline's own status is awk's, not the app's.
+real=$( { /usr/bin/time -p $BIN --once >"$J"; echo $? >tmp/qa-once.rc; } 2>&1 | awk '/^real/{print $2}' )
+rc=$(cat tmp/qa-once.rc); rm -f tmp/qa-once.rc
+ok "exit 0" "$([ "$rc" = 0 ] && echo 1 || echo 0)" "rc=$rc"
+ok "stdout is exactly one line" "$([ "$(wc -l <"$J" | tr -d ' ')" = 1 ] && echo 1 || echo 0)" "got $(wc -l <"$J") lines"
+plutil -convert json -o - - <"$J" >/dev/null 2>&1; pj=$?
+ok "stdout parses as JSON" "$([ "$pj" = 0 ] && echo 1 || echo 0)" "got: $(cat "$J")"
+# The four keys the schema says are never absent — a snapshot that degrades to `{"v":1}` on a
+# machine with nine working readers is a pass under "absent when unavailable" and a lie in practice.
+miss=""; for k in '"v":' '"cpu_pct":' '"mem_pct":' '"thermal":'; do grep -q -- "$k" "$J" || miss="$miss $k"; done
+ok "carries the always-present keys" "$([ -z "$miss" ] && echo 1 || echo 0)" "missing:$miss"
+ok "under 500 ms wall (${real}s)" "$(awk -v r="$real" 'BEGIN{print (r>0 && r<0.5) ? 1 : 0}')" "real=${real}s"
+
+# Exclusive: every other flag configures a GUI this path never builds. Stdout must stay EMPTY — a
+# consumer pipes this straight into a parser, so a usage block on stdout is worse than no output.
+$BIN --once --label value >"$J" 2>"$E"; rc=$?
+ok "--once with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
+ok "…says why, on stderr, with stdout empty" \
+   "$([ ! -s "$J" ] && [ -s "$E" ] && echo 1 || echo 0)" "stdout=$(cat "$J") stderr=$(cat "$E")"
+
+# An unavailable source is an ABSENT key, never a null and never a 0 — asserted through the existing
+# simulator, since every reader really works on this hardware.
+MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu $BIN --once >"$J" 2>/dev/null; rc=$?
+ok "a forced-unavailable source drops its key" \
+   "$([ "$rc" = 0 ] && ! grep -q '"gpu_pct"' "$J" && echo 1 || echo 0)" "got: $(cat "$J")"
+MENUBAR_LOAD_RUNNER_FORCE_BATTERY=15:battery $BIN --once >"$J" 2>/dev/null
+ok "a forced charge reaches the snapshot" \
+   "$(grep -q '"battery_pct":15.0' "$J" && echo 1 || echo 0)" "got: $(cat "$J")"
+
+# Side-effect-free, which is what makes it safe beside a live instance and in parallel with itself.
+# The state file is the one thing the app owns that a second process could corrupt; the snapshot path
+# must not so much as open it. (§6 runs the same flag against a real running instance.)
+ST=tmp/qa-once-state.json; printf '{"version":1}' >"$ST"; touch -t 202001010000 "$ST"
+before=$(stat -f '%m %z' "$ST")
+MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" $BIN --once >/dev/null 2>&1
+ok "leaves state.json untouched" \
+   "$([ "$(stat -f '%m %z' "$ST")" = "$before" ] && echo 1 || echo 0)" "was [$before] now [$(stat -f '%m %z' "$ST")]"
+
+rm -f "$J" "$E" "$ST"
+echo "  snapshot: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
+else
+skip "§2a --once snapshot [core]" "core tier not selected (--gui)"
 fi
 
 # --- §3 Launch lifecycle [gui] ---------------------------------------------
@@ -1030,6 +1085,30 @@ if [ "$RUN_LAUNCHER" = 1 ]; then
   [ "$(stat -f %m MenuBarLoadRunner)" = "$before" ] \
     && echo "  PASS rejected launch did not compile" \
     || { echo "  FAIL rejected launch rebuilt the binary (guard runs after the compile)"; total_fail=$((total_fail+1)); }
+
+  # --once on the launcher: it is intercepted ahead of BOTH the singleton guard and the compile, so
+  # it answers beside the live victim (the guard would refuse a launch here) and leaves the stale
+  # binary alone (a compile here would put a swiftc race back in front of the guard). The source is
+  # still stale from the check above, which is what makes the second half assertable.
+  before=$(stat -f %m MenuBarLoadRunner)
+  snap=$(./menubar-load-runner --once 2>&1); rc=$?
+  { [ "$rc" = 0 ] && [ "$(printf '%s' "$snap" | grep -c '"v":1')" = 1 ]; } \
+    && echo "  PASS --once answers beside a live instance" \
+    || { echo "  FAIL --once beside a live instance (rc=$rc, got: $snap)"; total_fail=$((total_fail+1)); }
+  [ "$(stat -f %m MenuBarLoadRunner)" = "$before" ] \
+    && echo "  PASS --once compiled nothing" \
+    || { echo "  FAIL --once rebuilt the binary (intercept runs after the compile)"; total_fail=$((total_fail+1)); }
+
+  # No binary yet: a snapshot cannot compile one for itself (see above), so it says so and exits 2
+  # rather than silently starting a 30s build or a menu bar. Moved aside, never deleted — the victim
+  # is running out of this very inode.
+  mv MenuBarLoadRunner tmp/qa-once-binary-aside
+  out=$(./menubar-load-runner --once 2>&1); rc=$?
+  mv tmp/qa-once-binary-aside MenuBarLoadRunner
+  case "$rc:$out" in
+    2:*--precompile*) echo "  PASS --once with no binary exits 2 and names --precompile" ;;
+    *) echo "  FAIL --once with no binary (rc=$rc, got: $out)"; total_fail=$((total_fail+1)) ;;
+  esac
 
   # …and the rebuild that the updater performs while an instance is live must not disturb it. The
   # build is renamed into place rather than written over the binary, so the running process keeps its

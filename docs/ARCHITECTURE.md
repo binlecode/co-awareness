@@ -46,44 +46,48 @@ All repository documentation lives in `docs/`. The repository root holds only `R
 
 MenuBar Load Runner is a single-file, unbundled native macOS menu bar application written in Swift and AppKit. It visualizes real-time hardware telemetry by driving the playback rate of an animated status-bar GIF and providing an integrated live diagnostic dashboard with built-in sleep inhibition.
 
+There are **two entry paths and one set of readers**. The GUI is the app; `--once` is a single-shot snapshot for anything that is not a pair of eyes (§ 4.7). The paths never meet: they share `TelemetryCore` and nothing else.
+
 ```
-                                    +------------------------+
-                                    |  menubar-load-runner   |
-                                    |     (Zsh Launcher)     |
-                                    +-----------+------------+
-                                                | fork/exec / singleton guard
-                                                v
-+--------------------------------------------------------------------------------------------------------+
-|                                       MenuBarLoadRunner (Swift)                                        |
-|                                                                                                        |
-|  +-----------------------+   +-----------------------+   +------------------------------------------+  |
-|  |   Config / StateStore |   |   CADisplayLink /     |   |      Telemetry Subsystems (9 Readers)    |  |
-|  |  (CLI/Env/state.json) |   |     Timer (60Hz)      |   |  Mach / IORegistry / SMCClient / IOKit   |  |
-|  +-----------+-----------+   +-----------+-----------+   +--------------------+---------------------+  |
-|              |                           |                                    |                        |
-|              v                           v                                    v                        |
-|  +-----------------------+   +-----------------------+   +------------------------------------------+  |
-|  |  Status Bar Items     |   |  Render Pipeline      |   |  ThroughputScaler / Hysteresis Logic     |  |
-|  |  * Animation Item     |<--+  * Transparent Trim   |<--+  * Exponential Moving Average (EMA)      |  |
-|  |  * Left/Right Label   |   |  * Aspect-Ratio Sizing|   |  * Adaptive Window Rate Normalization    |  |
-|  |  * KeepAwake CALayer  |   |  * Vsync Game Loop    |   |  * Self-Throttling (Occlusion/Power/RM)  |  |
-|  +-----------+-----------+   +-----------------------+   +------------------------------------------+  |
-|              |                                                                                         |
-|              v                                                                                         |
-|  +--------------------------------------------------------------------------------------------------+  |
-|  |                                  Interactive Dropdown Dashboard                                  |  |
-|  |  * LoadHistoryView (60s Sparkline)   * Load Averages (1/5/15m)   * Active / Other Sources Readout|  |
-|  |  * Keep Awake Control & Presets      * IOPMCopyAssertionsByProcess (Machine Assertion Inspector) |  |
-|  |  * Settings Submenu                  * Preset Switcher           * Self-Update (UpdateChecker)   |  |
-|  +-----------------------------------------------+--------------------------------------------------+  |
-|                                                  |                                                     |
-+--------------------------------------------------+-----------------------------------------------------+
-                                                   | spawns & binds PID
-                                                   v
-                                    +------------------------+
-                                    | caffeinate -di -w <pid>|
-                                    |    (SleepPreventer)    |
-                                    +------------------------+
+                      +---------------------------------+
+                      |       menubar-load-runner       |
+                      |         (Zsh launcher)          |
+                      +---------------------------------+
+                                       |
+                       +---------------+---------------------+
+                       |  --once, intercepted first          |  GUI launch
+                       |  no guard, no compile               |  singleton -> compile -> detach
+                       v                                     v
+      +---------------------------------+   +---------------------------------+
+      | snapshot path                   |   | MenuBarLoadRunnerApp (GUI)      |
+      |                                 |   |                                 |
+      | sample, wait, sample again      |   | status items, menu, labels      |
+      | one JSON line, exit 0           |   | Keep Awake, state.json          |
+      |                                 |   | CADisplayLink game loop         |
+      | no NSApplication                |   | speed mapping 0..1              |
+      | no state.json                   |   |                                 |
+      +---------------------------------+   +---------------------------------+
+                       |                                     |
+                       +---------------+---------------------+
+                                       v
+              +--------------------------------------------------+
+              | TelemetryCore                                    |
+              |                                                  |
+              | the nine readers, their probes and scalers       |
+              | one snapshot(), physical units only              |
+              |                                                  |
+              | not its business: AppKit, speed mapping,         |
+              | Keep Awake, state.json                           |
+              +--------------------------------------------------+
+                                       |
+         +-----------------+-----------+-----+-----------------+
+         v                 v                 v                 v
+  +---------------+ +---------------+ +---------------+ +---------------+
+  | Mach          | | IOKit         | | SMCClient     | | IOReport      |
+  | CPU, memory   | | GPU, disk,    | | fan, die      | | ANE watts     |
+  |               | | network,      | | temperature   | |               |
+  |               | | battery       | |               | |               |
+  +---------------+ +---------------+ +---------------+ +---------------+
 ```
 
 ### Core Design Tenets
@@ -209,7 +213,7 @@ if advanced { renderCurrentFrame() }                                        // l
 
 ## 4. Hardware Telemetry & Scaling Subsystems
 
-The application includes nine unprivileged telemetry monitors sampling system state every 2 seconds (`Tuning.loadSampleInterval`).
+The application includes nine unprivileged telemetry monitors, owned by `TelemetryCore` (§ 4.7) and sampled by the GUI every 2 seconds (`Tuning.loadSampleInterval`).
 
 ```
 +----------------------------------------------------------------------------------------+
@@ -374,6 +378,64 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
    - **Presentation**: Enriches the battery status row (`Battery: 80% · AC · 100% health · 113 cycles`), `stateItem` (`Battery State: Normal · 8478/8579 mAh`, replacing the drain band while the menu is open), and provides multi-line AppKit tooltips with granular mAh capacities.
    - **Graceful Desktop Omission**: On AC-only desktop Macs lacking an `AppleSmartBattery` service, the reader cleanly returns `nil`, and the menu seamlessly preserves standard desktop AC status with zero visual defects or overhead.
    - **Observability without behavior change**: `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1` prints one line at launch and one per menu open. It reads a throwaway copy and never assigns the cached field, so the hook cannot make the menu render the diagnostics branch at a moment the menu was never open — the reason it is not wired into `sampleSystemLoad()` where the other `LOG_*` hooks sit.
+
+`MENUBAR_LOAD_RUNNER_FORCE_BATTERY=<pct>[:battery|:ac]` pins the charge and power state on `BatteryLoadMonitor` itself, not on a caller. Two places in the app read `IOPSCopyPowerSourcesInfo` — Keep Awake's suspension policy (§ 7.2) and this reader — and a hook honored by only one of them would let them disagree about the same battery in the same run. Current (mA) is left real: the hook simulates a charge and a power state, nothing else. On a desktop it also makes the reader *answer*, which is the only way a machine with no battery can exercise the path at all.
+
+### 4.7 Telemetry Core & the `--once` Snapshot (R24)
+
+Nine unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `--once` is the one way anything else asks.
+
+**Module boundaries.** Each row's *not its business* column names the canonical owner, so nothing has to be inferred:
+
+| Module | Owns | Not its business — canonical owner |
+|---|---|---|
+| `TelemetryCore` | The nine readers, their availability probes, their scalers, `sampleSource(_:elapsed:)`, `isSourceAvailable(_:)`, and one `snapshot()` returning physical units | Speed mapping, menu text, labels, Keep Awake, `state.json` — all `MenuBarLoadRunnerApp` |
+| `MenuBarLoadRunnerApp` | Everything on screen and every intent that persists; asks the core for readings | How a reading is taken — `TelemetryCore` |
+| `menubar-load-runner` (launcher) | Singleton guard, `compile_if_stale`, detach — for **GUI launches only** | Telemetry; and on the `--once` path, compiling anything |
+
+The core never imports a display concept. It returns MB/s, °C, W, RPM, %, A — never the 0..1 driver value. Normalization to 0..1 is a speed-mapping question, which is why the scalers (§ 4.4) stay *inside* the readers, where they are how a rate reader produces its own number, and why nothing in a snapshot reads one. The core also never touches `state.json`: a snapshot describes the machine, not this app's intent, and a second writer would break the single-writer model (§ 8.2).
+
+**Interface.** One flag, one schema, one sampling window:
+
+| Property | Contract |
+|---|---|
+| Argument form | `--once` **must be the only argument.** Any other flag with it is a usage error, not a silent ignore — every other flag configures a GUI this path does not build |
+| Output | Exactly one line on stdout, a JSON object, newline-terminated. Nothing else on stdout, ever — the usage error above prints to stderr *without* the usage block for this reason |
+| Unavailable source | Its keys are **absent**. Never `null`, never a zero standing in for "no reading" |
+| Side effects | None. No `NSApplication`, no status item, no `state.json` read or write, no `caffeinate`, no update check, no compile |
+| Concurrency | Safe while a GUI instance runs, and safe in parallel with itself. It holds nothing and writes nothing |
+| Exit | `0` a snapshot was printed (even if degraded) · `1` usage error · `2` binary not built (launcher only, names `--precompile`) |
+| Latency | One process start plus one sampling window. ~290 ms wall measured on an M4 Max, dominated by the window |
+
+The rate readings (network, disk, swap, battery current, ANE) are counter deltas and do not exist at a single instant, so the path samples, waits `Tuning.snapshotWindow`, samples again against the *measured* gap, and prints. The budget is therefore a window, not a syscall: a sub-10 ms snapshot could only carry the point readings, and splitting the schema into fast keys and slow keys would be two schemas.
+
+**Schema.** `v` is the contract version and the only field always present; every other key appears when its reader answered. Names carry their unit — `_mibs` is MiB/s (the menu writes "MB/s" as display shorthand: same number, not a second fact). Adding a field is not a version bump; removing one or changing what it means is, and consumers read by key and ignore what they do not know.
+
+```json
+{"v":1,"cpu_pct":14.2,"mem_pct":41.0,"swap_mibs":0.00,"gpu_pct":28.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
+```
+
+| Field | Unit | Reader | Absent when |
+|---|---|---|---|
+| `v` | int | — | never |
+| `cpu_pct` | % | `CPULoadMonitor` | never (Mach always answers) |
+| `mem_pct` | % | `MemoryLoadMonitor` raw used fraction | never |
+| `swap_mibs` | MiB/s | `MemoryLoadMonitor` swap rate | swap counters unreadable |
+| `gpu_pct` | % | `GPULoadMonitor` | no readable accelerator |
+| `net_rx_mibs` · `net_tx_mibs` | MiB/s | `NetworkLoadMonitor` | — |
+| `disk_read_mibs` · `disk_write_mibs` | MiB/s | `DiskLoadMonitor` | — |
+| `fan_rpm` | RPM, one entry per fan | `FanLoadMonitor` (SMC) | fanless machine |
+| `battery_pct` | % | `BatteryLoadMonitor` | desktop, no battery |
+| `battery_a` | A, discharge positive | `BatteryLoadMonitor` | not discharging (AC, or no current reading) |
+| `temp_c` | °C, hottest die sensor | `TemperatureLoadMonitor` (SMC) | no readable `Tp**` cluster |
+| `thermal` | `nominal` · `fair` · `serious` · `critical` | `KernelThermalPressure` | never |
+| `ane_w` | W | `ANELoadMonitor` (IOReport) | channel absent |
+
+Precision follows the reader, not the field: percentages and °C carry one decimal, rates, watts and amps two, RPM none — each finer than the hardware's own resolution. The line is assembled by hand rather than by `JSONEncoder`, because the contract fixes the key order and the per-unit precision and an encoder gives neither.
+
+**Launcher interception.** `--once` is handled in the first statement of argument handling, ahead of both the singleton guard and `compile_if_stale`, and `exec`s the binary with argv unchanged (exclusivity is the binary's to enforce, since it owns the usage text). The source being newer than the binary is deliberately not consulted: a reading from the previous build is still a true reading, and compiling here would put a `swiftc` race back in front of the very guard that exists to prevent one (§ 2). A missing binary is one stderr line naming `--precompile` and exit 2.
+
+**Headless is measured, not assumed.** The GPU (IOAccelerator), SMC and IOReport readers are kernel-side and were *expected* to answer with no WindowServer connection. `tests/qa.sh` §2a is what turns that into a measurement: it runs in the core tier, which never boots a GUI, and asserts the always-present keys are there rather than only that the JSON parses — a snapshot degrading to `{"v":1}` would otherwise pass "absent when unavailable" while telling the truth about nothing.
 
 ---
 
@@ -746,6 +808,8 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 | **Menu Layout** | Static slot width reservation | Status items must never resize based on live data values to guarantee zero layout jitter on the menu bar (§ 6.1). WindowServer owns ultimate placement under congestion (§ 6.2). |
 | **Game Loop** | Occlusion stops driver completely | Full occlusion (notch, inactive space, display off) must reduce render CPU utilization to exactly 0.0%. |
 | **State File** | Single-writer centralized save | `persistState()` is the only function permitted to write `state.json`, eliminating partial block overwrites. |
+| **Snapshot Path** | `--once` writes nothing and holds nothing | Side-effect freedom is what makes it safe beside a live instance and in parallel with itself; it is also why it is exempt from the singleton guard and the compile (§ 4.7). |
+| **Telemetry Core** | Physical units out, no display concepts in | `TelemetryCore` never returns a 0..1 driver value from `snapshot()` and never reads AppKit, Keep Awake or `state.json`, so one set of readers serves both entry paths without either defining the other (§ 4.7). |
 
 ---
 
@@ -756,6 +820,7 @@ Comprehensive reference of values defined in `Tuning`:
 | Constant Name | Value | Unit | Functional Role |
 |---|---|---|---|
 | `loadSampleInterval` | `2.0` | Seconds | Telemetry sampling and dashboard refresh period |
+| `snapshotWindow` | `0.2` | Seconds | Delta window between the two samples `--once` takes; the snapshot's whole latency budget (§ 4.7) |
 | `cpuSmoothingAlpha` | `0.2` | Fraction | Exponential moving average alpha for CPU load smoothing |
 | `speedUpdateHysteresis` | `0.08` | Fraction | Minimum load delta required to adjust animation speed |
 | `constrainedSpeedCeilingFraction` | `0.5` | Fraction | Animation speed cap under thermal/power/memory pressure |
@@ -776,6 +841,18 @@ Comprehensive reference of values defined in `Tuning`:
 | `assertionRetentionSeconds` | `8.0` | Seconds | Hysteresis retention time for external sleep assertion display |
 | `assertionRowCap` | `4` | Rows | Maximum external assertion rows displayed before overflow row |
 | `labelSlotPadding` | `4.0` | Points | Slack padding added to reserved status item label widths |
+
+Parameters that are not `Tuning` constants because they live on an interface rather than in the binary's interior:
+
+| Name | Default | Unit | Role | Lives in |
+|---|---|---|---|---|
+| `--once` | off | flag | Single-shot JSON snapshot; exclusive of every other argument (§ 4.7) | binary and launcher |
+| `v` | `1` | int | Snapshot contract version | output |
+| `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE` | unset | source keys | Marks readers unavailable; honored on both paths, so QA can assert an absent snapshot key | binary |
+| `MENUBAR_LOAD_RUNNER_FORCE_BATTERY` | unset | `pct[:battery\|:ac]` | Pins charge and power state on the reader itself (§ 4.6); honored on both paths | binary |
+| `MENUBAR_LOAD_RUNNER_FORCE_THERMAL` | unset | level | Pins the kernel thermal level; display-only, honored on both paths | binary |
+
+`MENUBAR_LOAD_RUNNER_EXIT_AFTER` has no meaning on the snapshot path and is ignored there: it already exits on its own.
 
 ---
 

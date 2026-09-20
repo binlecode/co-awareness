@@ -12,7 +12,8 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
 - **Launcher CLI** — the positional preset keyword or GIF path, and the flags
   `--speed-multiplier`, `--label`, `--load-source`, `--keep-awake`, `--keep-awake-pid`,
   `--battery-threshold`, `--no-update-check`,
-  `--foreground` / `--no-detach`, `--detach`, `--extra`, `--precompile`, `-h` / `--help`.
+  `--foreground` / `--no-detach`, `--detach`, `--extra`, `--precompile`, `--once`, `-h` / `--help`.
+- **The `--once` snapshot schema** — its `v` contract version, and the meaning of every key it emits.
 - **Environment variables** — `MENUBAR_LOAD_RUNNER_PATH`, `MENUBAR_LOAD_RUNNER_LOAD_SOURCE`,
   `MENUBAR_LOAD_RUNNER_LABEL`, `MENUBAR_LOAD_RUNNER_KEEP_AWAKE`,
   `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`,
@@ -30,6 +31,30 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
 
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
+
+## [Unreleased]
+
+### Added
+
+- **`--once`: the sensors, as one line of JSON, for anything that isn't a pair of eyes.** The nine
+  unprivileged readers used to run only behind a status item that had to be on screen, so nothing
+  else on the machine — a script, a status line, an agent about to start a 40-minute build — could
+  ask what the hardware was doing. `./menubar-load-runner --once` prints every reading this Mac
+  answers for in physical units and exits: `{"v":1,"cpu_pct":14.2,…,"temp_c":78.0,"thermal":"nominal"}`.
+  No menu bar, no `state.json`, no compile, nothing held — safe beside a running instance and safe in
+  parallel with itself. A source this machine can't read is an **absent key**, never a `null` and
+  never a `0` standing in for "no reading"; `v` is the schema version and is always present. It must
+  be the only argument, since every other flag configures a GUI this path never builds. Takes about
+  0.3 s: the throughput readers are counter deltas, so it samples, waits, and samples again. (R24)
+
+### Changed
+
+- **The nine readers moved behind a `TelemetryCore` the GUI owns but no longer defines.** No
+  behavioral change to the app; it is what lets one set of readers serve both the status item and
+  `--once` without either shaping the other.
+- **`MENUBAR_LOAD_RUNNER_FORCE_BATTERY` now pins the charge on the reader itself**, so Keep Awake's
+  suspension policy and the battery readout can no longer disagree about the same battery in the same
+  run — and the hook now also works on a desktop Mac, where it previously went unread.
 
 ## [1.25.0] - 2026-09-12
 

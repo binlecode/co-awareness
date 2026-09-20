@@ -87,6 +87,12 @@ Options:
   --precompile               Compile the source if it is newer than the binary, then exit without
                              launching. Safe to run while an instance is live (the build is renamed
                              into place). The in-app updater uses this so a restart is instant
+  --once                     Print one line of JSON with every reading this machine answers for
+                             (physical units; an unavailable source is an absent key), then exit --
+                             no menu bar, no state file, no compile. Must be the only argument.
+                             Safe beside a running instance and in parallel with itself. Takes about
+                             200 ms: the rate readers need a delta window. Exits 2 if the binary has
+                             not been built yet (run --precompile first)
   -h, --help                 Show this help
 
 Examples:
@@ -108,6 +114,7 @@ Examples:
   $APP_CMD_NAME --show-all-sources
   $APP_CMD_NAME --label value
   $APP_CMD_NAME dog-black --label BUILD
+  $APP_CMD_NAME --once
   $APP_CMD_NAME --keep-awake 4h
   $APP_CMD_NAME --keep-awake-pid \$!
   $APP_CMD_NAME horse-black --speed-multiplier 1.2
@@ -142,20 +149,37 @@ compile_if_stale() {
 }
 
 main() {
+  local script_dir launcher_path swift_module_cache
+  local launch_detached=1
+  local allow_extra=0
+  local do_precompile=0
+  local log_file pid arg
+  local -a passthrough_args swift_cmd
+
+  launcher_path="$(resolve_script_path)"
+  script_dir="${launcher_path:h}"
+
+  # --once: hand the whole argv to the binary and get out of the way. FIRST, ahead of the singleton
+  # guard and ahead of any compile — a snapshot writes nothing, locks nothing and must run beside a
+  # live instance or in parallel with itself, and compiling here would put a swiftc race back in
+  # front of the very guard that exists to prevent it. The source being newer is deliberately not
+  # consulted: a reading from the previous build is still a true reading. Exclusivity is the
+  # binary's to enforce (it owns the usage text), so every argument goes through unchanged.
+  for arg in "$@"; do
+    if [[ "$arg" == "--once" ]]; then
+      if [[ ! -x "$script_dir/MenuBarLoadRunner" ]]; then
+        print -u2 "$APP_CMD_NAME: no binary to read from; build one with \`$APP_CMD_NAME --precompile\`."
+        exit 2
+      fi
+      exec "$script_dir/MenuBarLoadRunner" "$@"
+    fi
+  done
+
   if ! command -v swift >/dev/null 2>&1; then
     print -u2 "$APP_CMD_NAME: swift command not found"
     exit 127
   fi
 
-  local script_dir launcher_path swift_module_cache
-  local launch_detached=1
-  local allow_extra=0
-  local do_precompile=0
-  local log_file pid
-  local -a passthrough_args swift_cmd
-
-  launcher_path="$(resolve_script_path)"
-  script_dir="${launcher_path:h}"
   swift_module_cache="${SWIFT_MODULE_CACHE:-/tmp/swift-module-cache}"
 
   passthrough_args=()
