@@ -1,8 +1,7 @@
 # ROADMAP
 
 The product tracker: what is open and what was declined. Shipped work and system
-boundaries are not tracked here — they are described as-built in `docs/ARCHITECTURE.md`. Created 2026-07-26;
-current as of v1.25.0.
+boundaries are not tracked here — they are described as-built in `docs/ARCHITECTURE.md`.
 
 Items are `R<n>`, assigned once, never reused. **P1** user-visible defect or silent failure · **P2**
 real capability gap · **P3** nice to have · **P4** parity for its own sake. Nothing here is a
@@ -19,9 +18,9 @@ and git. Refer to code by **symbol, never by line number** — anchors rot every
 One line: a load *visualizer* that earns each new capability through unprivileged reads and
 self-restraint — it only ever reads the system, and the only thing it throttles is itself.
 
-**Shipped capability is not tracked here.** How the app got from v1.0 to today — which stage
-established which invariant — is as-built and lives in `docs/ARCHITECTURE.md` § 12; a completed item's
-durable outcome moves there and its row leaves this file.
+**Shipped capability is not tracked here.** Which stage established which invariant is as-built and
+lives in `docs/ARCHITECTURE.md` § 12; a completed item's durable outcome moves there and its row
+leaves this file. Nothing in this file records what changed, or when.
 
 The Open items sit on the same arc: R9 extends preset identity beyond the repo; R26 is a name, held
 until something outside this repo has leaned on the interface long enough to fix its shape.
@@ -66,10 +65,10 @@ the behavior being missed.
 
 | Item | Why not |
 |---|---|
-| GPU power and SoC package power readers (the rest of R10) | **Decided 2026-09-12:** Energy Model channels nest arbitrarily with cross-chip schema debt while closely correlating with CPU/GPU utilization and temperature readers, offering negligible ROI compared to the isolated ANE leaf rail. |
-| A numeric CPU speed-limit percentage on the temperature row (the other half of R23) | **Decided 2026-09-12:** Apple Silicon publishes a discrete pressure level, not a frequency cap — `IOPMCopyCPUPowerStatus` answers `kIOReturnNotFound` (probed) — so any percentage would be derived from a level rather than measured. Intel's `CPU_Speed_Limit` is real, but no Intel hardware is available to this project — both the read and the temperature row it would annotate would ship unverified. Re-propose with a reading from a real Intel Mac. |
-| Periodic update polling (R18) | **Decided 2026-09-10:** Launch-time discovery plus on-demand menu checks are sufficient for non-critical releases without adding background network timers or lifecycle complexity. |
-| An `.app` bundle · notarization · Homebrew cask · Sparkle · a URL scheme / automation interface | **Decided 2026-07-26:** Stays an unbundled source-built binary to preserve direct CLI argv execution, zero-cost ad-hoc signing, and git-native in-place updates without $99/yr notarization overhead. |
+| GPU power and SoC package power readers (the rest of R10) | Energy Model channels nest arbitrarily with cross-chip schema debt while closely correlating with CPU/GPU utilization and temperature readers, offering negligible ROI compared to the isolated ANE leaf rail. |
+| A numeric CPU speed-limit percentage on the temperature row (the other half of R23) | Apple Silicon publishes a discrete pressure level, not a frequency cap — `IOPMCopyCPUPowerStatus` answers `kIOReturnNotFound` (probed) — so any percentage would be derived from a level rather than measured. Intel's `CPU_Speed_Limit` is real, but no Intel hardware is available to this project — both the read and the temperature row it would annotate would ship unverified. Re-propose with a reading from a real Intel Mac. |
+| Periodic update polling (R18) | Launch-time discovery plus on-demand menu checks are sufficient for non-critical releases without adding background network timers or lifecycle complexity. |
+| An `.app` bundle · notarization · Homebrew cask · Sparkle · a URL scheme / automation interface | Stays an unbundled source-built binary to preserve direct CLI argv execution, zero-cost ad-hoc signing, and git-native in-place updates without $99/yr notarization overhead. |
 | Closed-lid (clamshell) sleep prevention via `pmset disablesleep` (like modafinil) | **Violates unprivileged execution and clean-teardown tenets:** Mutating system-wide sleep policy via `pmset` requires root and risks leaving sleep permanently disabled on crash, unlike PID-bound `caffeinate`. |
 | Per-process CPU/RAM breakdown table (like Stats v3 or Activity Monitor) — including an on-demand `--proc-list` that only walks the task list when asked | **Violates self-throttling and minimal-footprint tenets:** Continuously walking the Mach task list for per-PID statistics consumes 1–3% CPU, turning the observer into the load it measures. Making it on-demand answers the cost and not the need: nothing yet names a decision that a whole-machine reading leaves unanswerable, and `top` already answers per-process. Re-propose with that decision, not with a cheaper implementation. |
 | Online community asset store / in-app GIF downloader (like RunCat Runner Gallery) | **Violates the self-contained dotfile philosophy:** Remote asset downloads introduce network attack surfaces and untrusted runtime ingestion, whereas local Git/directory presets remain transparent and auditable. |
