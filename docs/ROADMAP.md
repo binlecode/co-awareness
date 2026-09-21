@@ -52,7 +52,8 @@ this binary is built not to be.
 binary. The rename buys nothing the `--once` schema does not already buy, and it is charged separately:
 the `MENUBAR_LOAD_RUNNER_*` hook names that `AGENTS.md` and `tests/qa.sh` hold as canonical, the
 `state.json` directory, the launcher filename, the LaunchAgent label in `scripts/`, the self-update
-remote, README and the cover page.
+remote and the GitHub repository name itself (old clone and raw URLs redirect; Discussions and stars
+follow), README and the cover page.
 
 **Scope: this repo only.** R26 is the surfaces above and nothing else. `actop` is not touched, not
 deprecated and not a dependency of this item — it is a published package with its own users, and
