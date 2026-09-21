@@ -22,19 +22,18 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 lives in `docs/ARCHITECTURE.md` § 12; a completed item's durable outcome moves there and its row
 leaves this file. Nothing in this file records what changed, or when.
 
-The Open items sit on the same arc: R9 extends preset identity beyond the repo; R26 is a name, held
-until something outside this repo has leaned on the interface long enough to fix its shape.
+One item is open: R26, a name, held until something outside this repo has leaned on the interface
+long enough to fix its shape.
 
 ## Open
 
 Ordered by ROI, highest first — value against cost, not just the priority band. Each row is one line of
-tracking: what is wrong, and where the design lives. Mechanism, schema, parameters and verification are
-in the linked plan — never restated here.
+tracking: what is wrong, and where the design lives. Mechanism, schema, parameters and verification live
+in the design the row points to — never restated here.
 
 | ID | Item | Pri | Blocked by |
 |---|---|---|---|
 | R26 | **Rename to `co-load-runner`.** A name, not a capability, and confined to this repo — nothing in `actop` moves with it. Held below (§ R26) with its cost, until the `--once` contract has a caller that actually exercises it. | P4 | — |
-| R9 | **Custom GIFs are launch-only, not reusable presets.** Add first-class local animated-GIF presets under `~/.config/menubar-load-runner/presets/`, with drop-in discovery plus native menu/CLI import that validates, alpha-union crops, bounds, normalizes, atomically installs, and immediately selects the result. Static images and non-GIF animation formats stay out of the first cut; a raw positional GIF path remains the no-install escape hatch. Full accepted-input contract, resource budgets, identity/merge rules, failure semantics, symbol-level implementation order, and real-binary QA matrix: [`PLAN-custom-gifs.md`](PLAN-custom-gifs.md). | P4 | — |
 
 ### R26 — the rename, and what it costs
 
@@ -70,6 +69,7 @@ the behavior being missed.
 
 | Item | Why not |
 |---|---|
+| First-class local custom-GIF presets / runtime import (R9) | Over-design: custom GIF import is not a core feature or user requirement. The system only requires a reproducible SOP to add whatever art is needed (add optimized GIF to `gifs/` and register in `gifs/presets.json`, per `AGENTS.md`); a raw positional path (`./menubar-load-runner /path/to.gif`) remains the unbundled escape hatch. |
 | GPU power and SoC package power readers (the rest of R10) | Energy Model channels nest arbitrarily with cross-chip schema debt while closely correlating with CPU/GPU utilization and temperature readers, offering negligible ROI compared to the isolated ANE leaf rail. |
 | A numeric CPU speed-limit percentage on the temperature row (the other half of R23) | Apple Silicon publishes a discrete pressure level, not a frequency cap — `IOPMCopyCPUPowerStatus` answers `kIOReturnNotFound` (probed) — so any percentage would be derived from a level rather than measured. Intel's `CPU_Speed_Limit` is real, but no Intel hardware is available to this project — both the read and the temperature row it would annotate would ship unverified. Re-propose with a reading from a real Intel Mac. |
 | Periodic update polling (R18) | Launch-time discovery plus on-demand menu checks are sufficient for non-critical releases without adding background network timers or lifecycle complexity. |
