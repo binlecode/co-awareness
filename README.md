@@ -571,8 +571,8 @@ Disable the check entirely with `--no-update-check` or `MENUBAR_LOAD_RUNNER_UPDA
 ## Testing & CI
 
 There's no unit-test framework — the release gate is a single tiered QA harness, `tests/qa.sh`.
-What it can't reach — the clicks, the eyes-only checks, the release-cut walk — is listed in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) § 13. Run it from the repo root:
+What it can't reach — the menu clicks and the eyes-only checks — stays manual; the release-cut walk
+is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) § 13. Run it from the repo root:
 
 ```bash
 tests/qa.sh            # core + gui (local default)
@@ -587,14 +587,14 @@ Coverage is split into explicit tiers around one question — **does the check b
 | Tier | Sections | Needs a GUI session? | Role |
 |---|---|---|---|
 | `core` | §1 build (warning-clean) · §2 CLI/version · §2a `--once` snapshot | No | Primary gate — must pass before a release; headless-safe |
-| `gui` | §3 launch lifecycle · §3a–§3h Keep Awake / persistence / label geometry / sleep assertions / freeze / battery diagnostics · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
-| `launcher` / §7 | §6 launcher + singleton (disruptive `pkill`) · §7 interactive menu spot-check | — | Manual — run locally before a release |
+| `gui` | §3 launch lifecycle · §3a–§3i Keep Awake / persistence / label geometry / sleep assertions / freeze / battery diagnostics / kernel thermal · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
+| `launcher` | §6 launcher + singleton (disruptive `pkill`) | — | Manual — run locally before a release |
+| manual | the menu walk + the eyes-only checks — never scripted | — | Hands and eyes; a NOTE in the tiers above is an unanswered case, not a pass |
 
 **All regression/QA currently runs locally** — `tests/qa.sh` is the source of truth. There are **no unit
 tests**, by policy: every check launches the real binary and asserts a real side effect (a `caffeinate`
-child, a state file, the live status item's own geometry and readout). Five standalone `.swift` probes that
-re-ported app logic and asserted against the copy were deleted in favor of that — the copy passes while the
-app is broken. This is why the `core` tier is thin: most of the real binary needs a status item, so the behavioral
+child, a state file, the live status item's own geometry and readout) — never a re-ported copy of the app's
+own logic, which passes while the app is broken. This is why the `core` tier is thin: most of the real binary needs a status item, so the behavioral
 checks live in `gui`. The exception is `--once` (§2a), which builds no GUI at all — running it in the
 headless tier *is* the proof that the readers answer with no WindowServer behind them.
 

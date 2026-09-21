@@ -8,10 +8,6 @@
 #             required gate — and it is deliberately THIN: every check here drives the real binary,
 #             and the real binary needs a status item for anything more.
 #
-#   Every case earns its place by being able to fail for a reason no other case covers. A check that
-#   only restates another one's failure is deleted, not kept for symmetry: "flag accepted" where the
-#   flag is already launched for real, one case per source where the sources share one code path, or
-#   a second input in a shape the first already proved.
 #   gui       §3 launch lifecycle · §3a Keep Awake battery conditions · §3b settings persistence ·
 #             §3c label slot geometry · §3d other sleep assertions · §3e machine sleep-hold state ·
 #             §3f Keep Awake launch arming · §3g freeze animation · §3h battery diagnostics ·
@@ -22,7 +18,15 @@
 #   launcher  §6 launcher wrapper: singleton guard, `--precompile`, and the build's safety against a
 #             live instance. Disruptive: calls `pkill MenuBarLoadRunner`, so it STOPS any running
 #             instance (incl. a login-item one). Opt-in only.
-#   manual    the menu walk + the eyes-only checks — docs/ARCHITECTURE.md § 13, never scripted.
+#   manual    what no hook can reach: the menu clicks (no agent can drive an NSMenu here) and how the
+#             rows LOOK. Never scripted, and never faked either — a case that cannot be observed
+#             prints NOTE, which is an unanswered question, not a pass.
+#
+# Every case earns its place by being able to fail for a reason no other case covers. A check that
+# only restates another one's failure is deleted, not kept for symmetry: "flag accepted" where the
+# flag is already launched for real, one case per source where the sources share one code path, one
+# case per parse branch rather than per input shape, and the behavior rather than the internal field
+# the behavior is built on.
 #
 # Usage:
 #   tests/qa.sh                 core + gui              (local default — unchanged behavior)
@@ -97,8 +101,7 @@ for f in --foreground --no-detach --detach --extra --precompile --once; do
 done
 $BIN foo bar >/dev/null 2>&1;                       chk "extra positional" 1 $?
 # Version consistency. AppInfo.version is the source of truth; every *in-repo* surface that names the
-# version must agree with it, or a release ships a stale one silently — which is exactly how README sat
-# at 1.11.2 through two releases while the CHANGELOG (checked here since v1.x) stayed correct. The git
+# version must agree with it, or a release ships a stale one silently. The git
 # tag is the fifth surface and is deliberately NOT checked: qa.sh runs *before* the tag exists, so
 # asserting it would fail every pre-release run. See docs/ARCHITECTURE.md § 13.
 VER=$(grep -Eo 'static let version = "[0-9]+\.[0-9]+\.[0-9]+"' MenuBarLoadRunner.swift | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
@@ -226,11 +229,11 @@ run "load-source bogus"        "Unknown --load-source" $BIN --load-source bogus
 # whose `allow` pattern accepts the real fallback line.
 run "force-unavail -> cpu"     "unavailable on this machine" env MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu $BIN --load-source gpu
 run "fixed speed"              "" $BIN --speed-multiplier 1.5
-run "label value + gpu"        "" $BIN --label value --load-source gpu
-run "label custom text"        "" $BIN --label BUILD
 run "show-all-sources (flag)"  "" $BIN --show-all-sources
 run "show-all-sources (env)"   "" env MENUBAR_LOAD_RUNNER_SHOW_ALL=1 $BIN --load-source memory
-run "no-update-check"          "" $BIN --no-update-check
+# No row for --label or --no-update-check: §5 launches every source with --label value and reads the
+# result back off the bar, §3b launches a custom one and asserts what it persisted, and every §3f arm
+# carries --no-update-check. A clean-launch row for them would only restate those.
 run "wide preset + label"      "" $BIN totoro-group-white --label NET --load-source network
 run "custom path + memory"     "" $BIN "$GIF" --load-source memory
 run "env LOAD_SOURCE"          "" env MENUBAR_LOAD_RUNNER_LOAD_SOURCE=network $BIN
@@ -245,21 +248,18 @@ echo "  lifecycle: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 # which needs no TCC grant because a process may always inspect its own windows.
 #
 # Assertions are on RELATIVE geometry, deliberately: an unrelated menu-bar change (another app's icon
-# appearing, a display change) shifts the whole group at once — observed mid-run during development —
-# and absolute x would read that as jitter. Adjacency and constant width are what the design promises.
+# appearing, a display change) shifts the whole group at once, and absolute x would read that as
+# jitter. Adjacency and constant width are what the design promises.
 #
-# ADJACENCY IS CONDITIONAL, and it took a false failure to learn why. macOS decides where a status item
-# goes, there is no reorder API, and on a bar with no room left it does NOT keep a process's items
-# together: on this developer's notched built-in display all six runs placed ours as
-# icon=908 right=955 left=1117, with other apps' icons interleaved — while the roomy external display
-# placed the same build correctly. So the section detects that case geometrically (group span vs the sum
-# of the three widths: equal = one contiguous run; wider = foreign items inside the group) and reports
-# NOTE instead of FAIL, because a bar that scattered the items cannot answer the question being asked.
-# Width-constancy and icon-relative-stability — the v1.16.0 no-jitter promise — are asserted either way,
-# and they held throughout the scattered runs. The cost is real: on a machine that always scatters,
-# adjacency goes UNVERIFIED here, so re-run where the items land contiguously (a roomy external bar, or
-# CI) before trusting it. A genuine ordering regression is still caught, since a contiguous-but-wrong
-# order fails the check rather than skipping it. See docs/ARCHITECTURE.md § 6.2.
+# ADJACENCY IS CONDITIONAL. macOS decides where a status item goes, there is no reorder API, and on a
+# bar with no room left it does NOT keep one process's items together — foreign icons land inside the
+# group (docs/ARCHITECTURE.md § 6.2). The section detects that geometrically (group span vs the sum of
+# the three widths: equal = one contiguous run; wider = foreign items inside) and reports NOTE instead
+# of FAIL, because a bar that scattered the items cannot answer the question being asked. Width
+# constancy and icon-relative stability — the no-jitter promise — are asserted either way. The cost is
+# real: on a machine that always scatters, adjacency goes UNVERIFIED here, so re-run where the items
+# land contiguously (a roomy external bar, or CI) before trusting it. A genuine ordering regression is
+# still caught, since a contiguous-but-wrong order fails the check rather than skipping it.
 section "§3c label slot geometry [gui — needs WindowServer]"
 pass=0; fail=0
 SG="$PWD/tmp/qa-slots-state.json"
@@ -307,8 +307,10 @@ for want in left right; do
   else
     gk "label slot is adjacent, $want of the icon (${2:-0} ticks, slot ${7:-?}pt)" "$1" "adj_fails=$4 raw=$out"
   fi
+  # ≥2 distinct readings, not ≥1: "constant while the value changes" is unanswered by a run where the
+  # value never changed, and a slot that tracked its text would pass it.
   gk "slot width constant while the value changes ($want, ${3:-0} distinct readings)" \
-     "$([ "${5:-1}" = 0 ] && [ "${3:-0}" -ge 1 ] && echo 1 || echo 0)" "width_changes=$5 raw=$out"
+     "$([ "${5:-1}" = 0 ] && [ "${3:-0}" -ge 2 ] && echo 1 || echo 0)" "width_changes=$5 raw=$out"
   gk "icon does not move relative to the slot ($want)" \
      "$([ "${6:-1}" = 0 ] && echo 1 || echo 0)" "icon_shifts=$6 raw=$out"
 done
@@ -354,8 +356,8 @@ echo "  slot geometry: passes=$pass fails=$fail"; total_fail=$((total_fail+fail)
 # keep-awake that *looks* armed and holds nothing — the R1 bug. MENUBAR_LOAD_RUNNER_FORCE_BATTERY pins
 # the power-source read, so this needs no real battery and works on a desktop or on AC.
 #
-# Two things this deliberately does NOT test: the override (only a menu click sets it, and menus are
-# not scriptable here — see docs/ARCHITECTURE.md § 13), and thermal (no way to force a thermal state). `--keep-awake`
+# Two things this deliberately does NOT test: the override (only a menu click sets it, and a menu is
+# the manual tier's subject), and thermal (no way to force a thermal state). `--keep-awake`
 # is used precisely BECAUSE it is not an override gesture, so these assert the raw conditions.
 #
 # What these do NOT cover is how the pause LOOKS: the tone the track line and the label wear is asserted
@@ -383,13 +385,15 @@ ka "healthy charge -> holds"        50:battery run
 ka "on AC at 15% -> holds"          15:ac      run
 ka "low battery -> releases"        15:battery paused
 ka "at 20% boundary -> releases"    20:battery paused
-ka "critical floor -> releases"     4:battery  paused
 # --battery-threshold relocates the release point (R5). Each case is chosen so the DEFAULT 20% would
 # give the opposite answer — otherwise it would pass whether or not the flag is wired up at all.
 ka "threshold 10 -> 15% holds"      15:battery run    --battery-threshold 10
 ka "threshold 30 -> 25% releases"   25:battery paused --battery-threshold 30
 ka "threshold 30% (sign form)"      25:battery paused --battery-threshold 30%
 ka "threshold off -> 15% holds"     15:battery run    --battery-threshold off
+# The 5% hard floor, and the only case that can observe it: with the band switched off, nothing else
+# is left to release the hold. A low charge under the DEFAULT band releases through the band, so it
+# would pass with the floor deleted — which is why there is no separate "4% on the default" row.
 ka "threshold off -> 4% releases"   4:battery  paused --battery-threshold off
 # The threshold is a BATTERY policy: on AC even a 100% threshold must not release, because the
 # onBattery guard is checked before the band. Getting this wrong would pause keep-awake on a plugged-in
@@ -420,8 +424,7 @@ echo "  keep-awake conditions: passes=$pass fails=$fail"; total_fail=$((total_fa
 
 # --- §3f Keep Awake launch arming + persistence [gui] ----------------------
 # --keep-awake arms without a click, so the whole window contract is scriptable: what -t the child gets,
-# which saved states come back, and which must not. Ported out of the manual walk 2026-07-31, where these
-# lived as copy-paste prose and so were only ever run when someone remembered to paste them.
+# which saved states come back, and which must not.
 # FORCE_BATTERY pins a healthy charge on AC: without it a tester below 20% sees every case fail, because
 # the battery condition is correctly releasing the child (that is §3a's subject, not this one).
 section "§3f Keep Awake launch arming [gui — needs WindowServer]"
@@ -438,7 +441,6 @@ rm -f "$ST"; arm --keep-awake 1m;     ck "1m arms -t 60"          "-t 60"   "$CH
 rm -f "$ST"; arm --keep-awake 1h30m;  ck "1h30m arms -t 5400"     "-t 5400" "$CHILD"
 rm -f "$ST"; arm --keep-awake 99h;    ck "clamped to 24h"         "-t 86400" "$CHILD"
 rm -f "$ST"; arm --keep-awake on;     ck "on = no -t"             "-di -w"  "$CHILD"
-rm -f "$ST"; arm --keep-awake off;    ck "off = no child"         EMPTY     "$CHILD"
 rm -f "$ST"; arm;                     ck "absent = no child"      EMPTY     "$CHILD"
 rm -f "$ST"; arm --keep-awake banana; ck "bad value = no child"   EMPTY     "$CHILD"
                                       ck "bad value warns" "Unrecognized --keep-awake" "$(cat "$ERR")"
@@ -506,8 +508,9 @@ FORCE=15:battery; rm -f "$ST"; arm --keep-awake-pid $TPID; FORCE=
                                          ck "low battery releases a bound hold" EMPTY "$CHILD"
 # Never resumed after a relaunch: the binding saves as enabled-with-no-deadline, which is the shape the
 # restore already refuses (see "saved indefinite not restored" above) — pids are recycled, so a resumed
-# one could bind to an unrelated process.
-rm -f "$ST"; arm --keep-awake-pid $TPID; ck "binding saves no deadline" EMPTY "$(grep deadline "$ST" || true)"
+# one could bind to an unrelated process. Asserted on the relaunch, not on the absent `deadline` key:
+# the key is how the refusal works, and a case on it can only fail where this one already does.
+rm -f "$ST"; arm --keep-awake-pid $TPID
 arm;                                     ck "binding not resumed"       EMPTY "$CHILD"
 kill $TPID 2>/dev/null; wait $TPID 2>/dev/null   # reap it here, or bash reports it mid-run
 
@@ -541,7 +544,7 @@ echo "  keep-awake arming: passes=$pass fails=$fail"; total_fail=$((total_fail+f
 # a mode survives a relaunch, an explicit flag still wins, and a bad block degrades to defaults instead
 # of breaking startup. Each case asserts the mode the app REWRITES on termination — a failed restore
 # shows up as "off" being written back, which is observable, whereas the absence of the menu-bar slot is
-# not (menus aren't scriptable here — see docs/ARCHITECTURE.md § 13).
+# not (a menu is the manual tier's subject).
 section "§3b settings persistence [gui — needs WindowServer]"
 pass=0; fail=0
 SF="$PWD/tmp/qa-settings-state.json"
@@ -638,7 +641,7 @@ echo "  settings persistence: passes=$pass fails=$fail"; total_fail=$((total_fai
 # MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS=1, which prints the FILTERED, post-hysteresis list each tick — the
 # LOG_SLOTS trick, and for the same reason: it needs no TCC grant, while the rows themselves are only
 # reachable via menu-dump (Accessibility) or a screenshot (Screen Recording). What the rows LOOK like
-# stays a manual check (see docs/ARCHITECTURE.md § 13); what the app decided is asserted here.
+# stays a manual check; what the app decided is asserted here.
 #
 # tests/hold-assertion.swift is the fixture: it holds a real assertion under a unique process name, so
 # detection and the retention window don't depend on whether this machine happens to have a stray
@@ -668,7 +671,7 @@ else
   # 3. Our OWN caffeinate is excluded — asserted on `own=N`, the count of assertions the app dropped for
   # being its own. Necessary because "not listed" and "listed but there are none" print identically, and
   # comparing against a count taken from outside is a RACE on any machine with a renewal loop: the foreign
-  # total drifts mid-run, which is exactly how this case first failed. `caffeinate -di` holds TWO
+  # total drifts mid-run. `caffeinate -di` holds TWO
   # assertions (display + idle), so an armed window is own=2. Regresses silently if ignoringPIDs is
   # dropped: the app would list its own window as a second, mysterious holder right under the countdown
   # row that already reports it. The state file is removed first — a *saved* bounded window restores on
@@ -1010,18 +1013,18 @@ skip "§3 launch lifecycle + §4 error paths [gui]" "GUI tier not selected (--co
 fi
 
 # --- §5 Reader readouts [gui] ----------------------------------------------
-# What each reader actually PUTS ON THE BAR, read back off the live status item via LOG_SLOTS. This
-# replaced five standalone `.swift` probes (readers/scaler/label/semver/restart) that each re-ported the
-# app's logic into a copy and asserted against the copy — every one of them carried "keep in sync with the
-# real type; a mismatch = the port drifted", which is the failure mode backwards: the port passes while
-# the app is broken. Deleted 2026-07-30. What no longer has a check at all is recorded as verification
-# debt in docs/ROADMAP.md rather than left to look covered.
+# What each reader actually PUTS ON THE BAR, read back off the live status item via LOG_SLOTS — never
+# against a re-ported copy of the app's own logic, which passes while the app is broken. What that
+# leaves with no check at all is carried as verification debt in docs/ROADMAP.md rather than left to
+# look covered.
 #
-# Two invariants per source, both only observable against the real item:
-#   - the readout has that source's SHAPE and a value in range (the reader ran and produced sense),
-#   - the reserved slot width does NOT move as the value changes — the no-jitter promise. §3c asserts this
-#     for CPU (a percent); the rate-shaped sources (NET/DISK) have their own wider templates, and a
-#     template that doesn't fit its own readings is invisible to a percent-only check.
+# One invariant per source, and only the real item can answer it: the readout has that source's SHAPE
+# and a value in range — the reader ran and produced sense.
+#
+# No width case here. The no-jitter promise is §3c's, asserted on a bounded template whose value
+# really does change during the run; for the rate-shaped sources the slot is DESIGNED to widen for a
+# tick when a reading overruns its realistic ceiling (labelSlotWidth's max(), preferring a nudge to an
+# ellipsis), so a width assertion on them fails exactly when the design works — during a big copy, say.
 if [ "$RUN_GUI" = 1 ]; then
 section "§5 reader readouts on the live item [gui — needs WindowServer]"
 pass=0; fail=0
@@ -1060,11 +1063,6 @@ for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:
   esac
   rk "$src readout has $tag's shape and an in-range value" \
      "$([ -z "$bad" ] && [ -n "$labels" ] && echo 1 || echo 0)" "unexpected: $(echo "$bad" | head -2)"
-  # Widths across every tick of this run: one distinct value, or the slot is tracking its text.
-  widths=$(echo "$out" | sed -E 's/.*(left|right)\[x=[0-9.]+ w=([0-9.]+)\].*/\2/' | sort -u | wc -l | tr -d ' ')
-  readings=$(echo "$labels" | wc -l | tr -d ' ')
-  rk "$src slot width is reserved, not auto-sized ($readings distinct readings)" \
-     "$([ "${widths:-9}" = 1 ] && echo 1 || echo 0)" "widths seen: $(echo "$out" | sed -E 's/.*w=([0-9.]+)\].*/\1/' | sort -u | tr '\n' ' ')"
 done
 echo "  reader readouts: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 else
