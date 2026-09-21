@@ -424,7 +424,7 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
 
 ### 4.7 Telemetry Core & the `--once` Snapshot (R24)
 
-The unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `--once` is the one way anything else asks.
+The unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `--once` is the one way anything else asks. It answers for the *machine* only — the sibling question, about this app's own process and its sleep hold, is `--status` (§ 8.3), which reaches no reader.
 
 **Module boundaries.** Each row's *not its business* column names the canonical owner, so nothing has to be inferred:
 
@@ -882,6 +882,36 @@ State is persisted to `~/Library/Application Support/menubar-load-runner/state.j
 - **Atomic Persistence:** `data.write(to:options: .atomic)` — Foundation writes a temp file and renames it into place.
 - **Single-Writer Rule:** `persistState()` is the sole disk writer, assembling memory state atomically to avoid race conditions.
 
+### 8.3 The `--status` Query (R27)
+
+`--once` (§ 4.7) answers for the machine. It cannot answer for *this app*: a snapshot is stateless and knows no other process, so nothing could ask whether an instance was already resident or whether the Mac was being held awake and for how much longer. `--status` is that question, and only that one — the readers are not on this path at all.
+
+**Sources.** `StatusReport` reads two things and writes neither: the process table, through `ProcessProbe.newestMatch`, and the state file, through `StateStore.load()`. The probe's needle is the running binary's **own executable name** rather than a literal `MenuBarLoadRunner`. The question is whether a second copy of *this* binary is up, which is also what makes a test build answer for the instances a test started instead of for the one installed on the machine. `newestMatch` already scopes to the calling uid — the same boundary as the launcher's singleton guard (§ 2) — and skips the caller's own pid.
+
+**Interface.**
+
+| Property | Contract |
+|---|---|
+| Argument form | `--status` **must be the only argument**, sharing one rule (and one refusal) with `--once` in `Config.parse()`, so a second headless flag cannot drift into a second spelling of it |
+| Output | Exactly one line on stdout, a JSON object, newline-terminated. `{"running":false}`, or `{"running":true,"pid":1598,"keep_awake":{"active":true,"remaining_s":3540}}` |
+| Absent keys | `keep_awake` appears only with a live instance; `remaining_s` only for a timed window. Never a `null`, never a `0` standing in for "no hold" — the same rule as the snapshot schema |
+| Side effects | None. No `NSApplication`, no reader, no `caffeinate`, no update check, no compile, and the state file is opened read-only |
+| Exit | `0` the question was answered, **including when nothing is resident** · `1` usage error (stderr, stdout empty). Exit codes say whether it answered, never what the answer was |
+
+**Why the hold is reported only beside a live instance.** `keepAwake.enabled` is intent and survives the process that wrote it (§ 8.2), so with nobody up the state file describes the last session. Publishing it then would be a claim about a hold nothing is holding, which is why the probe runs first and the file is read only after it finds someone.
+
+**What it deliberately does not report**, each because the honest answer is unavailable rather than merely unimplemented:
+
+| Not reported | Why |
+|---|---|
+| `preset` · `load_source` | `Restarter.appArguments` rebuilds argv on the **restart** path only, so a preset or source changed from the menu is not in a running instance's argv until it restarts. Reading argv would report a value that was true at launch and is not true now |
+| The pid a `--keep-awake-pid` hold is bound to | That binding never reaches the state file by design (pids are recycled — § 7.4), so it is not visible across processes. The hold still reports `active`, with `remaining_s` absent |
+| Which of two same-named processes is the GUI one | A concurrent `--once` or `--status` of the same binary is indistinguishable by executable name. Both really are this app, the window is sub-second, and closing it would mean reading every candidate's argv — accepted and recorded rather than paid for |
+
+**Launcher interception.** Handled by the same pre-guard, pre-compile passthrough as `--once` (§ 4.7), for the same reasons and with the same exit 2 for a binary that has not been built.
+
+**Verification.** `tests/qa.sh` §2b covers the core tier — the no-instance answer, exclusivity, and the untouched state file — and is deterministic even with a developer's own app running, because `$BIN` is a check build and the needle is the binary's own name. §3j covers the live half against a real instance: the pid matches the one the script started, a 30m window reports a remainder inside its bounds, an indefinite hold reports `active` with no `remaining_s`, and — after that instance exits with `enabled: true` still on disk — the query returns `{"running":false}` rather than the stale intent.
+
 ---
 
 ## 9. Preset Registry & Self-Updating
@@ -931,7 +961,7 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 | **Menu Layout** | Static slot width reservation | Status items must never resize based on live data values to guarantee zero layout jitter on the menu bar (§ 6.1). WindowServer owns ultimate placement under congestion (§ 6.2). |
 | **Game Loop** | Occlusion stops driver completely | Full occlusion (notch, inactive space, display off) must reduce render CPU utilization to exactly 0.0%. |
 | **State File** | Single-writer centralized save | `persistState()` is the only function permitted to write `state.json`, eliminating partial block overwrites. |
-| **Snapshot Path** | `--once` writes nothing and holds nothing | Side-effect freedom is what makes it safe beside a live instance and in parallel with itself; it is also why it is exempt from the singleton guard and the compile (§ 4.7). |
+| **Headless Paths** | `--once` and `--status` write nothing and hold nothing | Side-effect freedom is what makes them safe beside a live instance and in parallel with themselves; it is also why both are exempt from the singleton guard and the compile (§ 4.7, § 8.3). `--status` reads `state.json` and must never write it — a query cannot be allowed to disturb the instance it asks about. |
 | **Telemetry Core** | Physical units out, no display concepts in | `TelemetryCore` never returns a 0..1 driver value from `snapshot()` and never reads AppKit, Keep Awake or `state.json`, so one set of readers serves both entry paths without either defining the other (§ 4.7). |
 
 ---
@@ -972,6 +1002,7 @@ Parameters that are not `Tuning` constants because they live on an interface rat
 | Name | Default | Unit | Role | Lives in |
 |---|---|---|---|---|
 | `--once` | off | flag | Single-shot JSON snapshot; exclusive of every other argument (§ 4.7) | binary and launcher |
+| `--status` | off | flag | Single-shot JSON about the resident instance and its sleep hold; exclusive of every other argument (§ 8.3) | binary and launcher |
 | `--load-source bandwidth` | — | enum value | Selects the DRAM bus as the speed driver (§ 4.8); the only public surface R25 adds | binary and launcher |
 | `v` | `1` | int | Snapshot contract version | output |
 | `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE` | unset | source keys | Marks readers unavailable; honored on both paths, so QA can assert an absent snapshot key | binary |

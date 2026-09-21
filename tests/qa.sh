@@ -88,7 +88,7 @@ $BIN --keep-awake-pid >/dev/null 2>&1;              chk "--keep-awake-pid no val
 # this can be baked into a login item), so which value each form resolves to is asserted by behavior
 # in §3a. A bare "rc=0, flag accepted" check here would restate that without observing anything.
 $BIN --battery-threshold >/dev/null 2>&1;           chk "--battery-threshold no value" 1 $?
-for f in --speed-multiplier --label --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --once; do
+for f in --speed-multiplier --label --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --once --status; do
   $BIN --help 2>&1 | grep -q -- "$f" && { echo "  PASS --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL --help missing $f"; fail=$((fail+1)); }
 done
 # The launcher's OWN flags, against the launcher's own help — the app binary never sees these and its
@@ -96,7 +96,7 @@ done
 # handled before the singleton guard and before any compile, so this neither builds nor touches a
 # running instance. `--precompile` earns a listing like any other: it is in the CHANGELOG's public-API
 # surface, so an undocumented one is a semver-governed flag nobody can find.
-for f in --foreground --no-detach --detach --extra --precompile --once; do
+for f in --foreground --no-detach --detach --extra --precompile --once --status; do
   ./menubar-load-runner --help 2>&1 | grep -q -- "$f" && { echo "  PASS launcher --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL launcher --help missing $f"; fail=$((fail+1)); }
 done
 $BIN foo bar >/dev/null 2>&1;                       chk "extra positional" 1 $?
@@ -194,6 +194,48 @@ rm -f "$J" "$E" "$ST"
 echo "  snapshot: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 else
 skip "§2a --once snapshot [core]" "core tier not selected (--gui)"
+fi
+
+# --- §2b `--status` [core] -------------------------------------------------
+# R25's contract. Core tier for the same reason as §2a: the path builds no NSApplication. What this
+# tier can assert is the no-instance answer and the read-only promise; the live-instance half needs a
+# real process and lives in §3j. Deterministic here despite a developer's own app being up, because
+# $BIN is ./tmp/mblr-check: the probe's needle is the binary's OWN executable name, so a check build
+# answers for check builds and never for the installed MenuBarLoadRunner.
+if [ "$RUN_NONGUI" = 1 ]; then
+section "§2b --status [core]"
+pass=0; fail=0
+ok(){ [ "$2" = 1 ] && { echo "  PASS $1"; pass=$((pass+1)); } || { echo "  FAIL $1 ($3)"; fail=$((fail+1)); }; }
+J=tmp/qa-status.json; E=tmp/qa-status.err
+
+# Nothing resident is an ANSWER, not a failure: exit 0, and no keep_awake key to report a hold that
+# nothing is holding. Asserted as the exact line, since the whole object is two tokens long.
+$BIN --status >"$J" 2>"$E"; rc=$?
+ok "exit 0 with nothing resident" "$([ "$rc" = 0 ] && echo 1 || echo 0)" "rc=$rc"
+ok "…and stdout is exactly {\"running\":false}" \
+   "$([ "$(cat "$J")" = '{"running":false}' ] && echo 1 || echo 0)" "got: $(cat "$J")"
+
+# Exclusive, like --once, and stdout stays EMPTY for the same reason: a consumer pipes this into a
+# parser, so a usage block on stdout is worse than no output.
+$BIN --status --label value >"$J" 2>"$E"; rc=$?
+ok "--status with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
+ok "…says why, on stderr, with stdout empty" \
+   "$([ ! -s "$J" ] && [ -s "$E" ] && echo 1 || echo 0)" "stdout=$(cat "$J") stderr=$(cat "$E")"
+
+# Read-only. --status reads the state file where --once doesn't open it at all, so the untouched-file
+# assertion is the one that matters most here: a status query must never be able to disturb the
+# instance it is asking about.
+ST=tmp/qa-status-state.json
+printf '{"version":1,"keepAwake":{"enabled":true,"tint":2}}' >"$ST"; touch -t 202001010000 "$ST"
+before=$(stat -f '%m %z' "$ST")
+MENUBAR_LOAD_RUNNER_STATE_FILE="$ST" $BIN --status >/dev/null 2>&1
+ok "leaves state.json untouched" \
+   "$([ "$(stat -f '%m %z' "$ST")" = "$before" ] && echo 1 || echo 0)" "was [$before] now [$(stat -f '%m %z' "$ST")]"
+
+rm -f "$J" "$E" "$ST"
+echo "  status: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
+else
+skip "§2b --status [core]" "core tier not selected (--gui)"
 fi
 
 # --- §3 Launch lifecycle [gui] ---------------------------------------------
@@ -996,6 +1038,47 @@ tk "forced-unavailable temperature falls back without an orphan annotation" \
 
 rm -f "$TH_ST"
 echo "  kernel thermal pressure: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
+
+# --- §3j `--status` against a live instance [gui] --------------------------
+# The half §2b cannot reach: whether the flag really reports the PROCESS. The pid is asserted against
+# the one this script started, and the last case runs after that instance is gone with its state file
+# left behind — a state-file-only reading would still say "held awake" there, which is the failure
+# this exists to catch.
+section "§3j --status against a live instance [gui — needs WindowServer]"
+pass=0; fail=0
+sk(){ [ "$2" = 1 ] && { echo "  PASS $1"; pass=$((pass+1)); } || { echo "  FAIL $1 ($3)"; fail=$((fail+1)); }; }
+SS="$PWD/tmp/qa-status-live.json"
+
+rm -f "$SS"
+MENUBAR_LOAD_RUNNER_STATE_FILE="$SS" MENUBAR_LOAD_RUNNER_FORCE_BATTERY=100:ac \
+  MENUBAR_LOAD_RUNNER_EXIT_AFTER=6 $BIN --no-update-check --keep-awake 30m >/dev/null 2>&1 & app=$!
+sleep 2
+out=$(MENUBAR_LOAD_RUNNER_STATE_FILE="$SS" $BIN --status 2>/dev/null)
+sk "reports the running instance by pid" \
+   "$(echo "$out" | grep -q "\"running\":true,\"pid\":$app," && echo 1 || echo 0)" "want pid=$app got: $out"
+rem=$(echo "$out" | sed -n 's/.*"remaining_s":\([0-9]*\).*/\1/p')
+sk "a timed window reports its remainder (${rem:-none}s)" \
+   "$([ -n "$rem" ] && [ "$rem" -gt 1700 ] && [ "$rem" -le 1800 ] && echo 1 || echo 0)" "got: $out"
+wait $app
+
+# An indefinite hold has no remaining time, so the key is ABSENT rather than 0 — the same rule the
+# snapshot uses for a reader with no reading.
+rm -f "$SS"
+MENUBAR_LOAD_RUNNER_STATE_FILE="$SS" MENUBAR_LOAD_RUNNER_FORCE_BATTERY=100:ac \
+  MENUBAR_LOAD_RUNNER_EXIT_AFTER=6 $BIN --no-update-check --keep-awake on >/dev/null 2>&1 & app=$!
+sleep 2
+out=$(MENUBAR_LOAD_RUNNER_STATE_FILE="$SS" $BIN --status 2>/dev/null)
+sk "an indefinite hold reports active with no remaining_s" \
+   "$(echo "$out" | grep -q '"active":true' && ! echo "$out" | grep -q 'remaining_s' && echo 1 || echo 0)" "got: $out"
+wait $app
+
+# The instance is gone; its saved intent is not. Reporting a hold now would be a claim about nothing.
+out=$(MENUBAR_LOAD_RUNNER_STATE_FILE="$SS" $BIN --status 2>/dev/null)
+sk "a departed instance reports running:false, not its stale intent" \
+   "$([ "$out" = '{"running":false}' ] && echo 1 || echo 0)" "state=[$(cat "$SS" 2>/dev/null | tr -d ' \n')] got: $out"
+
+rm -f "$SS"
+echo "  status (live): passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
 # --- §4 Error paths [gui] --------------------------------------------------
 section "§4 error paths (fast, no modal) [gui — needs WindowServer]"

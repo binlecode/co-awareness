@@ -93,6 +93,12 @@ Options:
                              Safe beside a running instance and in parallel with itself. Takes about
                              200 ms: the rate readers need a delta window. Exits 2 if the binary has
                              not been built yet (run --precompile first)
+  --status                   Print one line of JSON about the process rather than the hardware:
+                             whether an instance is already resident (running, pid) and whether it
+                             is holding the Mac awake (keep_awake.active, plus remaining_s for a
+                             timed window), then exit -- no menu bar, no compile, no state write.
+                             Must be the only argument. Exits 0 whether or not an instance is up;
+                             exits 2 if the binary has not been built yet (run --precompile first)
   -h, --help                 Show this help
 
 Examples:
@@ -115,6 +121,7 @@ Examples:
   $APP_CMD_NAME --label value
   $APP_CMD_NAME dog-black --label BUILD
   $APP_CMD_NAME --once
+  $APP_CMD_NAME --status
   $APP_CMD_NAME --keep-awake 4h
   $APP_CMD_NAME --keep-awake-pid \$!
   $APP_CMD_NAME horse-black --speed-multiplier 1.2
@@ -159,14 +166,15 @@ main() {
   launcher_path="$(resolve_script_path)"
   script_dir="${launcher_path:h}"
 
-  # --once: hand the whole argv to the binary and get out of the way. FIRST, ahead of the singleton
-  # guard and ahead of any compile — a snapshot writes nothing, locks nothing and must run beside a
-  # live instance or in parallel with itself, and compiling here would put a swiftc race back in
-  # front of the very guard that exists to prevent it. The source being newer is deliberately not
-  # consulted: a reading from the previous build is still a true reading. Exclusivity is the
-  # binary's to enforce (it owns the usage text), so every argument goes through unchanged.
+  # --once and --status: hand the whole argv to the binary and get out of the way. FIRST, ahead of the
+  # singleton guard and ahead of any compile — neither writes anything or locks anything, and both must
+  # run beside a live instance or in parallel with themselves, while compiling here would put a swiftc
+  # race back in front of the very guard that exists to prevent it. The source being newer is
+  # deliberately not consulted: a reading from the previous build is still a true reading, and a
+  # resident instance is the previous build. Exclusivity is the binary's to enforce (it owns the usage
+  # text), so every argument goes through unchanged.
   for arg in "$@"; do
-    if [[ "$arg" == "--once" ]]; then
+    if [[ "$arg" == "--once" || "$arg" == "--status" ]]; then
       if [[ ! -x "$script_dir/MenuBarLoadRunner" ]]; then
         print -u2 "$APP_CMD_NAME: no binary to read from; build one with \`$APP_CMD_NAME --precompile\`."
         exit 2

@@ -120,7 +120,9 @@ ln -s "$PWD/menubar-load-runner" ~/.local/bin/menubar-load-runner
 plus `--precompile` — build the binary if the source is newer, then exit without launching. It's safe
 to run while the app is going; the in-app updater uses it so a restart doesn't wait on a compile. And
 `--once`, which prints the sensors as one line of JSON and exits without touching the menu bar at all
-(see [Read the sensors from a script](#read-the-sensors-from-a-script---once)).
+(see [Read the sensors from a script](#read-the-sensors-from-a-script---once)), and `--status`, which
+says whether an instance is already up and whether it is holding the Mac awake
+(see [Ask whether one is already running](#ask-whether-one-is-already-running---status)).
 
 ## Start at login (personal, optional)
 
@@ -376,6 +378,29 @@ build. No menu bar, no window, no state file, and nothing to install or leave ru
 - Needs the binary built (`./menubar-load-runner --precompile` once, if you have never launched it);
   it deliberately won't compile one for you, so a snapshot never turns into a 30-second build.
 
+## Ask whether one is already running (`--status`)
+
+```bash
+./menubar-load-runner --status
+{"running":true,"pid":1598,"keep_awake":{"active":true,"remaining_s":3540}}
+```
+
+`--once` answers for the machine; this answers for the app. It's the question a script has before it
+launches another instance, or before it assumes the Mac will still be awake in an hour:
+
+```bash
+./menubar-load-runner --status | jq -e '.running' >/dev/null || ./menubar-load-runner
+```
+
+- **Nothing running is an answer, not an error** — `{"running":false}`, and still exit 0. Exit 1 means
+  the question wasn't understood (it must be the only argument), never that the answer was "no".
+- **`keep_awake` only appears with a live instance.** The saved intent outlives the process that wrote
+  it, so reporting it with nobody up would claim a hold nothing is holding.
+- **`remaining_s` only appears for a timed window.** A hold that runs until you turn it off, or until
+  another process exits, has no remaining time — so the key is absent rather than `0`.
+- **Read-only.** It looks at the process table and reads the state file; it writes neither, so it is
+  safe beside a running instance and in parallel with itself.
+
 ## Keep Awake at launch (`--keep-awake`)
 
 ```bash
@@ -586,8 +611,8 @@ Coverage is split into explicit tiers around one question — **does the check b
 
 | Tier | Sections | Needs a GUI session? | Role |
 |---|---|---|---|
-| `core` | §1 build (warning-clean) · §2 CLI/version · §2a `--once` snapshot | No | Primary gate — must pass before a release; headless-safe |
-| `gui` | §3 launch lifecycle · §3a–§3i Keep Awake / persistence / label geometry / sleep assertions / freeze / battery diagnostics / kernel thermal · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
+| `core` | §1 build (warning-clean) · §2 CLI/version · §2a `--once` snapshot · §2b `--status` | No | Primary gate — must pass before a release; headless-safe |
+| `gui` | §3 launch lifecycle · §3a–§3i Keep Awake / persistence / label geometry / sleep assertions / freeze / battery diagnostics / kernel thermal · §3j `--status` against a live instance · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
 | `launcher` | §6 launcher + singleton (disruptive `pkill`) | — | Manual — run locally before a release |
 | manual | the menu walk + the eyes-only checks — never scripted | — | Hands and eyes; a NOTE in the tiers above is an unanswered case, not a pass |
 
@@ -595,8 +620,8 @@ Coverage is split into explicit tiers around one question — **does the check b
 tests**, by policy: every check launches the real binary and asserts a real side effect (a `caffeinate`
 child, a state file, the live status item's own geometry and readout) — never a re-ported copy of the app's
 own logic, which passes while the app is broken. This is why the `core` tier is thin: most of the real binary needs a status item, so the behavioral
-checks live in `gui`. The exception is `--once` (§2a), which builds no GUI at all — running it in the
-headless tier *is* the proof that the readers answer with no WindowServer behind them.
+checks live in `gui`. The exceptions are `--once` (§2a) and `--status` (§2b), which build no GUI at all — running the
+snapshot in the headless tier *is* the proof that the readers answer with no WindowServer behind them.
 
 A GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) mirrors these tiers
 on `macos-14` (`core` job + best-effort `gui` job), but its automatic push/PR triggers are **disabled

@@ -12,9 +12,10 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
 - **Launcher CLI** — the positional preset keyword or GIF path, and the flags
   `--speed-multiplier`, `--label`, `--load-source`, `--keep-awake`, `--keep-awake-pid`,
   `--battery-threshold`, `--no-update-check`,
-  `--foreground` / `--no-detach`, `--detach`, `--extra`, `--precompile`, `--once`, `-h` / `--help`,
-  and the `--load-source` keyword set.
+  `--foreground` / `--no-detach`, `--detach`, `--extra`, `--precompile`, `--once`, `--status`,
+  `-h` / `--help`, and the `--load-source` keyword set.
 - **The `--once` snapshot schema** — its `v` contract version, and the meaning of every key it emits.
+- **The `--status` schema** — the meaning of every key it emits, and which keys are absent when.
 - **Environment variables** — `MENUBAR_LOAD_RUNNER_PATH`, `MENUBAR_LOAD_RUNNER_LOAD_SOURCE`,
   `MENUBAR_LOAD_RUNNER_LABEL`, `MENUBAR_LOAD_RUNNER_KEEP_AWAKE`,
   `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`,
@@ -47,6 +48,18 @@ of the public API and may change in any release.
   never a `0` standing in for "no reading"; `v` is the schema version and is always present. It must
   be the only argument, since every other flag configures a GUI this path never builds. Takes about
   0.3 s: the throughput readers are counter deltas, so it samples, waits, and samples again. (R24)
+- **`--status`: is one already running, and is it holding the Mac awake?** `--once` answers for the
+  machine and structurally cannot answer for the app — a snapshot is stateless and knows no other
+  process — so a script or an agent had no way to ask whether an instance was already resident, or
+  whether a Keep Awake window was still open and for how much longer. `./menubar-load-runner --status`
+  prints one line and exits: `{"running":false}`, or
+  `{"running":true,"pid":1598,"keep_awake":{"active":true,"remaining_s":3540}}`. Read-only in both
+  directions — it probes the process table and reads `state.json`, and writes neither. **Exit 0
+  whether or not an instance is up**: nothing resident is an answer, not a failure, and exit 1 is
+  reserved for not having answered at all. A hold with no end time (indefinite, or bound to a pid)
+  reports `active` with `remaining_s` **absent**, never a `0`; and with no instance up there is no
+  `keep_awake` key at all, since the saved intent outlives the process that wrote it and would
+  otherwise report a hold nothing is holding. Must be the only argument. (R27)
 - **`--load-source bandwidth`: the DRAM bus, the ceiling a local model actually hits.** The memory
   reader measures capacity and paging; during inference the limit is the bus, and a Mac can sit at
   40% RAM with the bus saturated — nothing in the app could show it. The reading comes from the

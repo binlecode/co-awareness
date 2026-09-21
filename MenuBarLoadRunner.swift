@@ -1307,6 +1307,9 @@ private struct Config {
         // `--once`: print one JSON line of telemetry and exit. Carries no Config, because there is
         // nothing to configure — no GIF, no label, no Keep Awake, no window.
         case snapshot
+        // `--status`: print one JSON line about the resident instance and its sleep hold, and exit.
+        // Carries no Config for the same reason, and reads rather than starts anything.
+        case status
     }
 
     // A built-in preset keyword (e.g. "horse-white") or an absolute/tilde GIF path. Empty means
@@ -1378,16 +1381,18 @@ private struct Config {
     static func parse() -> ParseResult? {
         let args = CommandLine.arguments.dropFirst()
 
-        // `--once` first, and exclusive. Every other flag configures a GUI this path never builds, so
-        // a companion argument is a usage error rather than something to ignore — and the error goes
-        // to stderr WITHOUT the usage block, because the contract is that stdout carries the JSON
-        // line or nothing at all.
-        if args.contains("--once") {
+        // The headless flags first, and each exclusive. Every other flag configures a GUI neither path
+        // builds, so a companion argument is a usage error rather than something to ignore — and the
+        // error goes to stderr WITHOUT the usage block, because the contract is that stdout carries the
+        // JSON line or nothing at all. One rule for both: a second headless flag must not be able to
+        // drift into a second spelling of the same refusal.
+        let headlessModes: [(flag: String, result: ParseResult)] = [("--once", .snapshot), ("--status", .status)]
+        if let mode = headlessModes.first(where: { args.contains($0.flag) }) {
             guard args.count == 1 else {
-                fputs("--once must be the only argument: it prints one line of JSON telemetry to stdout and exits, with no GUI to configure.\n", stderr)
+                fputs("\(mode.flag) must be the only argument: it prints one line of JSON to stdout and exits, with no GUI to configure.\n", stderr)
                 return nil
             }
-            return .snapshot
+            return mode.result
         }
 
         var presetOrPath: String?
@@ -1617,6 +1622,7 @@ private struct Config {
         print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
         print("Battery threshold: --battery-threshold <pct|off> sets the charge at or below which Keep Awake releases on battery (default \(Int(Tuning.batteryLowThresholdDefault * Tuning.percentScale))%; off never releases on charge alone). Whole percents only — 20 or 20%, not 0.20. Also via MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD. Out-of-range values are clamped to \(Int(Tuning.batteryThresholdMin * Tuning.percentScale))–\(Int(Tuning.batteryThresholdMax * Tuning.percentScale))%, and below \(Int(Tuning.batteryCriticalThreshold * Tuning.percentScale))% on battery the Mac sleeps regardless — that floor is not configurable.")
         print("Snapshot: --once prints one line of JSON with every reading this machine answers for (physical units; an unavailable source is an absent key) and exits, with no GUI and no state file. Must be the only argument. Takes about \(Int(Tuning.snapshotWindow * Tuning.msPerSecond)) ms — the rate readers need a delta window.")
+        print("Status: --status prints one line of JSON about the process rather than the hardware — whether an instance of this binary is already resident (running, pid) and whether it is holding the Mac awake (keep_awake.active, plus remaining_s for a timed window; absent when the hold is indefinite or bound to a pid) — and exits. Read-only: no GUI, and the state file is never written. Must be the only argument. Exits 0 whether or not an instance is up; for readings use --once.")
         print("Width: the menu-bar item sizes itself to the GIF's aspect ratio at menu-bar height — not configurable.")
         print("Default speed: auto (preset-dependent; per-preset ranges defined in gifs/presets.json).")
         print("Updates: on launch, checks the git origin's release tags for a newer version (network access). Apply is a menu click; disable with --no-update-check or MENUBAR_LOAD_RUNNER_UPDATE_CHECK=0.")
@@ -1718,6 +1724,40 @@ private enum StateStore {
         )
         // Atomic: a crash mid-write leaves the previous file, not a truncated one that fails to decode.
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+// `--status`: the two questions a snapshot structurally cannot answer, because it is stateless and
+// knows no other process — is an instance already resident, and is this app holding the Mac awake.
+// Read-only in both directions: it probes the process table and reads the state file, and writes
+// neither. Hand-rolled JSON for the same reasons as TelemetrySnapshot.jsonLine — fixed key order, and
+// an absent key rather than a null for something there is no answer to.
+private enum StatusReport {
+    static var jsonLine: String {
+        // The needle is our OWN executable name, not a hardcoded "MenuBarLoadRunner": the question is
+        // whether a second copy of THIS binary is up, which is also what lets a test build answer for
+        // the instances a test started rather than for the one installed on the machine. newestMatch
+        // already scopes to this uid (like the launcher's singleton guard) and skips our own pid.
+        let ownName = ProcessProbe.name(of: getpid())
+            ?? URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
+        guard let instance = ProcessProbe.newestMatch(ownName) else { return "{\"running\":false}\n" }
+
+        var fields = ["\"running\":true", "\"pid\":\(instance.pid)"]
+        // Reported only alongside a live instance, and deliberately after the probe: the state file is
+        // that instance's saved intent, so with nobody up it describes the last session rather than
+        // now, and publishing it then would be a claim about a hold nothing is holding.
+        let keepAwake = StateStore.load()?.keepAwake
+        let active = keepAwake?.enabled ?? false
+        var hold = ["\"active\":\(active)"]
+        // Only a timed window has a remaining time. An indefinite hold has none, and a pid-bound one
+        // never reaches the state file at all (pids are recycled — see PersistedState.KeepAwake), so
+        // both report `active` with the key ABSENT rather than a 0 that reads as "just expired".
+        // Clamped at 0: a deadline the running instance has not yet swept up is ending, not negative.
+        if active, let deadline = keepAwake?.deadline {
+            hold.append("\"remaining_s\":\(Int(max(deadline.timeIntervalSinceNow, 0).rounded()))")
+        }
+        fields.append("\"keep_awake\":{" + hold.joined(separator: ",") + "}")
+        return "{" + fields.joined(separator: ",") + "}\n"
     }
 }
 
@@ -8217,6 +8257,12 @@ case .snapshot:
     // No NSApplication, no status item, no state file, no update check — just the readers. This is
     // what lets `--once` run beside a live GUI instance, in parallel with itself, or over SSH.
     FileHandle.standardOutput.write(Data(TelemetryCore().snapshot().jsonLine.utf8))
+    exit(0)
+case .status:
+    // Same headless shape as --once, and read-only on top of it: no NSApplication, no readers, no
+    // state write. "Nothing resident" is an answer, not a failure, so this path exits 0 either way —
+    // exit 1 is reserved for not having answered at all (the usage error in parse()).
+    FileHandle.standardOutput.write(Data(StatusReport.jsonLine.utf8))
     exit(0)
 case .config(let config):
     let app = NSApplication.shared
