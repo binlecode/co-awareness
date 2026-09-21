@@ -33,7 +33,7 @@ in the linked plan — never restated here.
 
 | ID | Item | Pri | Blocked by |
 |---|---|---|---|
-| R26 | **Rename to `co-load-runner`, retire `actop`.** A name and a public deprecation, not a capability. Held below (§ R26) with its cost, until the `--once` contract has a caller that actually exercises it. | P4 | — |
+| R26 | **Rename to `co-load-runner`.** A name, not a capability, and confined to this repo — nothing in `actop` moves with it. Held below (§ R26) with its cost, until the `--once` contract has a caller that actually exercises it. | P4 | — |
 | R9 | **Custom GIFs are launch-only, not reusable presets.** Add first-class local animated-GIF presets under `~/.config/menubar-load-runner/presets/`, with drop-in discovery plus native menu/CLI import that validates, alpha-union crops, bounds, normalizes, atomically installs, and immediately selects the result. Static images and non-GIF animation formats stay out of the first cut; a raw positional GIF path remains the no-install escape hatch. Full accepted-input contract, resource budgets, identity/merge rules, failure semantics, symbol-level implementation order, and real-binary QA matrix: [`PLAN-custom-gifs.md`](PLAN-custom-gifs.md). | P4 | — |
 
 ### R26 — the rename, and what it costs
@@ -42,14 +42,19 @@ No plan file: nothing here is a design, it is one decision held open.
 
 **The case for it.** `co-cli`, `co-s2s` and `co-asciiball` are one family in `~/workspace_genai/repos.yaml`;
 this binary would be its hardware sense and its lifecycle guard. `actop` (Python, PyPI, CI, `actop.pages.dev`)
-reads the same chip through the same unprivileged interfaces, and the overlap is now most of it.
+reads the same chip through the same unprivileged interfaces; that overlap says where this binary sits
+in the family, and is not an argument that either of them has to go.
 
 **Why it is not bundled with a capability.** Integration is a *contract*, not a name — `co-cli` can call any
 binary. The rename buys nothing the `--once` schema does not already buy, and it is charged separately:
 the `MENUBAR_LOAD_RUNNER_*` hook names that `AGENTS.md` and `tests/qa.sh` hold as canonical, the
 `state.json` directory, the launcher filename, the LaunchAgent label in `scripts/`, the self-update
-remote, README and the cover page. Retiring `actop` is a public act on a published package with its own
-users, decided in that repo, not recorded here.
+remote, README and the cover page.
+
+**Scope: this repo only.** R26 is the surfaces above and nothing else. `actop` is not touched, not
+deprecated and not a dependency of this item — it is a published package with its own users, and
+whatever becomes of it is decided in that repo. A rename here neither needs nor implies a move there,
+so the two never have to be sequenced.
 
 **If it is taken:** one name, one env prefix, one state path with a single silent migration. No permanent
 alias and no dual-prefix fallback — the compatibility layer is the expensive half and it never gets
