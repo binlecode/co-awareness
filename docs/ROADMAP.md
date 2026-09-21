@@ -32,7 +32,7 @@ in the design the row points to — never restated here.
 
 | ID | Item | Pri | Blocked by |
 |---|---|---|---|
-| R26 | **Rename to `co-load-runner`.** A name, not a capability, and confined to this repo — nothing in `actop` moves with it. Held below (§ R26) with its cost, until an outside caller has exercised the CLI surface. | P4 | — |
+| R26 | **Rename to `co-awareness`.** A name, not a capability, and confined to this repo — nothing in `actop` moves with it. Held below (§ R26) with its cost, until an outside caller has exercised the CLI surface. | P4 | — |
 
 ### R26 — the rename, and what it costs
 
@@ -42,6 +42,11 @@ No plan file: nothing here is a design, it is one decision held open.
 this binary would be its hardware sense and its lifecycle guard. `actop` (Python, PyPI, CI, `actop.pages.dev`)
 reads the same chip through the same unprivileged interfaces; that overlap says where this binary sits
 in the family, and is not an argument that either of them has to go.
+
+**The name.** `co-awareness` — a state noun: it encodes no before/after (the same boundary the `--check`
+decline rests on, where the decision belongs to the caller), and the family's names are all nouns. It
+supersedes the working `co-load-runner`, dropped because "load runner" reads as the load *generator*
+this binary is built not to be.
 
 **Why it is not bundled with a capability.** Integration is a *contract*, not a name — `co-cli` can call any
 binary. The rename buys nothing the `--once` schema does not already buy, and it is charged separately:
