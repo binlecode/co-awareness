@@ -1,7 +1,7 @@
-MenuBarLoadRunner
+CoAwareness
 # The launcher's build temp, renamed over the binary on success. Listed explicitly — a
-# `MenuBarLoadRunner*` glob would swallow MenuBarLoadRunner.swift, the only source of truth.
-MenuBarLoadRunner.new
+# `CoAwareness*` glob would swallow CoAwareness.swift, the only source of truth.
+CoAwareness.new
 tmp/
 .wrangler/
 .claude/settings.local.json

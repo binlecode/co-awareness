@@ -43,7 +43,7 @@ scripts/smooth-gif.sh gifs/foo-white.gif gifs/foo-white.gif 400%
 ### Add a brand-new built-in preset
 Do the asset work above, then follow the 4-step checklist in the project `CLAUDE.md`
 ("Adding a new built-in preset"): add the GIF to `gifs/`, add an entry to `gifs/presets.json`
-(`{key, menuTitle, file, slotScale, speed}`), add a `print_help` line in `menubar-load-runner`, and
+(`{key, menuTitle, file, slotScale, speed}`), add a `print_help` line in `co-awareness`, and
 update `README.md` (file list, preset command list, speed-range table). The Swift code needs no edit —
 presets are pure data.
 
@@ -64,7 +64,7 @@ aspect, so full-canvas frames are fine. To confirm a change:
    ```bash
    open docs/cover.html
    ```
-3. **In the app**: `MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 ./menubar-load-runner dog-white --foreground`.
+3. **In the app**: `CO_AWARENESS_EXIT_AFTER=5 ./co-awareness dog-white --foreground`.
 
 Sanity-check the rebuilt GIF kept its animation:
 ```bash

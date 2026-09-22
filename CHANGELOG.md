@@ -7,7 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Public API (what semver governs)
 
-MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps apply to is:
+co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps apply to is:
 
 - **Launcher CLI** — the positional preset keyword or GIF path, and the flags
   `--speed-multiplier`, `--label`, `--load-source`, `--keep-awake`, `--keep-awake-pid`,
@@ -16,17 +16,17 @@ MenuBar Load Runner is a CLI-launched app; the surface that MAJOR / MINOR / PATC
   `-h` / `--help`, and the `--load-source` keyword set.
 - **The `--once` snapshot schema** — its `v` contract version, and the meaning of every key it emits.
 - **The `--status` schema** — the meaning of every key it emits, and which keys are absent when.
-- **Environment variables** — `MENUBAR_LOAD_RUNNER_PATH`, `MENUBAR_LOAD_RUNNER_LOAD_SOURCE`,
-  `MENUBAR_LOAD_RUNNER_LABEL`, `MENUBAR_LOAD_RUNNER_KEEP_AWAKE`,
-  `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`,
-  `MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD`, `MENUBAR_LOAD_RUNNER_UPDATE_CHECK`,
-  `MENUBAR_LOAD_RUNNER_LOG_FILE`, `MENUBAR_LOAD_RUNNER_BIN_NAME`, and the debug/QA hooks
-  `MENUBAR_LOAD_RUNNER_EXIT_AFTER`, `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE`,
-  `MENUBAR_LOAD_RUNNER_FORCE_BATTERY`, `MENUBAR_LOAD_RUNNER_STATE_FILE`,
-  `MENUBAR_LOAD_RUNNER_LOG_SLOTS`, `MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS`,
-  `MENUBAR_LOAD_RUNNER_LOG_AWAKE`, `MENUBAR_LOAD_RUNNER_LOG_ANIMATION`,
-  `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS`, `MENUBAR_LOAD_RUNNER_FORCE_THERMAL`, and
-  `MENUBAR_LOAD_RUNNER_LOG_THERMAL`.
+- **Environment variables** — `CO_AWARENESS_PATH`, `CO_AWARENESS_LOAD_SOURCE`,
+  `CO_AWARENESS_LABEL`, `CO_AWARENESS_KEEP_AWAKE`,
+  `CO_AWARENESS_KEEP_AWAKE_PID`,
+  `CO_AWARENESS_BATTERY_THRESHOLD`, `CO_AWARENESS_UPDATE_CHECK`,
+  `CO_AWARENESS_LOG_FILE`, `CO_AWARENESS_BIN_NAME`, and the debug/QA hooks
+  `CO_AWARENESS_EXIT_AFTER`, `CO_AWARENESS_FORCE_UNAVAILABLE`,
+  `CO_AWARENESS_FORCE_BATTERY`, `CO_AWARENESS_STATE_FILE`,
+  `CO_AWARENESS_LOG_SLOTS`, `CO_AWARENESS_LOG_ASSERTIONS`,
+  `CO_AWARENESS_LOG_AWAKE`, `CO_AWARENESS_LOG_ANIMATION`,
+  `CO_AWARENESS_LOG_BATTERY_DIAGNOSTICS`, `CO_AWARENESS_FORCE_THERMAL`, and
+  `CO_AWARENESS_LOG_THERMAL`.
 - **Built-in preset keywords** and the `gifs/presets.json` manifest schema.
 - **Observable behavior** — the status menu structure, the default preset, and the load-adaptive
   speed contract.
@@ -41,7 +41,7 @@ of the public API and may change in any release.
 - **`--once`: the sensors, as one line of JSON, for anything that isn't a pair of eyes.** The nine
   unprivileged readers used to run only behind a status item that had to be on screen, so nothing
   else on the machine — a script, a status line, an agent about to start a 40-minute build — could
-  ask what the hardware was doing. `./menubar-load-runner --once` prints every reading this Mac
+  ask what the hardware was doing. `./co-awareness --once` prints every reading this Mac
   answers for in physical units and exits: `{"v":1,"cpu_pct":14.2,…,"temp_c":78.0,"thermal":"nominal"}`.
   No menu bar, no `state.json`, no compile, nothing held — safe beside a running instance and safe in
   parallel with itself. A source this machine can't read is an **absent key**, never a `null` and
@@ -51,7 +51,7 @@ of the public API and may change in any release.
 - **`--status`: is one already running, and is it holding the Mac awake?** `--once` answers for the
   machine and structurally cannot answer for the app — a snapshot is stateless and knows no other
   process — so a script or an agent had no way to ask whether an instance was already resident, or
-  whether a Keep Awake window was still open and for how much longer. `./menubar-load-runner --status`
+  whether a Keep Awake window was still open and for how much longer. `./co-awareness --status`
   prints one line and exits: `{"running":false}`, or
   `{"running":true,"pid":1598,"keep_awake":{"active":true,"remaining_s":3540}}`. Read-only in both
   directions — it probes the process table and reads `state.json`, and writes neither. **Exit 0
@@ -78,10 +78,16 @@ of the public API and may change in any release.
 
 ### Changed
 
+- **Renamed to `co-awareness` — one name, one env prefix, one state path, no compatibility layer.** The
+  `MENUBAR_LOAD_RUNNER_*` surface is gone rather than aliased; the launcher, the compiled binary, the
+  install directory and the LaunchAgent label (`ai.bera.coawareness`) are renamed with it; and
+  `state.json` moves to `Application Support/co-awareness/` in a single silent migration on first GUI
+  launch. Existing installs: re-run the installer. **Breaking** — the env-var surface above governs,
+  so this is what takes the release to 2.0.0. (R26)
 - **The nine readers moved behind a `TelemetryCore` the GUI owns but no longer defines.** No
   behavioral change to the app; it is what lets one set of readers serve both the status item and
   `--once` without either shaping the other.
-- **`MENUBAR_LOAD_RUNNER_FORCE_BATTERY` now pins the charge on the reader itself**, so Keep Awake's
+- **`CO_AWARENESS_FORCE_BATTERY` now pins the charge on the reader itself**, so Keep Awake's
   suspension policy and the battery readout can no longer disagree about the same battery in the same
   run — and the hook now also works on a desktop Mac, where it previously went unread.
 - **The `IOReport` binding is now shared** by the Neural Engine and bus readers — one `dlopen`, one

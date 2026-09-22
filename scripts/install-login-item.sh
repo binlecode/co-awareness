@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install MenuBar Load Runner as a per-user login item via a LaunchAgent.
+# Install co-awareness as a per-user login item via a LaunchAgent.
 #
 # Personal-use auto-start: no root, no packaging, no .app bundle. The entire
 # footprint is one plist in ~/Library/LaunchAgents/, fully reversed by
@@ -11,7 +11,7 @@
 #   ./scripts/install-login-item.sh --keep-awake 4h        # arm Keep Awake at every login
 set -euo pipefail
 
-LABEL="ai.bera.menubarloadrunner"
+LABEL="ai.bera.coawareness"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG="/tmp/$LABEL.log"
 DOMAIN="gui/$(id -u)"
@@ -25,7 +25,7 @@ while [ -h "$src" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$src")" && pwd)"
 REPO_DIR="$(cd -P "$SCRIPT_DIR/.." && pwd)"
-LAUNCHER="$REPO_DIR/menubar-load-runner"
+LAUNCHER="$REPO_DIR/co-awareness"
 
 [ -x "$LAUNCHER" ] || { echo "error: launcher not found or not executable: $LAUNCHER" >&2; exit 1; }
 

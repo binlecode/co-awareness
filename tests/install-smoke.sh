@@ -23,10 +23,10 @@ trap 'pkill -U "$(id -u)" -f "$ROOT" 2>/dev/null' EXIT
 rm -rf "$ROOT"
 
 say "fresh install into sandbox"
-MENUBAR_LOAD_RUNNER_HOME="$ROOT/share/menubar-load-runner" BIN_DIR="$ROOT/bin" \
-  MENUBAR_LOAD_RUNNER_REPO_URL="$REPO_URL" bash install.sh >/dev/null 2>&1
-chk "$([ -L "$ROOT/bin/menubar-load-runner" ] && echo y)" y "launcher symlink created"
-chk "$([ -x "$ROOT/share/menubar-load-runner/MenuBarLoadRunner" ] && echo y)" y "binary built"
+CO_AWARENESS_HOME="$ROOT/share/co-awareness" BIN_DIR="$ROOT/bin" \
+  CO_AWARENESS_REPO_URL="$REPO_URL" bash install.sh >/dev/null 2>&1
+chk "$([ -L "$ROOT/bin/co-awareness" ] && echo y)" y "launcher symlink created"
+chk "$([ -x "$ROOT/share/co-awareness/CoAwareness" ] && echo y)" y "binary built"
 # Installing BUILDS; it must never START the app — the only launch install.sh offers is the opt-in
 # login item, and this run answers no to that prompt. Worth asserting because "binary built" alone
 # can't tell a precompile from a full launch that happened to leave a binary behind: seen for real
@@ -43,12 +43,12 @@ chk "$(pgrep -U "$(id -u)" -f "$ROOT" >/dev/null && echo y || echo n)" n "instal
 pkill -U "$(id -u)" -f "$ROOT" 2>/dev/null && echo "  (killed the sandbox instance it started)"
 
 say "re-run install (update path, not clone)"
-out=$(MENUBAR_LOAD_RUNNER_HOME="$ROOT/share/menubar-load-runner" BIN_DIR="$ROOT/bin" \
-  MENUBAR_LOAD_RUNNER_REPO_URL="$REPO_URL" bash install.sh 2>&1)
+out=$(CO_AWARENESS_HOME="$ROOT/share/co-awareness" BIN_DIR="$ROOT/bin" \
+  CO_AWARENESS_REPO_URL="$REPO_URL" bash install.sh 2>&1)
 echo "$out" | grep -q "Updating existing install" && echo "  PASS took update path" || { echo "  FAIL did not update in place"; fail=$((fail+1)); }
 
 say "installed launcher runs"
-"$ROOT/share/menubar-load-runner/menubar-load-runner" --help >/dev/null 2>&1
+"$ROOT/share/co-awareness/co-awareness" --help >/dev/null 2>&1
 chk "$?" 0 "launcher --help rc=0"
 
 # Sandbox uninstall: neutralize the two global-state steps (real plist + real pkill) so the smoke
@@ -59,16 +59,16 @@ say "uninstall (sandboxed: global steps neutralized)"
 # the next time its flags change — letting the smoke test kill the developer's live instance.
 sed -e 's#^PLIST=.*#PLIST="$INSTALL_DIR/nonexistent.plist"#' -e 's#^if pkill .*#if true; then#' \
   uninstall.sh > "$ROOT/uninstall-sandbox.sh"
-MENUBAR_LOAD_RUNNER_HOME="$ROOT/share/menubar-load-runner" BIN_DIR="$ROOT/bin" \
+CO_AWARENESS_HOME="$ROOT/share/co-awareness" BIN_DIR="$ROOT/bin" \
   bash "$ROOT/uninstall-sandbox.sh" --yes >/dev/null 2>&1
-chk "$([ -L "$ROOT/bin/menubar-load-runner" ] && echo present || echo gone)" gone "symlink removed"
-chk "$([ -d "$ROOT/share/menubar-load-runner" ] && echo present || echo gone)" gone "install dir removed"
+chk "$([ -L "$ROOT/bin/co-awareness" ] && echo present || echo gone)" gone "symlink removed"
+chk "$([ -d "$ROOT/share/co-awareness" ] && echo present || echo gone)" gone "install dir removed"
 
 say "uninstall refuses a non-checkout dir"
-mkdir -p "$ROOT/share/menubar-load-runner"; echo x > "$ROOT/share/menubar-load-runner/not-a-repo.txt"
-MENUBAR_LOAD_RUNNER_HOME="$ROOT/share/menubar-load-runner" BIN_DIR="$ROOT/bin" \
+mkdir -p "$ROOT/share/co-awareness"; echo x > "$ROOT/share/co-awareness/not-a-repo.txt"
+CO_AWARENESS_HOME="$ROOT/share/co-awareness" BIN_DIR="$ROOT/bin" \
   bash "$ROOT/uninstall-sandbox.sh" --yes >/dev/null 2>&1
-chk "$([ -d "$ROOT/share/menubar-load-runner" ] && echo present || echo gone)" present "left non-checkout dir intact"
+chk "$([ -d "$ROOT/share/co-awareness" ] && echo present || echo gone)" present "left non-checkout dir intact"
 
 rm -rf "$ROOT"
 printf '\n'

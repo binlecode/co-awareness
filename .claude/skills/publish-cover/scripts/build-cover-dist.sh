@@ -58,7 +58,7 @@ grep -oE 'class="badge">v[0-9.]+' "$DIST/index.html" | sed 's/class="badge">//' 
 echo
 if [ "$fail" -eq 0 ]; then
   echo "AUDIT: ALL PASS. Deploy with (env -u is required — see SKILL.md §2):"
-  echo "  env -u CLOUDFLARE_API_TOKEN npx wrangler pages deploy $DIST --project-name=menubar-load-runner --commit-dirty=true"
+  echo "  env -u CLOUDFLARE_API_TOKEN npx wrangler pages deploy $DIST --project-name=co-awareness --commit-dirty=true"
 else
   echo "AUDIT: FAIL — fix the above before deploying."
 fi

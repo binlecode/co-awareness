@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MenuBar Load Runner</title>
+<title>co-awareness</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%F0%9F%90%8E</text></svg>">
 <style>
   :root{
@@ -583,7 +583,7 @@
     <div class="topline">
       <div class="brand"><span class="dot"></span> MenuBar&nbsp;Load&nbsp;Runner</div>
       <div class="nav">
-        <a class="gh-link" href="https://github.com/binlecode/menubar-load-runner">GitHub&nbsp;↗</a>
+        <a class="gh-link" href="https://github.com/binlecode/co-awareness">GitHub&nbsp;↗</a>
         <button class="theme-toggle" id="themeBtn" type="button" aria-label="Toggle color theme">◐ theme</button>
       </div>
     </div>
@@ -731,7 +731,7 @@
         <span class="caption" id="labelCaption">flip the modes — the slot appears beside the icon</span>
       </div>
     </div>
-    <p class="heroBar cap">Off by default; switchable live from the <span class="mono">Settings&nbsp;▸&nbsp;Menu&nbsp;Bar&nbsp;Label</span> submenu — mode and side, both remembered — or at launch via <span class="mono">--label</span> / <span class="mono">MENUBAR_LOAD_RUNNER_LABEL</span>.</p>
+    <p class="heroBar cap">Off by default; switchable live from the <span class="mono">Settings&nbsp;▸&nbsp;Menu&nbsp;Bar&nbsp;Label</span> submenu — mode and side, both remembered — or at launch via <span class="mono">--label</span> / <span class="mono">CO_AWARENESS_LABEL</span>.</p>
   </section>
 
   <section id="cast">
@@ -1004,18 +1004,18 @@
     </div>
     <div class="qs">
       <div class="terminal">
-        <div class="bar"><i></i><i></i><i></i><span>zsh — menubar-load-runner</span></div>
+        <div class="bar"><i></i><i></i><i></i><span>zsh — co-awareness</span></div>
 <pre><span class="c"># install — clone, compile, symlink onto PATH (no Xcode project, no Homebrew)</span>
-<span class="p">curl</span> -fsSL https://raw.githubusercontent.com/binlecode/menubar-load-runner/main/install.sh | <span class="p">bash</span>
+<span class="p">curl</span> -fsSL https://raw.githubusercontent.com/binlecode/co-awareness/main/install.sh | <span class="p">bash</span>
 
 <span class="c"># then run from anywhere — default preset, or pick a companion + load source</span>
-<span class="p">menubar-load-runner</span> totoro <span class="f">--load-source</span> gpu
+<span class="p">co-awareness</span> totoro <span class="f">--load-source</span> gpu
 
 <span class="c"># start at login — per-user LaunchAgent, no root, no .app bundle</span>
 <span class="p">./scripts/install-login-item.sh</span> chihiro
 
 <span class="c"># clean uninstall — removes only what the installer created</span>
-<span class="p">~/.local/share/menubar-load-runner/uninstall.sh</span></pre>
+<span class="p">~/.local/share/co-awareness/uninstall.sh</span></pre>
       </div>
       <div class="facts">
         <div class="fact"><h4>A single Swift source file</h4><p>The whole app is <b>one <span class="mono">.swift</span> file</b> compiled by a zsh launcher with <span class="mono">swiftc -O</span>. No Xcode project, no SwiftPM package, no build system to learn.</p></div>
@@ -1032,7 +1032,7 @@
   <footer>
     <div class="foot">
       <div class="badges">
-        <a class="badge badge-link" href="https://github.com/binlecode/menubar-load-runner">github.com/binlecode/menubar-load-runner&nbsp;↗</a>
+        <a class="badge badge-link" href="https://github.com/binlecode/co-awareness">github.com/binlecode/co-awareness&nbsp;↗</a>
         <span class="badge">v1.25.0</span>
         <span class="badge">MIT · open source</span>
         <span class="badge">Swift · AppKit</span>

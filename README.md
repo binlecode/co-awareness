@@ -1,7 +1,7 @@
-# MenuBar Load Runner
+# co-awareness
 
 <p align="center">
-  <img src="docs/media/hero.svg?v=2" alt="MenuBar Load Runner — a running horse in the macOS menu bar whose animation speed tracks system load" width="880">
+  <img src="docs/media/hero.svg?v=2" alt="co-awareness — a running horse in the macOS menu bar whose animation speed tracks system load" width="880">
 </p>
 
 Small macOS menu bar app that renders an animated GIF in the status bar.
@@ -9,14 +9,14 @@ Animation speed automatically adapts to a system load source (CPU by default; al
 
 Current version: **1.25.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
-**Cover page:** [menubar-load-runner.pages.dev](https://menubar-load-runner.pages.dev)
+**Cover page:** [co-awareness.pages.dev](https://co-awareness.pages.dev)
 
 ## Feedback wanted
 
 This project grows by community feedback. Want a new preset, another load source, or
 different behavior? Say so in
-[Discussions](https://github.com/binlecode/menubar-load-runner/discussions) — a one-liner
-is enough. Found a bug? [Open an issue](https://github.com/binlecode/menubar-load-runner/issues/new/choose).
+[Discussions](https://github.com/binlecode/co-awareness/discussions) — a one-liner
+is enough. Found a bug? [Open an issue](https://github.com/binlecode/co-awareness/issues/new/choose).
 
 ## Install
 
@@ -27,7 +27,7 @@ Apple signing, notarization, or Homebrew involved.
 Recommended — download, inspect, then run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/binlecode/menubar-load-runner/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/binlecode/co-awareness/main/install.sh -o install.sh
 less install.sh          # inspect before running
 bash install.sh
 ```
@@ -35,17 +35,17 @@ bash install.sh
 Or the one-line convenience form:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/binlecode/menubar-load-runner/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/binlecode/co-awareness/main/install.sh | bash
 ```
 
-The installer clones the repo to `~/.local/share/menubar-load-runner`, compiles the binary, and
-symlinks the launcher to `~/.local/bin/menubar-load-runner`. Run interactively, it also asks
+The installer clones the repo to `~/.local/share/co-awareness`, compiles the binary, and
+symlinks the launcher to `~/.local/bin/co-awareness`. Run interactively, it also asks
 whether to enable start-at-login (pass `--login` to enable it without prompting; a piped
 `curl | bash` skips the prompt). Re-running updates an existing install in place (`git pull`).
 
-- **Overrides:** `MENUBAR_LOAD_RUNNER_HOME` (install dir), `BIN_DIR` (launcher symlink dir).
+- **Overrides:** `CO_AWARENESS_HOME` (install dir), `BIN_DIR` (launcher symlink dir).
 - **Update:** re-run the installer.
-- **Uninstall:** run `~/.local/share/menubar-load-runner/uninstall.sh` — it tears down
+- **Uninstall:** run `~/.local/share/co-awareness/uninstall.sh` — it tears down
   start-at-login (if enabled), stops any running instance, and removes the launcher symlink and
   the install dir (`--yes` to skip the delete confirmation).
 
@@ -53,11 +53,11 @@ Already have the repo checked out? Skip the installer — see **Run Locally**.
 
 ## Files
 
-- `MenuBarLoadRunner.swift`: app source.
+- `CoAwareness.swift`: app source.
 - `install.sh`: one-line installer (clone + compile + symlink launcher onto `PATH`; see Install above).
 - `uninstall.sh`: reverses `install.sh` (LaunchAgent, running instance, symlink, install dir).
 - `LICENSE.md`: MIT license (covers the source code; the bundled GIFs are third-party — see Assets & attribution).
-- `menubar-load-runner`: launcher script.
+- `co-awareness`: launcher script.
 - `scripts/install-login-item.sh` / `scripts/uninstall-login-item.sh`: optional start-at-login setup (see below).
 - `CHANGELOG.md`: release history (Keep a Changelog + semver).
 - `gifs/running-dog-white.gif`: built-in white dog preset (transparent).
@@ -82,7 +82,7 @@ Already have the repo checked out? Skip the installer — see **Run Locally**.
 From the repository directory:
 
 ```bash
-./menubar-load-runner
+./co-awareness
 ```
 
 This uses the built-in `horse-white` preset. The menu-bar item sizes itself to the GIF's aspect ratio
@@ -93,30 +93,30 @@ It launches detached by default, so it keeps running even if the host shell exit
 To run attached to the current shell session:
 
 ```bash
-./menubar-load-runner --foreground
+./co-awareness --foreground
 ```
 
 Notes:
 
 - **Single instance.** Only one instance runs at a time. Running any command below a second time does nothing unless you pass `--extra` to allow an additional instance.
-- **Detached logs.** A detached launch writes output to `/tmp/menubar-load-runner.log` (override with the `MENUBAR_LOAD_RUNNER_LOG_FILE` environment variable). Use `--foreground` to send output straight to your terminal instead.
+- **Detached logs.** A detached launch writes output to `/tmp/co-awareness.log` (override with the `CO_AWARENESS_LOG_FILE` environment variable). Use `--foreground` to send output straight to your terminal instead.
 
 ## Global command
 
-The installer symlinks the launcher onto your `PATH` (at `~/.local/bin/menubar-load-runner`), so you
-can launch it as **`menubar-load-runner`** from any folder:
+The installer symlinks the launcher onto your `PATH` (at `~/.local/bin/co-awareness`), so you
+can launch it as **`co-awareness`** from any folder:
 
 ```bash
-menubar-load-runner dog-black
+co-awareness dog-black
 ```
 
 Running from a cloned repo instead? Symlink it yourself:
 
 ```bash
-ln -s "$PWD/menubar-load-runner" ~/.local/bin/menubar-load-runner
+ln -s "$PWD/co-awareness" ~/.local/bin/co-awareness
 ```
 
-`menubar-load-runner` supports the same flags (`--foreground`, `--no-detach`, `--detach`, `--extra`),
+`co-awareness` supports the same flags (`--foreground`, `--no-detach`, `--detach`, `--extra`),
 plus `--precompile` — build the binary if the source is newer, then exit without launching. It's safe
 to run while the app is going; the in-app updater uses it so a restart doesn't wait on a compile. And
 `--once`, which prints the sensors as one line of JSON and exits without touching the menu bar at all
@@ -149,10 +149,10 @@ These are **independent** — a new release does *not* require a reinstall, and 
 for changing the baked-in args:
 
 - **Pick up a new release** — the LaunchAgent runs the launcher script (not a fixed binary), which
-  recompiles `MenuBarLoadRunner.swift` whenever it changes. So a new version is picked up the next
+  recompiles `CoAwareness.swift` whenever it changes. So a new version is picked up the next
   time the agent starts — just restart it (args are preserved, nothing to reinstall):
   ```bash
-  launchctl kickstart -k "gui/$(id -u)/ai.bera.menubarloadrunner"   # or simply log out and back in
+  launchctl kickstart -k "gui/$(id -u)/ai.bera.coawareness"   # or simply log out and back in
   ```
 - **Change the preset or load source** — this is the *only* reason to reinstall. Re-run the installer
   with the new args; it re-bakes the plist and restarts:
@@ -170,48 +170,48 @@ for changing the baked-in args:
 
 ```bash
 # Default
-./menubar-load-runner horse-white
+./co-awareness horse-white
 
 # Black horse preset (Pinterest silhouette)
-./menubar-load-runner horse-black
+./co-awareness horse-black
 
 # Chihiro walking preset (color, and white/black silhouettes)
-./menubar-load-runner chihiro
-./menubar-load-runner chihiro-white
-./menubar-load-runner chihiro-black
+./co-awareness chihiro
+./co-awareness chihiro-white
+./co-awareness chihiro-black
 
 # Totoro preset
-./menubar-load-runner totoro
+./co-awareness totoro
 
 # White Totoro group preset (transparent, wide — renders at its GIF aspect ratio)
-./menubar-load-runner totoro-group-white
+./co-awareness totoro-group-white
 
 # Black Totoro group preset (transparent, wide — renders at its GIF aspect ratio)
-./menubar-load-runner totoro-group-black
+./co-awareness totoro-group-black
 
 # White Totoro preset
-./menubar-load-runner totoro-white
+./co-awareness totoro-white
 
 # Black Totoro preset
-./menubar-load-runner totoro-black
+./co-awareness totoro-black
 
 # White dog preset
-./menubar-load-runner dog-white
+./co-awareness dog-white
 
 # Black dog preset
-./menubar-load-runner dog-black
+./co-awareness dog-black
 ```
 
 ## Use a custom GIF
 
 ```bash
-./menubar-load-runner /absolute/path/to/your.gif
+./co-awareness /absolute/path/to/your.gif
 ```
 
 Or:
 
 ```bash
-MENUBAR_LOAD_RUNNER_PATH=/absolute/path/to/your.gif ./menubar-load-runner
+CO_AWARENESS_PATH=/absolute/path/to/your.gif ./co-awareness
 ```
 
 ## Width
@@ -223,14 +223,14 @@ gets a narrow item. The current width is shown read-only in the menu (see below)
 ## Fixed speed override
 
 ```bash
-./menubar-load-runner --speed-multiplier 1.2
+./co-awareness --speed-multiplier 1.2
 ```
 
 ## Menu-bar label (adjacent value / text slot)
 
 ```bash
-./menubar-load-runner --label value      # live reading of the active source, e.g. "CPU 15%"
-./menubar-load-runner dog-black --label BUILD   # a fixed label in its own slot
+./co-awareness --label value      # live reading of the active source, e.g. "CPU 15%"
+./co-awareness dog-black --label BUILD   # a fixed label in its own slot
 ```
 
 `--label` adds an optional **second menu-bar slot** next to the animation:
@@ -242,7 +242,7 @@ gets a narrow item. The current width is shown read-only in the menu (see below)
   (e.g. one on `--load-source cpu` labeled `CPU`, another on `net` labeled `NET`).
 - `--label off` (the default) shows nothing and claims no extra menu-bar space.
 
-Also settable via `MENUBAR_LOAD_RUNNER_LABEL`, and switchable at runtime from the menu's **Menu Bar
+Also settable via `CO_AWARENESS_LABEL`, and switchable at runtime from the menu's **Menu Bar
 Label** submenu (Off / Live Value / Custom Text…). It renders in the native menu-bar font in its own
 slot rather than being drawn onto the tiny animated icon, so it stays legible.
 
@@ -302,11 +302,11 @@ nothing, and the menu reads exactly as it did before.
 ## Load source (what drives the animation)
 
 ```bash
-./menubar-load-runner --load-source gpu
-MENUBAR_LOAD_RUNNER_LOAD_SOURCE=network ./menubar-load-runner
+./co-awareness --load-source gpu
+CO_AWARENESS_LOAD_SOURCE=network ./co-awareness
 ```
 
-`--load-source` (or the `MENUBAR_LOAD_RUNNER_LOAD_SOURCE` env var) selects which system reader
+`--load-source` (or the `CO_AWARENESS_LOAD_SOURCE` env var) selects which system reader
 drives the animation speed: `cpu` (default), `memory`, `bandwidth`, `gpu`, `network`, `disk`, `fan`, `battery`, `temperature`, or `ane`. Unknown values —
 or a source with no readable hardware on this machine — fall back to `cpu` (unavailable sources are
 disabled in the menu). It can also be switched live by expanding the **Other Sources** list in the menu
@@ -338,7 +338,7 @@ switches the driving source to it — it moves up top and drops out of the list.
 By default only the active source is sampled (so the indicator doesn't add to the load it visualizes),
 and the list starts collapsed. Expanding it samples *every* available reader each tick, turning the
 menu into a compact multi-metric monitor; collapsing restores active-only sampling. Launch with the
-list already expanded via `--show-all-sources` (or `MENUBAR_LOAD_RUNNER_SHOW_ALL=1`). The active source
+list already expanded via `--show-all-sources` (or `CO_AWARENESS_SHOW_ALL=1`). The active source
 still drives the animation; the history sparkline still tracks the active source only.
 
 > How each source is measured, in brief: the percentage-style sources (CPU, GPU, fan) are
@@ -352,7 +352,7 @@ still drives the animation; the history sparkline still tracks the active source
 ## Read the sensors from a script (`--once`)
 
 ```bash
-./menubar-load-runner --once
+./co-awareness --once
 {"v":1,"cpu_pct":14.2,"cpu_p_pct":9.8,"cpu_e_pct":27.4,"mem_pct":41.0,"swap_mibs":0.00,"bw_gbps":58.3,"gpu_pct":28.0,"gpu_rend_pct":26.0,"gpu_tiler_pct":11.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
 ```
 
@@ -361,7 +361,7 @@ status line, or an agent deciding whether this machine has the thermal and batte
 build. No menu bar, no window, no state file, and nothing to install or leave running:
 
 ```bash
-./menubar-load-runner --once | jq -r '"\(.temp_c) °C, \(.thermal)"'
+./co-awareness --once | jq -r '"\(.temp_c) °C, \(.thermal)"'
 ```
 
 - **Physical units, named with them.** `_pct` is a percentage, `_mibs` is MiB/s, `_gbps` is GB/s,
@@ -375,13 +375,13 @@ build. No menu bar, no window, no state file, and nothing to install or leave ru
   is safe to run beside a running instance, or several at once — it writes nothing and locks nothing.
 - **Takes about 0.3 s.** Throughput readings are counter deltas, so it samples, waits, and samples
   again; that window is nearly the whole runtime.
-- Needs the binary built (`./menubar-load-runner --precompile` once, if you have never launched it);
+- Needs the binary built (`./co-awareness --precompile` once, if you have never launched it);
   it deliberately won't compile one for you, so a snapshot never turns into a 30-second build.
 
 ## Ask whether one is already running (`--status`)
 
 ```bash
-./menubar-load-runner --status
+./co-awareness --status
 {"running":true,"pid":1598,"keep_awake":{"active":true,"remaining_s":3540}}
 ```
 
@@ -389,7 +389,7 @@ build. No menu bar, no window, no state file, and nothing to install or leave ru
 launches another instance, or before it assumes the Mac will still be awake in an hour:
 
 ```bash
-./menubar-load-runner --status | jq -e '.running' >/dev/null || ./menubar-load-runner
+./co-awareness --status | jq -e '.running' >/dev/null || ./co-awareness
 ```
 
 - **Nothing running is an answer, not an error** — `{"running":false}`, and still exit 0. Exit 1 means
@@ -404,12 +404,12 @@ launches another instance, or before it assumes the Mac will still be awake in a
 ## Keep Awake at launch (`--keep-awake`)
 
 ```bash
-./menubar-load-runner --keep-awake 4h        # arm a 4-hour window at startup
-./menubar-load-runner --keep-awake on        # until turned off
-MENUBAR_LOAD_RUNNER_KEEP_AWAKE=90m ./menubar-load-runner
+./co-awareness --keep-awake 4h        # arm a 4-hour window at startup
+./co-awareness --keep-awake on        # until turned off
+CO_AWARENESS_KEEP_AWAKE=90m ./co-awareness
 ```
 
-`--keep-awake` (or `MENUBAR_LOAD_RUNNER_KEEP_AWAKE`) arms sleep prevention as the app starts, so a
+`--keep-awake` (or `CO_AWARENESS_KEEP_AWAKE`) arms sleep prevention as the app starts, so a
 long unattended run can be scripted instead of clicked. It takes `off` (the default), `on` /
 `indefinite`, or a duration — **a unit is required**: `30m`, `2h`, `1h30m`, `90s`, up to 24 hours.
 A bare number is rejected rather than guessed at, since minutes and hours are both plausible readings
@@ -424,13 +424,13 @@ into a login item:
 ### Waiting for a process instead of a clock (`--keep-awake-pid`)
 
 ```bash
-long-build.sh & ./menubar-load-runner --keep-awake-pid $!   # hold until that job exits
-MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID=41293 ./menubar-load-runner
+long-build.sh & ./co-awareness --keep-awake-pid $!   # hold until that job exits
+CO_AWARENESS_KEEP_AWAKE_PID=41293 ./co-awareness
 ```
 
 A duration is a *time* promise, not a *task* promise, and for an unattended job that is the whole
 problem: `2h` and `4h` are both guesses, and the one that ends early is the one that costs you the
-run. `--keep-awake-pid <pid>` (or `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID`) holds the Mac awake until that
+run. `--keep-awake-pid <pid>` (or `CO_AWARENESS_KEEP_AWAKE_PID`) holds the Mac awake until that
 process exits and then releases on its own — no window to pick, and nothing left holding sleep after
 the job is done.
 
@@ -450,9 +450,9 @@ doesn't reboot the Mac. If you pass both `--keep-awake` and `--keep-awake-pid`, 
 ### The battery release point (`--battery-threshold`)
 
 ```bash
-./menubar-load-runner --keep-awake 8h --battery-threshold 10   # release at 10% instead of 20%
-./menubar-load-runner --keep-awake on --battery-threshold off  # never release on charge alone
-MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD=10 ./menubar-load-runner
+./co-awareness --keep-awake 8h --battery-threshold 10   # release at 10% instead of 20%
+./co-awareness --keep-awake on --battery-threshold off  # never release on charge alone
+CO_AWARENESS_BATTERY_THRESHOLD=10 ./co-awareness
 ```
 
 Also settable from the menu: `Settings ▸ Battery Threshold` offers 10 / 15 / 20 / 30%, `Never`, and a
@@ -461,14 +461,14 @@ immediately — a Keep Awake window that is already running picks up the new rel
 waiting for the next battery event.
 
 Keep Awake releases at 20% on battery by default. `--battery-threshold` (or
-`MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD`) moves that point: a **whole percent** — `20` or `20%`, from 6
+`CO_AWARENESS_BATTERY_THRESHOLD`) moves that point: a **whole percent** — `20` or `20%`, from 6
 to 100 — or `off`, which never releases on charge alone. A decimal like `0.20` is refused rather than
 guessed at, for the reason a bare duration is: it reads as 0.2% under one convention and 20% under the
 other. Out-of-range values are clamped and unrecognized ones fall back to the 20% default, both with a
 warning on stderr and never a failed launch, since this too can be baked into a login item.
 
 The threshold **persists across launches**: whatever it was last set to comes back, so a plain
-`./menubar-load-runner` keeps your release point instead of reverting to 20%. That matters most for
+`./co-awareness` keeps your release point instead of reverting to 20%. That matters most for
 `off` — a forgotten `off` would silently reinstate a policy you turned off. Passing the flag or the env
 var still wins over the saved value, so a login item can pin one threshold without disturbing it.
 
@@ -481,10 +481,10 @@ below the threshold still overrides that pause for the session (see the menu sec
 
 **This is launch-time arming, not remote control.** The launcher allows one instance, so running the
 command again while the app is up won't re-arm it — the second invocation is refused. To change the
-window on a running app, use the menu (or `pkill -f MenuBarLoadRunner` and relaunch).
+window on a running app, use the menu (or `pkill -f CoAwareness` and relaunch).
 
 **Persistence.** Keep Awake state is saved to
-`~/Library/Application Support/menubar-load-runner/state.json` and restored on the next launch, so a
+`~/Library/Application Support/co-awareness/state.json` and restored on the next launch, so a
 reboot in the middle of an overnight window doesn't silently drop it. What's restored:
 
 | Saved | On the next launch |
@@ -502,7 +502,7 @@ corrupt, the app launches normally with Keep Awake off; it is never a startup er
 
 ## Resource cost
 
-MenuBar Load Runner is built to stay out of the way of the load it visualizes. Measured on Apple
+co-awareness is built to stay out of the way of the load it visualizes. Measured on Apple
 Silicon at 2× Retina — your numbers vary with Mac model, menu-bar height, display refresh rate, the
 active preset, and the current load level:
 
@@ -520,8 +520,8 @@ status button's image every frame — which avoids a per-frame Auto Layout pass 
 CPU low. Reproduce it:
 
 ```bash
-./menubar-load-runner                                    # start (detached)
-PID=$(pgrep -U "$(id -u)" -f '/MenuBarLoadRunner( |$)')   # -U: your instance, not another account's
+./co-awareness                                    # start (detached)
+PID=$(pgrep -U "$(id -u)" -f '/CoAwareness( |$)')   # -U: your instance, not another account's
 top -pid "$PID" -l 6 -s 1 -stats pid,command,cpu,mem     # CPU + memory
 footprint -p "$PID"                                      # phys_footprint (true memory)
 ```
@@ -529,16 +529,16 @@ footprint -p "$PID"                                      # phys_footprint (true 
 ## Help
 
 ```bash
-./menubar-load-runner --help
+./co-awareness --help
 ```
 
 ## Stop
 
 ```bash
-pkill -f 'MenuBarLoadRunner'
+pkill -f 'CoAwareness'
 ```
 
-If a detached instance won't stop or a launch silently fails, check `/tmp/menubar-load-runner.log` (or `$MENUBAR_LOAD_RUNNER_LOG_FILE` if set) first.
+If a detached instance won't stop or a launch silently fails, check `/tmp/co-awareness.log` (or `$CO_AWARENESS_LOG_FILE` if set) first.
 
 ## Menu actions
 
@@ -547,11 +547,11 @@ Click the menu bar item — the creature or either number slot — to open:
 - The active source's metric + state line: `CPU Usage (smoothed)` (plus the `P` / `E` cluster split) / `CPU State`; or `Memory` (used-% + swap capacity + swap MB/s when paging) / `Memory Pressure`; or `Memory Bandwidth` (GB/s) / `Memory Bandwidth State`; or `GPU` (plus the `Renderer` / `Tiler` split) / `GPU State`; or `Network` (MB/s) / `Network State`; or `Disk` (MB/s) / `Disk State`; or `Fan` (RPM + %) / `Fan State`; or `Battery` (charge % + discharge A, or `AC` — plus **health % and cycle count** on a Mac with a battery) / `Battery State` (the battery's condition and the capacity behind it, `Normal · 8478/8579 mAh`, in place of the drain band while the menu is open; hover either row for the full breakdown — see [Battery health](#battery-health-cycles-and-capacity)); or `Temperature` (hottest sensor °C + the spread across sensors — or **`Thermal Throttling`** in place of the sensor count once macOS reports serious or critical thermal pressure) / `Temperature State`
 - `Load Avg (1/5/15m)`
 - `Speed Multiplier` (shows the active load source and mode; a separate `Slowing animation — <cause>` line appears only when a self-throttle condition is active, naming the cause: thermal throttling, Low Power Mode, or memory pressure)
-- `▸ Other Sources` (disclosure row) — click to expand/collapse an inline list of every *other* available reader (`CPU` / `Memory` / `GPU` / `Network` / `Disk` / `Fan` / `Battery` / `Temperature`, minus the active one; sources with no readable hardware are omitted). Each row shows that reader's live readout; clicking it switches the driving source to it (takes effect immediately). Expanding samples every reader each tick; collapsed (the default) samples only the active source. The active source still drives the animation. Launch expanded with `--show-all-sources` / `MENUBAR_LOAD_RUNNER_SHOW_ALL=1`
+- `▸ Other Sources` (disclosure row) — click to expand/collapse an inline list of every *other* available reader (`CPU` / `Memory` / `GPU` / `Network` / `Disk` / `Fan` / `Battery` / `Temperature`, minus the active one; sources with no readable hardware are omitted). Each row shows that reader's live readout; clicking it switches the driving source to it (takes effect immediately). Expanding samples every reader each tick; collapsed (the default) samples only the active source. The active source still drives the animation. Launch expanded with `--show-all-sources` / `CO_AWARENESS_SHOW_ALL=1`
 - `Width` (read-only: shows the GIF-derived item width in points and the GIF aspect ratio; not configurable)
 - `Settings` (submenu) — where preferences live, so they don't crowd the top level
-  - `Menu Bar Label` -> `Off` / `Live Value` (the active source's compact live reading in its own slot) / `Custom Text…` (a fixed label, up to 24 chars). Off by default; the parent title shows the current state. **Your choice is remembered across relaunches.** Also settable at launch via `--label` / `MENUBAR_LOAD_RUNNER_LABEL`, which wins over the saved value for that run — including `--label off`, which starts with no label even if one was saved. Below those, a second group — `Position` -> `Left of Icon` (default) / `Right of Icon` — puts the slot on either side of the animation; it applies immediately, stays set while the label is off, and is remembered across relaunches. Menu-only (no flag), like the Keep Awake tint. The slot's width is fixed either way, so neither side jitters — see [Menu-bar label](#menu-bar-label-adjacent-value--text-slot)
-  - `Battery Threshold` -> `10%` / `15%` / `20%` / `30%` / `Never` / `Custom…` (any whole percent from 6 to 100). The charge at which Keep Awake stops holding the Mac awake on battery; 20% by default, and the parent title shows the current setting. `Never` means it never releases on charge alone — **below 5% the Mac still sleeps regardless**, so that is not a way to run the battery flat. A change takes effect immediately, including on a window that is already armed. **Remembered across relaunches**, and settable at launch via [`--battery-threshold`](#the-battery-release-point---battery-threshold) / `MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD`, which wins over the saved value for that run
+  - `Menu Bar Label` -> `Off` / `Live Value` (the active source's compact live reading in its own slot) / `Custom Text…` (a fixed label, up to 24 chars). Off by default; the parent title shows the current state. **Your choice is remembered across relaunches.** Also settable at launch via `--label` / `CO_AWARENESS_LABEL`, which wins over the saved value for that run — including `--label off`, which starts with no label even if one was saved. Below those, a second group — `Position` -> `Left of Icon` (default) / `Right of Icon` — puts the slot on either side of the animation; it applies immediately, stays set while the label is off, and is remembered across relaunches. Menu-only (no flag), like the Keep Awake tint. The slot's width is fixed either way, so neither side jitters — see [Menu-bar label](#menu-bar-label-adjacent-value--text-slot)
+  - `Battery Threshold` -> `10%` / `15%` / `20%` / `30%` / `Never` / `Custom…` (any whole percent from 6 to 100). The charge at which Keep Awake stops holding the Mac awake on battery; 20% by default, and the parent title shows the current setting. `Never` means it never releases on charge alone — **below 5% the Mac still sleeps regardless**, so that is not a way to run the battery flat. A change takes effect immediately, including on a window that is already armed. **Remembered across relaunches**, and settable at launch via [`--battery-threshold`](#the-battery-release-point---battery-threshold) / `CO_AWARENESS_BATTERY_THRESHOLD`, which wins over the saved value for that run
   - `Freeze Animation` — stops the animation entirely and holds the current frame (zero redraws, less than even the slowest animation costs). So the indicator never goes silent, while it's frozen with the menu-bar label `Off` the label slot temporarily shows the live value instead — a custom label is left alone, and your saved label choice is untouched. Also engages automatically while the macOS accessibility setting **Reduce Motion** (System Settings → Accessibility → Display) is on: the row then reads `Freeze Animation — on via Reduce Motion`, and its checkmark keeps showing your own toggle, which stays editable underneath. **Remembered across relaunches.** Menu-only (no flag), like the label position
 - `Keep Awake` (submenu) — keeps the Mac awake while the app runs by spawning `caffeinate -di -w <pid>` (prevents both display and idle system sleep — an idle-only assertion is unreliable on modern macOS, where the system follows the display into sleep). Bound to the app's PID, so it's reaped automatically on crash/quit. Auto-disengages on low battery (≤20% on battery by default — movable with [`--battery-threshold`](#the-battery-release-point---battery-threshold)) or serious/critical thermal state, and re-engages when the condition clears. A thin track line along the icon's bottom edge shows while it's actively keeping the Mac awake, and the adjacent [menu-bar label](#menu-bar-label-adjacent-value--text-slot), if you have one on, wears the same tint for as long as it runs. **When it's paused, it says so without you opening anything:** the line stays, dimmed further — armed but not currently holding — so a window that released itself overnight doesn't look like one you never switched on. In the menu the `Keep Awake` row reads `(paused)` and the submenu tells you why — `paused — battery low (15%)`, `paused — battery critical (4%)`, or `paused — Mac is too warm`. **Turning Keep Awake on from the menu while the battery is already low overrides the battery pause** — an explicit arm is honored rather than silently doing nothing — down to a hard 5% floor, where it releases regardless so an override can't drain the Mac to a power-off. The override lasts for that session only: it isn't saved, and `--keep-awake` doesn't set it, since that flag can be baked into the login item and fires with nobody present to weigh a low battery against the task. A thermal pause is never overridable. The submenu holds two radio groups. The first is **Off** plus five track-line colors (**Dusty Teal**, the default, **Sand**, **Graphite**, **Mauve**, **Sage**): picking a color turns Keep Awake on with that tint, **Off** turns it off. The second is **Duration** — the timed release: **Until turned off** (the default), **30 minutes**, **1 hour**, **2 hours**, **4 hours**, **8 hours**, or **Custom…** (hours + minutes, up to 24 hours). Picking any duration also turns Keep Awake on, so arming a window is one click. **Option-clicking the menu bar item skips the menu entirely:** ⌥-click the creature (or either number slot) to turn Keep Awake on and off in place. On arms it with no window — the same as **Until turned off** — unless a window is already running, in which case ⌥-click releases that too, along with the low-battery override it was granted. A plain click still opens the menu, and so does a right- or Control-click; ⌘-drag still rearranges the item. Everything the menu enforces the gesture enforces: the battery pause, the override rule, and the 5% floor. With a window armed it's a real countdown: the `Keep Awake` row reads `Keep Awake: 29:24` and the submenu shows `29:24 left (until 8:18 PM)` — time remaining at seconds resolution plus the wall-clock moment it ends, ticking every second while the menu is open. **The countdown also runs on the menu bar itself, so the remaining time is a glance rather than a click:** with the label off the adjacent slot reveals it (`29:58`) in the Keep Awake tint — the paused tone while a condition has the hold suspended — and collapses back to nothing when the window ends or you turn it off; with a label on, it sits beside the reading (`CPU 45%  29:58`) on the side nearest the icon. The slot reserves room for the widest form it can reach, so the ticking digits move nothing around them. An indefinite or process-bound hold shows no countdown, having no clock to show. When it elapses `caffeinate` exits on its own, Keep Awake returns to **Off**, and the Mac is free to sleep — handy for a long unattended task you won't be awake to babysit. The window is a *time* promise, not a *task* promise: it releases whether or not your job finished. An armed window **survives a relaunch or a reboot** — it is saved as the moment it ends, so what comes back is the remainder, not a fresh window, and a window that elapsed while the app was down does not come back at all. Also armable at launch with `--keep-awake` (see below). **The submenu's first row answers "is my Mac being held awake right now?" — by anything, not just by this app.** That is the question the menu used to get wrong: start `caffeinate -di -t 30m` in a terminal, or leave another utility holding sleep, and every Keep Awake surface here read `Off` while your Mac stayed up. Now the row reads `Mac held awake — this app · 29:24` when it's ours, `Mac held awake — caffeinate · until 8:18 PM` when it's someone else's (naming the holder, and its release time when it has one), `Idle sleep held, display is not — the Mac may still sleep` when what's held won't actually keep the Mac up, or `Nothing holding sleep`. The track line and the label tint follow it, so a hold you didn't start is visible without opening the menu — **faded** rather than solid, because only *this app's* hold is one the `Off` row can release. Two things it deliberately does not do: it never ticks a color row on someone else's behalf (that would make `Off` a button that can't turn off what it appears to describe), and it never promises your Mac won't sleep — clamshell, your `pmset` settings and the 5% battery floor are all invisible to it, so it names what is *holding* sleep and stops there.
 
@@ -591,7 +591,7 @@ never automatic:
    - Under the LaunchAgent, the relaunch uses the arguments baked into the login item, so a preset or
      source you picked from the menu resets to those (everything saved to disk still carries over).
 
-Disable the check entirely with `--no-update-check` or `MENUBAR_LOAD_RUNNER_UPDATE_CHECK=0`.
+Disable the check entirely with `--no-update-check` or `CO_AWARENESS_UPDATE_CHECK=0`.
 
 ## Testing & CI
 
@@ -631,7 +631,7 @@ uncommenting the trigger block in the workflow.
 
 ## How it compares
 
-MenuBar Load Runner sits between two categories: animated load indicators (RunCat-style "the
+co-awareness sits between two categories: animated load indicators (RunCat-style "the
 creature runs faster when the machine works harder") and menu-bar system monitors (numeric
 dashboards). It is the CLI-first, no-Xcode entry in the first category, with a lightweight slice of
 the second built into its dropdown. Feature presence at a glance versus the closest open-source
@@ -640,7 +640,7 @@ RunCat, by its original developer), [zoomies](https://github.com/KartikLabhshetw
 pixel-pet indicator), and [stats](https://github.com/exelban/stats) (the full system-monitor
 dashboard):
 
-| | MenuBar Load Runner | menubar_runcat | zoomies | stats |
+| | co-awareness | menubar_runcat | zoomies | stats |
 | :--- | :--- | :--- | :--- | :--- |
 | **Category** | Animated load indicator | Animated load indicator | Animated load indicator | System monitor |
 | **Packaging** | Single Swift file + shell launcher (no Xcode project) | Xcode `.app` | Xcode `.app` | Xcode `.app` |
@@ -705,4 +705,4 @@ please open an issue and it will be taken down
 promptly.
 
 You don't need the bundled GIFs — point the app at any GIF you have the rights to use:
-`menubar-load-runner /absolute/path/to/your.gif` (or set `MENUBAR_LOAD_RUNNER_PATH`).
+`co-awareness /absolute/path/to/your.gif` (or set `CO_AWARENESS_PATH`).

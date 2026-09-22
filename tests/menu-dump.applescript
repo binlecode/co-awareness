@@ -2,7 +2,7 @@
 -- menu walk can be diffed instead of eyeballed. Read-only: it opens the menu, reads titles, and closes
 -- it again.
 --
---   pgrep -U "$(id -u)" -f '/MenuBarLoadRunner( |$)'      # get the pid
+--   pgrep -U "$(id -u)" -f '/CoAwareness( |$)'      # get the pid
 --   osascript tests/menu-dump.applescript <pid>
 --
 -- Requires Accessibility permission for the calling terminal (System Settings → Privacy & Security →
@@ -11,7 +11,7 @@
 --
 -- THREE THINGS THAT WILL BITE YOU, all found the hard way:
 --
--- 1. Resolve the target by UNIX ID, never by name. Every instance is named "MenuBarLoadRunner", and a
+-- 1. Resolve the target by UNIX ID, never by name. Every instance is named "CoAwareness", and a
 --    long-running one is holding the PREVIOUS build's menu — matching by name silently dumps the wrong
 --    app, which reads as "no regression" when there is one, or vice versa. Hence the required argument.
 -- 2. The status item is `menu bar 1`, not `menu bar 2`. An accessory app (`.accessory`) has no main
@@ -25,7 +25,7 @@
 on run argv
 	if (count of argv) is not 1 then
 		return "usage: osascript tests/menu-dump.applescript <pid>" & linefeed & ¬
-			"       pid from: pgrep -U \"$(id -u)\" -f '/MenuBarLoadRunner( |$)'"
+			"       pid from: pgrep -U \"$(id -u)\" -f '/CoAwareness( |$)'"
 	end if
 	set targetPid to (item 1 of argv) as integer
 	tell application "System Events"

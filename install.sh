@@ -1,16 +1,16 @@
 #!/bin/bash
-# MenuBar Load Runner — one-line installer.
+# co-awareness — one-line installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/binlecode/menubar-load-runner/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/binlecode/co-awareness/main/install.sh | bash
 #
-# This app is source-based: the launcher compiles MenuBarLoadRunner.swift on demand and reads
+# This app is source-based: the launcher compiles CoAwareness.swift on demand and reads
 # gifs/ + presets.json relative to the source, so the whole repo lives at a permanent path. This
-# script clones (or updates) it into ~/.local/share/menubar-load-runner, precompiles the binary,
-# symlinks the launcher onto your PATH at ~/.local/bin/menubar-load-runner, then optionally sets
+# script clones (or updates) it into ~/.local/share/co-awareness, precompiles the binary,
+# symlinks the launcher onto your PATH at ~/.local/bin/co-awareness, then optionally sets
 # up start-at-login via the per-user LaunchAgent.
 #
-# Env overrides: MENUBAR_LOAD_RUNNER_HOME (install dir), BIN_DIR (symlink dir),
-#                MENUBAR_LOAD_RUNNER_REPO_URL (clone source).
+# Env overrides: CO_AWARENESS_HOME (install dir), BIN_DIR (symlink dir),
+#                CO_AWARENESS_REPO_URL (clone source).
 # Flags: --login (set up start-at-login without prompting), -h/--help.
 #
 # The whole body runs from main() invoked on the LAST line, so a truncated `curl | bash` download
@@ -18,11 +18,11 @@
 # main. Keep `main "$@"` as the final statement.
 set -euo pipefail
 
-REPO="binlecode/menubar-load-runner"
-REPO_URL="${MENUBAR_LOAD_RUNNER_REPO_URL:-https://github.com/$REPO.git}"
-INSTALL_DIR="${MENUBAR_LOAD_RUNNER_HOME:-$HOME/.local/share/menubar-load-runner}"
+REPO="binlecode/co-awareness"
+REPO_URL="${CO_AWARENESS_REPO_URL:-https://github.com/$REPO.git}"
+INSTALL_DIR="${CO_AWARENESS_HOME:-$HOME/.local/share/co-awareness}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-LAUNCHER_NAME="menubar-load-runner"
+LAUNCHER_NAME="co-awareness"
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m ✓ \033[0m %s\n' "$*"; }
@@ -31,13 +31,13 @@ die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-MenuBar Load Runner installer
+co-awareness installer
 
 Usage: install.sh [--login]
   --login      set up start-at-login without prompting (default: ask if interactive)
   -h, --help   show this help
 
-Installs to \$MENUBAR_LOAD_RUNNER_HOME (default ~/.local/share/menubar-load-runner) and
+Installs to \$CO_AWARENESS_HOME (default ~/.local/share/co-awareness) and
 symlinks the launcher into \$BIN_DIR (default ~/.local/bin).
 EOF
   exit 0
@@ -56,7 +56,7 @@ main() {
   done
 
   # --- Preflight -------------------------------------------------------------
-  info "MenuBar Load Runner installer"
+  info "co-awareness installer"
 
   [ "$(uname -s)" = "Darwin" ] || die "this is a macOS-only menu bar app (found $(uname -s))"
 
@@ -86,7 +86,7 @@ main() {
   # exercised by tests/install-smoke.sh until it is committed (that test clones committed HEAD).
   info "Compiling (swiftc -O)…"
   if "$INSTALL_DIR/$LAUNCHER_NAME" --precompile; then
-    ok "Built $INSTALL_DIR/MenuBarLoadRunner"
+    ok "Built $INSTALL_DIR/CoAwareness"
   else
     warn "precompile failed; the launcher will compile on first run instead"
   fi
@@ -102,7 +102,7 @@ main() {
   # not mere existence, and swallows the "Device not configured" error).
   if [ "$DO_LOGIN" = "prompt" ] && { : < /dev/tty; } 2>/dev/null; then
     printf '\n'
-    read -r -p "Start MenuBar Load Runner now and at every login? [y/N] " reply < /dev/tty || reply=""
+    read -r -p "Start co-awareness now and at every login? [y/N] " reply < /dev/tty || reply=""
     case "$reply" in [Yy]*) DO_LOGIN="yes" ;; esac
   fi
   if [ "$DO_LOGIN" = "yes" ]; then

@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 
 开工前必须明确以下六条硬底线，**违反会导致进程崩溃、构建并发冲突或破坏核心设计哲学**：
 
-- 🔴 **单文件无包架构（Unbundled Swift）**：所有业务逻辑集中于 `MenuBarLoadRunner.swift`，零外部包依赖，由 `swiftc -O -strict-concurrency=complete` 编译；绝不引入 Xcode 项目、SwiftPM (`Package.swift`)、CocoaPods 或外部第三方库。类均标注 `@MainActor`，构建必须保持零警告。
+- 🔴 **单文件无包架构（Unbundled Swift）**：所有业务逻辑集中于 `CoAwareness.swift`，零外部包依赖，由 `swiftc -O -strict-concurrency=complete` 编译；绝不引入 Xcode 项目、SwiftPM (`Package.swift`)、CocoaPods 或外部第三方库。类均标注 `@MainActor`，构建必须保持零警告。
 - 🔴 **原子重命名编译（Atomic Rename）**：启动脚本 `--precompile` 必须先编译到临时路径再通过 `mv`（`rename(2)`）原子替换目标二进制；严禁在运行中原地覆盖 Mach-O 二进制文件，否则破坏正在运行进程的内存分页导致当场崩溃。
 - 🔴 **单例守卫必须前置于编译（Singleton Guard Before Compile）**：启动器中的 `pgrep -U "$(id -u)"` 检查必须严格在 `compile_if_stale` 之前执行，防止多个并发启动请求同时触发 `swiftc` 写入同一目标路径。
 - 🔴 **零 Mock 真实驱动测试（Zero Mocks / Real Binary Assertions）**：`tests/qa.sh` 是唯一测试套件，必须驱动真实二进制检验真实副作用；严禁在测试中复制业务代码类型；只允许使用无侵入可观测性环境变量（`EXIT_AFTER`, `LOG_*`, `FORCE_BATTERY`, `FORCE_UNAVAILABLE`, `FORCE_THERMAL`, `STATE_FILE`），严禁引入改变业务决策逻辑的 hook。
@@ -23,16 +23,16 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 
 **有疑问或做技术选型时，严格按两步执行，顺序不可颠倒：**
 
-1. **先 grounding** —— 查真实代码（`MenuBarLoadRunner.swift`、`menubar-load-runner`）、核查真实运行输出与可观测性探针（`MENUBAR_LOAD_RUNNER_EXIT_AFTER`, `LOG_*`），深入代码实现与真实终端输出，**严禁凭空假设向下推演**。
+1. **先 grounding** —— 查真实代码（`CoAwareness.swift`、`co-awareness`）、核查真实运行输出与可观测性探针（`CO_AWARENESS_EXIT_AFTER`, `LOG_*`），深入代码实现与真实终端输出，**严禁凭空假设向下推演**。
 2. **再确认** —— 严禁静默新增/废弃 CLI 参数、修改 `state.json` 数据结构、私自放宽安全门控或重新解释既有设计。若实测推翻了前提，如实报送发现并提问，**不要自行改动设计范围或重排优先级**。
 
 ---
 
 ## 项目性质
 
-**MenuBar Load Runner** —— 原生 macOS 状态栏动态负载可视化与轻量级诊断监控套件（Swift + AppKit）。
+**co-awareness** —— 原生 macOS 状态栏动态负载可视化与轻量级诊断监控套件（Swift + AppKit）。
 
-- **单文件 + 原生启动脚本**：`MenuBarLoadRunner.swift` (~6.6k 行) + 原生 zsh 启动脚本 `menubar-load-runner`，无需 Xcode / SwiftPM，直截了当。
+- **单文件 + 原生启动脚本**：`CoAwareness.swift` (~6.6k 行) + 原生 zsh 启动脚本 `co-awareness`，无需 Xcode / SwiftPM，直截了当。
 - **动态帧率自适应**：10 种无特权硬件遥测源（CPU、内存+Swap、DRAM 总线带宽、GPU、网络、磁盘、风扇、电池放电电流、芯片结温、神经引擎功耗）驱动状态栏 GIF 变速播放。
 - **平滑归一化与自限流**：移植自 `btop` 的 `ThroughputScaler` 自适应非对称迟滞缩放无界速率；高热/低电量/内存压力下自动减半自身帧率；全遮挡（刘海/隐藏/灭屏）0% CPU 暂停；支持系统 Reduce Motion 与手动 Freeze（冻结时读数自动交接给标签栏）。
 - **进程生命周期防休眠**：内置基于 `caffeinate -di -w <pid>` 的 Keep Awake 与 `IOPMCopyAssertionsByProcess` 外部断言嗅探器。
@@ -80,27 +80,27 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 
 ```bash
 # 启动与运行
-./menubar-load-runner                       # 默认预设 (horse-white)，后台脱离终端运行
-./menubar-load-runner --foreground           # 前台运行（查看 stderr / print 输出）
-./menubar-load-runner dog-black --label value   # 指定预设 + 状态栏数值标签
-./menubar-load-runner --load-source bandwidth    # 以 DRAM 总线带宽 (GB/s) 驱动动画
-./menubar-load-runner --once                 # 单行 JSON 快照（九路读数，物理单位），随即退出；无 GUI / 无 state.json / 无编译
-./menubar-load-runner --help
+./co-awareness                       # 默认预设 (horse-white)，后台脱离终端运行
+./co-awareness --foreground           # 前台运行（查看 stderr / print 输出）
+./co-awareness dog-black --label value   # 指定预设 + 状态栏数值标签
+./co-awareness --load-source bandwidth    # 以 DRAM 总线带宽 (GB/s) 驱动动画
+./co-awareness --once                 # 单行 JSON 快照（九路读数，物理单位），随即退出；无 GUI / 无 state.json / 无编译
+./co-awareness --help
 
 # 编译与无启动检查
-./menubar-load-runner --precompile           # 仅当源码较新时原子编译，不启动（保持运行实例不损坏）
-swiftc -O -strict-concurrency=complete MenuBarLoadRunner.swift -o tmp/mblr-check  # 快速编译检查
+./co-awareness --precompile           # 仅当源码较新时原子编译，不启动（保持运行实例不损坏）
+swiftc -O -strict-concurrency=complete CoAwareness.swift -o tmp/coaware-check  # 快速编译检查
 
 # 自动化测试与调试钩子（均无需 TCC / 辅助功能权限）
-MENUBAR_LOAD_RUNNER_EXIT_AFTER=5 ./tmp/mblr-check --load-source memory           # 运行 5s 自行退出 (exit 0)
-MENUBAR_LOAD_RUNNER_FORCE_BATTERY=15:battery ./tmp/mblr-check --keep-awake 30m   # 模拟低电量 / 电池状态
-MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 ./tmp/mblr-check --label value 2>&1 | grep SLOTS # 打印状态栏槽位屏幕几何与宽度
-MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS=1 ./tmp/mblr-check 2>&1 | grep ASSERTIONS     # 打印过滤与防抖后的外部睡眠断言
-MENUBAR_LOAD_RUNNER_LOG_AWAKE=1 ./tmp/mblr-check 2>&1 | grep AWAKE               # 打印睡眠阻止综合判定与菜单行文本
-MENUBAR_LOAD_RUNNER_LOG_ANIMATION=1 ./tmp/mblr-check 2>&1 | grep ANIM           # 打印动画冻结状态与游标
-MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1 ./tmp/mblr-check 2>&1 | grep BATTERY_DIAG  # 打印电池健康度/循环次数/容量（启动一次 + 每次开菜单）
-MENUBAR_LOAD_RUNNER_FORCE_THERMAL=serious ./tmp/mblr-check --load-source temperature  # 模拟内核热压力等级
-MENUBAR_LOAD_RUNNER_LOG_THERMAL=1 ./tmp/mblr-check 2>&1 | grep THERMAL         # 打印内核热压力、温度行文本与自限流行状态
+CO_AWARENESS_EXIT_AFTER=5 ./tmp/coaware-check --load-source memory           # 运行 5s 自行退出 (exit 0)
+CO_AWARENESS_FORCE_BATTERY=15:battery ./tmp/coaware-check --keep-awake 30m   # 模拟低电量 / 电池状态
+CO_AWARENESS_LOG_SLOTS=1 ./tmp/coaware-check --label value 2>&1 | grep SLOTS # 打印状态栏槽位屏幕几何与宽度
+CO_AWARENESS_LOG_ASSERTIONS=1 ./tmp/coaware-check 2>&1 | grep ASSERTIONS     # 打印过滤与防抖后的外部睡眠断言
+CO_AWARENESS_LOG_AWAKE=1 ./tmp/coaware-check 2>&1 | grep AWAKE               # 打印睡眠阻止综合判定与菜单行文本
+CO_AWARENESS_LOG_ANIMATION=1 ./tmp/coaware-check 2>&1 | grep ANIM           # 打印动画冻结状态与游标
+CO_AWARENESS_LOG_BATTERY_DIAGNOSTICS=1 ./tmp/coaware-check 2>&1 | grep BATTERY_DIAG  # 打印电池健康度/循环次数/容量（启动一次 + 每次开菜单）
+CO_AWARENESS_FORCE_THERMAL=serious ./tmp/coaware-check --load-source temperature  # 模拟内核热压力等级
+CO_AWARENESS_LOG_THERMAL=1 ./tmp/coaware-check 2>&1 | grep THERMAL         # 打印内核热压力、温度行文本与自限流行状态
 
 # 自动化测试套件
 tests/qa.sh --core                           # 核心门禁（CI 友好，不依赖 WindowServer，秒级）
@@ -112,7 +112,7 @@ tests/qa.sh --launcher                       # 包含启动器单例与原子替
 ./scripts/uninstall-login-item.sh                  # 卸载 LaunchAgent
 
 # 进程清理
-pkill -f 'MenuBarLoadRunner'                 # 停止当前用户正在运行的实例
+pkill -f 'CoAwareness'                 # 停止当前用户正在运行的实例
 ```
 
 ---
@@ -125,13 +125,13 @@ pkill -f 'MenuBarLoadRunner'                 # 停止当前用户正在运行的
 - **CADisplayLink 与自限流** (`docs/ARCHITECTURE.md` §3, §5)：屏幕刷新率同步的 vsync 游戏循环；全遮挡（刘海/隐藏/灭屏）时完全暂停渲染（0% CPU）；高热/低电量/内存压力下自动减半自身帧率；尊重系统 Reduce Motion 与手动 Freeze（冻结时读数自动交接给标签栏，R17）。
 - **Keep Awake 睡眠阻止与外部断言嗅探** (`docs/ARCHITECTURE.md` §7)：通过 `SleepPreventer` 启动 `caffeinate -di -w <pid>` 绑定进程生命周期；支持预设/自定义定时窗口（跨重启恢复）；底线 5% 电池保护；通过 `IOPMCopyAssertionsByProcess` 嗅探系统其他进程断言，两段式归因排布（This Mac vs This App）。
 - **双槽位状态栏标签模型** (`docs/ARCHITECTURE.md` §6)：标签采用独立状态栏项而非在 GIF 上烘焙文字；预建左右两个槽位（`labelItemLeft`, `labelItemRight`）以克服 macOS 状态栏槽位不可重排限制，严格采用花样空格（U+2007）预占位防抖。
-- **状态持久化单点守恒** (`docs/ARCHITECTURE.md` §8.2)：`~/Library/Application Support/menubar-load-runner/state.json` 由 `persistState()` 统一全量写盘，持久化意图（Intent）而非易失运行状态。
+- **状态持久化单点守恒** (`docs/ARCHITECTURE.md` §8.2)：`~/Library/Application Support/co-awareness/state.json` 由 `persistState()` 统一全量写盘，持久化意图（Intent）而非易失运行状态。
 - **预设注册表与自更新** (`docs/ARCHITECTURE.md` §9)：动图配置完全由 `gifs/presets.json` 驱动；自更新先 `git pull --ff-only` 再执行 `--precompile` 原子编译，最后在弹窗提示后由 detached 脚本完成重启。
 
 ### 添加内置预设流程
 1. 将优化裁剪好的 GIF 放入 `gifs/<name>.gif`（必须透明背景、紧凑边界）。
 2. 在 `gifs/presets.json` 的 `presets` 数组中添加配置项（指定 `key`、`menuTitle`、`file`、`speed` 范围与指数）。
-3. 运行 `./menubar-load-runner <name>` 验证宽高比适配与各档位动画速度。
+3. 运行 `./co-awareness <name>` 验证宽高比适配与各档位动画速度。
 4. 运行 `tests/qa.sh --core` 确认解析无误。
 
 ---
@@ -155,7 +155,7 @@ pkill -f 'MenuBarLoadRunner'                 # 停止当前用户正在运行的
 ## 测试与回归约定
 
 - **驱动真实二进制**：`tests/qa.sh` 是唯一的自动化回归测试套件，分级运行：`--core`（语法、编译、CLI 解析与版本基线，无 GUI 依赖）、默认（包含 GUI 状态栏与断言检查）、`--launcher`（启动器单例与并发测试）。
-- **只使用无侵入可观测性钩子**：`MENUBAR_LOAD_RUNNER_EXIT_AFTER`（生命周期截断）、`FORCE_BATTERY`（模拟电量）、`FORCE_UNAVAILABLE`（模拟遥测源缺失）、`FORCE_THERMAL`（模拟内核热压力等级，仅供显示层，严禁回流自限流判定）、`LOG_SLOTS` / `LOG_ASSERTIONS` / `LOG_AWAKE` / `LOG_ANIMATION` / `LOG_BATTERY_DIAGNOSTICS` / `LOG_THERMAL`（日志输出内部判定）。禁止任何改变业务决策逻辑的 hook —— `LOG_*` 只允许读取并打印，严禁回写被打印的状态字段（否则会让菜单在未打开时走上不该走的渲染分支）。
+- **只使用无侵入可观测性钩子**：`CO_AWARENESS_EXIT_AFTER`（生命周期截断）、`FORCE_BATTERY`（模拟电量）、`FORCE_UNAVAILABLE`（模拟遥测源缺失）、`FORCE_THERMAL`（模拟内核热压力等级，仅供显示层，严禁回流自限流判定）、`LOG_SLOTS` / `LOG_ASSERTIONS` / `LOG_AWAKE` / `LOG_ANIMATION` / `LOG_BATTERY_DIAGNOSTICS` / `LOG_THERMAL`（日志输出内部判定）。禁止任何改变业务决策逻辑的 hook —— `LOG_*` 只允许读取并打印，严禁回写被打印的状态字段（否则会让菜单在未打开时走上不该走的渲染分支）。
 - **环境无法测定时输出 NOTE，绝不造假 PASS/FAIL**：例如屏幕拥挤、无电池桌面机、系统自带睡眠断言等外部不可控状态，如实输出 NOTE。
 - **严禁谎称覆盖**：测试无法测定的系统边界必须诚实声明，绝不引入虚假断言。
 

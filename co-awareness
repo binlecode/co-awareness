@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-readonly APP_CMD_NAME="menubar-load-runner/menubar-load-runner"
+readonly APP_CMD_NAME="co-awareness/co-awareness"
 
 # Absolute, symlink-resolved path of THIS script. The app re-execs it for the update prompt's
-# Restart button (exported as MENUBAR_LOAD_RUNNER_LAUNCHER below), and it is also where the
+# Restart button (exported as CO_AWARENESS_LAUNCHER below), and it is also where the
 # script dir comes from — one resolution, so the two can't disagree. Resolving through the
-# symlink matters: the PATH entry install.sh creates is ~/.local/bin/menubar-load-runner
+# symlink matters: the PATH entry install.sh creates is ~/.local/bin/co-awareness
 # pointing into the install dir, and a restart has to run the real file, not the link's name
 # joined to the real dir.
 resolve_script_path() {
@@ -36,7 +36,7 @@ print_help() {
   cat <<EOF
 Usage:
   $APP_CMD_NAME [dog-white|dog-black|horse-black|horse-white|chihiro|chihiro-white|chihiro-black|totoro|totoro-group-white|totoro-group-black|totoro-white|totoro-black|/path/to.gif] [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
-  MENUBAR_LOAD_RUNNER_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
+  CO_AWARENESS_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
 
 Presets:
   dog-white   Built-in running dog (white)
@@ -55,21 +55,21 @@ Presets:
 Options:
   --speed-multiplier <x>     Fixed speed (e.g. 0.5, 1.0, 1.5, 2.0)
   --load-source <src>        Reader driving the animation: cpu (default), memory, gpu, network, disk, fan, battery, temperature, ane (Apple Neural Engine power), bandwidth (DRAM bus GB/s)
-                             (also via MENUBAR_LOAD_RUNNER_LOAD_SOURCE; unknown/unavailable -> cpu)
+                             (also via CO_AWARENESS_LOAD_SOURCE; unknown/unavailable -> cpu)
   --show-all-sources         Start with the menu's "Other Sources" list expanded, sampling every available
-                             reader and showing each as a live row (also via MENUBAR_LOAD_RUNNER_SHOW_ALL=1;
+                             reader and showing each as a live row (also via CO_AWARENESS_SHOW_ALL=1;
                              click a row to switch source; the active source still drives the animation)
   --label <off|value|text>   Optional second menu-bar slot: 'value' shows the active source's live reading,
                              any other text is a fixed label (up to 24 chars), 'off' (default) shows nothing
-                             (also via MENUBAR_LOAD_RUNNER_LABEL; switchable from the menu)
+                             (also via CO_AWARENESS_LABEL; switchable from the menu)
   --keep-awake <off|on|dur>  Arm Keep Awake at launch: 'on' until turned off, or a duration with a unit
                              (30m, 2h, 1h30m; up to 24h), 'off' (default) leaves it disabled
-                             (also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE; switchable from the menu).
+                             (also via CO_AWARENESS_KEEP_AWAKE; switchable from the menu).
                              An armed window is saved and resumed on the next launch; passing this
                              flag -- even as 'off' -- overrides what was saved
   --keep-awake-pid <pid>     Arm Keep Awake bound to a process: sleep prevention is held until that
                              pid exits, then released automatically (also via
-                             MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID). The shape that fits an unattended
+                             CO_AWARENESS_KEEP_AWAKE_PID). The shape that fits an unattended
                              terminal job (\`--keep-awake-pid \$!\`), where a fixed window is a
                              guess. Wins over --keep-awake if both are given; a pid that
                              is already gone warns and launches with keep-awake off. Never resumed
@@ -78,9 +78,9 @@ Options:
                              Charge at or below which Keep Awake releases on battery (default 20;
                              'off' never releases on charge alone). Whole percents only -- 20 or 20%,
                              not 0.20; out-of-range values are clamped to 6-100
-                             (also via MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD). Below 5% on battery
+                             (also via CO_AWARENESS_BATTERY_THRESHOLD). Below 5% on battery
                              the Mac sleeps regardless -- that floor is not configurable
-  --no-update-check          Skip the launch check for a newer release (also via MENUBAR_LOAD_RUNNER_UPDATE_CHECK=0)
+  --no-update-check          Skip the launch check for a newer release (also via CO_AWARENESS_UPDATE_CHECK=0)
   --foreground, --no-detach  Run attached to current shell (default is detached)
   --detach                   Run detached (default)
   --extra                    Allow launching a new instance even if one is already running
@@ -126,11 +126,11 @@ Examples:
   $APP_CMD_NAME --keep-awake-pid \$!
   $APP_CMD_NAME horse-black --speed-multiplier 1.2
   $APP_CMD_NAME --foreground horse-black
-  MENUBAR_LOAD_RUNNER_PATH=/tmp/cat.gif $APP_CMD_NAME
+  CO_AWARENESS_PATH=/tmp/cat.gif $APP_CMD_NAME
 EOF
 }
 
-# Compiles MenuBarLoadRunner.swift to the sibling binary when the source is newer (or the binary is
+# Compiles CoAwareness.swift to the sibling binary when the source is newer (or the binary is
 # missing). Returns 0 when the binary is current — already, or after a successful build — and 1 when
 # swiftc failed, which is the caller's cue to fall back to the interpreted `swift`.
 #
@@ -175,11 +175,11 @@ main() {
   # text), so every argument goes through unchanged.
   for arg in "$@"; do
     if [[ "$arg" == "--once" || "$arg" == "--status" ]]; then
-      if [[ ! -x "$script_dir/MenuBarLoadRunner" ]]; then
+      if [[ ! -x "$script_dir/CoAwareness" ]]; then
         print -u2 "$APP_CMD_NAME: no binary to read from; build one with \`$APP_CMD_NAME --precompile\`."
         exit 2
       fi
-      exec "$script_dir/MenuBarLoadRunner" "$@"
+      exec "$script_dir/CoAwareness" "$@"
     fi
   done
 
@@ -213,7 +213,7 @@ main() {
   done
   set -- "${passthrough_args[@]}"
 
-  # Preset keyword → GIF path resolution lives in Swift (MenuBarLoadRunnerApp.init), and the
+  # Preset keyword → GIF path resolution lives in Swift (CoAwarenessApp.init), and the
   # preset profiles + default preset now live in gifs/presets.json, so the launcher forwards the
   # positional arg unchanged and only intercepts its own --help.
   if [[ $# -gt 0 ]]; then
@@ -225,8 +225,8 @@ main() {
     esac
   fi
 
-  local swift_src="$script_dir/MenuBarLoadRunner.swift"
-  local swift_bin="$script_dir/MenuBarLoadRunner"
+  local swift_src="$script_dir/CoAwareness.swift"
+  local swift_bin="$script_dir/CoAwareness"
 
   # --precompile: build and stop. This is the app's half of a self-update — `git pull` moves the
   # source, and the compile that makes it runnable has to happen *before* the app quits, or the user
@@ -245,23 +245,23 @@ main() {
   # a pgrep rather than a full swiftc run — and, when the source is stale, so it can't start a second
   # build racing the one whose gap it wandered into.
   if (( ! allow_extra )); then
-    # Match the compiled binary by its path — `/MenuBarLoadRunner` followed by a space
+    # Match the compiled binary by its path — `/CoAwareness` followed by a space
     # (it has args) or end-of-line (env-var mode, no positional). Args no longer carry a
     # `.gif` path now that Swift resolves preset keywords, so the old `.*\.gif` pattern
     # would miss keyword launches. The trailing `( |$)` keeps this from matching an editor
-    # holding `MenuBarLoadRunner.swift` open, or a `swiftc`/`swift` build of the source.
-    # (The interpreted `swift …/MenuBarLoadRunner.swift` fallback, used only when swiftc
+    # holding `CoAwareness.swift` open, or a `swiftc`/`swift` build of the source.
+    # (The interpreted `swift …/CoAwareness.swift` fallback, used only when swiftc
     # fails, is intentionally not singleton-guarded.) pgrep -f excludes its own process;
-    # the lowercase launcher path `menubar-load-runner` never matches this pattern.
+    # the lowercase launcher path `co-awareness` never matches this pattern.
     #
     # `-U "$(id -u)"` scopes the search to the calling user: plain `pgrep -f` sees every
     # user's processes, so with fast user switching this refused user B's *first* launch by
     # naming a PID in user A's session — one B can't see, click, or kill. The guard means
     # "don't stack instances in *my* menu bar", and the menu bar is per-session.
     local existing_pids
-    existing_pids=($(pgrep -U "$(id -u)" -f "/MenuBarLoadRunner( |$)" || true))
+    existing_pids=($(pgrep -U "$(id -u)" -f "/CoAwareness( |$)" || true))
     if [[ ${#existing_pids[@]} -gt 0 ]]; then
-      print -u2 "$APP_CMD_NAME: An instance of MenuBarLoadRunner is already running (PID: ${existing_pids[*]})."
+      print -u2 "$APP_CMD_NAME: An instance of CoAwareness is already running (PID: ${existing_pids[*]})."
       print -u2 "Use --extra to launch multiple instances."
       exit 1
     fi
@@ -274,7 +274,7 @@ main() {
     swift_cmd=(swift -strict-concurrency=complete -module-cache-path "$swift_module_cache" "$swift_src" "$@")
   fi
 
-  # MENUBAR_LOAD_RUNNER_LAUNCHER / _LAUNCH_MODE are how the app answers "can I restart myself, and
+  # CO_AWARENESS_LAUNCHER / _LAUNCH_MODE are how the app answers "can I restart myself, and
   # how" for the update prompt's Restart button — it cannot infer that on its own, because a
   # detached run and a launchd-supervised one both reparent to pid 1. `detached` means "re-exec this
   # launcher once I've exited"; `attached` means the caller is waiting on us, so the app offers a
@@ -283,11 +283,11 @@ main() {
   # out from under the shell that started it. LAUNCHER is also what the app runs `--precompile`
   # through, so the swiftc invocation lives in this file only.
   if (( launch_detached )); then
-    log_file="${MENUBAR_LOAD_RUNNER_LOG_FILE:-/tmp/menubar-load-runner.log}"
+    log_file="${CO_AWARENESS_LOG_FILE:-/tmp/co-awareness.log}"
     mkdir -p -- "$(dirname -- "$log_file")"
-    MENUBAR_LOAD_RUNNER_BIN_NAME="$APP_CMD_NAME" \
-    MENUBAR_LOAD_RUNNER_LAUNCHER="$launcher_path" \
-    MENUBAR_LOAD_RUNNER_LAUNCH_MODE="detached" \
+    CO_AWARENESS_BIN_NAME="$APP_CMD_NAME" \
+    CO_AWARENESS_LAUNCHER="$launcher_path" \
+    CO_AWARENESS_LAUNCH_MODE="detached" \
       nohup "${swift_cmd[@]}" >>"$log_file" 2>&1 < /dev/null &
     pid=$!
     disown "$pid" 2>/dev/null || true
@@ -295,9 +295,9 @@ main() {
     exit 0
   fi
 
-  MENUBAR_LOAD_RUNNER_BIN_NAME="$APP_CMD_NAME" \
-  MENUBAR_LOAD_RUNNER_LAUNCHER="$launcher_path" \
-  MENUBAR_LOAD_RUNNER_LAUNCH_MODE="attached" \
+  CO_AWARENESS_BIN_NAME="$APP_CMD_NAME" \
+  CO_AWARENESS_LAUNCHER="$launcher_path" \
+  CO_AWARENESS_LAUNCH_MODE="attached" \
     exec "${swift_cmd[@]}"
 }
 

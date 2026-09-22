@@ -11,11 +11,11 @@ import QuartzCore
 // CHANGELOG.md releases. Bump this together with a new CHANGELOG entry and git tag.
 private enum AppInfo {
     static let version = "1.25.0"
-    static let name = "MenuBar Load Runner"
+    static let name = "co-awareness"
     static let tagline = "An animated GIF in the macOS menu bar, its playback speed driven by live system load."
     static let copyright = "© 2026 Bin Le"
     static let license = "MIT License"
-    static let repositoryURL = "https://github.com/binlecode/menubar-load-runner"
+    static let repositoryURL = "https://github.com/binlecode/co-awareness"
     static var releasesURL: String { "\(repositoryURL)/releases" }
 }
 
@@ -58,7 +58,7 @@ private struct SemVer: Comparable, CustomStringConvertible {
 
 // Detects whether a newer release exists by reading the origin remote's release tags. Uses
 // `git ls-remote` rather than the GitHub API: no token, no rate limit, and it honors the checkout's
-// actual origin (forks, and the MENUBAR_LOAD_RUNNER_REPO_URL test override). Fail-silent by design —
+// actual origin (forks, and the CO_AWARENESS_REPO_URL test override). Fail-silent by design —
 // any failure (offline, git missing, non-zero exit) yields nil, never an error surfaced to the user.
 private enum UpdateChecker {
     // Result of running git: exit status plus captured stdout/stderr. nil (from runGit) means git
@@ -165,7 +165,7 @@ private enum UpdateChecker {
 // The build command is NOT duplicated here. The launcher owns it behind `--precompile`, so the flags
 // cannot drift: if they did, the launcher's mtime check would just recompile at restart and this whole
 // path would silently stop buying anything. The launcher path comes from the same
-// MENUBAR_LOAD_RUNNER_LAUNCHER marker `Restarter.mode` reads — no marker means we were not started by
+// CO_AWARENESS_LAUNCHER marker `Restarter.mode` reads — no marker means we were not started by
 // the launcher, which is also exactly the case that gets no Restart button.
 private enum Builder {
     // nil when there is no launcher to build through. Otherwise (ok, message), with the launcher's
@@ -173,7 +173,7 @@ private enum Builder {
     // Read-then-wait is safe for the same reason it is there: the output is one line, far under the
     // pipe buffer, so the child cannot block on it.
     static func precompile(environment: [String: String]) -> (ok: Bool, message: String)? {
-        guard let launcher = environment["MENUBAR_LOAD_RUNNER_LAUNCHER"], !launcher.isEmpty else {
+        guard let launcher = environment["CO_AWARENESS_LAUNCHER"], !launcher.isEmpty else {
             return nil
         }
         let process = Process()
@@ -205,7 +205,7 @@ private enum Builder {
 //     (verified; it is the obvious-looking signal and it is wrong). Instead launchd is *asked*: it
 //     reports the job's pid, and because the plist runs the launcher which `exec`s the binary, that pid
 //     IS ours when we are the agent's process.
-//   - the launcher: exports MENUBAR_LOAD_RUNNER_LAUNCHER / _LAUNCH_MODE, so a detached run knows the
+//   - the launcher: exports CO_AWARENESS_LAUNCHER / _LAUNCH_MODE, so a detached run knows the
 //     script to re-run.
 // Anything else — a `--foreground` run, a raw binary, an unrecognized environment — is `.unsupported`
 // and simply gets no Restart button: a foreground run belongs to the shell waiting on it.
@@ -217,14 +217,14 @@ private enum Restarter {
     }
 
     // Must match `LABEL` in scripts/install-login-item.sh — the plist that owns the login-item job.
-    static let launchAgentLabel = "ai.bera.menubarloadrunner"
+    static let launchAgentLabel = "ai.bera.coawareness"
 
     // Pure so the mapping is testable without a launchd job or a real launcher (tests/restart.swift);
     // the one impure question ("am I the agent's process?") is answered by the caller and passed in.
     static func mode(environment: [String: String], isLaunchAgentJob: Bool) -> Mode {
         if isLaunchAgentJob { return .launchAgent }
-        guard environment["MENUBAR_LOAD_RUNNER_LAUNCH_MODE"] == "detached",
-              let launcher = environment["MENUBAR_LOAD_RUNNER_LAUNCHER"], !launcher.isEmpty else {
+        guard environment["CO_AWARENESS_LAUNCH_MODE"] == "detached",
+              let launcher = environment["CO_AWARENESS_LAUNCHER"], !launcher.isEmpty else {
             return .unsupported
         }
         return .launcher(path: launcher)
@@ -348,8 +348,8 @@ private enum Restarter {
     // enough here because the waiter writes only after we have quit, so nothing of ours is still
     // appending. nullDevice if the file can't be opened: losing the note beats losing the restart.
     private static func logHandle() -> FileHandle {
-        let path = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_FILE"]
-            ?? "/tmp/menubar-load-runner.log"
+        let path = ProcessInfo.processInfo.environment["CO_AWARENESS_LOG_FILE"]
+            ?? "/tmp/co-awareness.log"
         if !FileManager.default.fileExists(atPath: path) {
             FileManager.default.createFile(atPath: path, contents: nil)
         }
@@ -503,7 +503,7 @@ private enum Tuning {
     static let labelBandwidthCeiling = 999.9  // DRAM bus, one decimal
     // Slack between the text and the slot's content box, on top of the ~16pt of chrome AppKit adds to
     // every status item window regardless. 4pt because that is what AppKit's own variableLength sizing
-    // uses: measured with MENUBAR_LOAD_RUNNER_LOG_SLOTS, an auto-sized slot holding a 66.8pt string
+    // uses: measured with CO_AWARENESS_LOG_SLOTS, an auto-sized slot holding a 66.8pt string
     // reported an 87pt window — 16 chrome + 71 content — so matching it keeps the reserved slot visually
     // identical to the native one at its widest, with none of the dead space a generous guess would leave
     // on the widest source (network reserves ~125pt of glyphs). Enough to absorb any rounding between
@@ -962,7 +962,7 @@ private enum LoadSource: Int, CaseIterable {
 // source's live reading (refreshed on the 2s tick); `.custom` shows a fixed user string (handy for
 // labeling multiple instances). Replaces the old baked-on overlay, which was illegible atop a 22pt
 // animated icon — an adjacent slot renders in the native menu-bar font instead. Parsed from
-// `--label <off|value|text>` / MENUBAR_LOAD_RUNNER_LABEL; `off` and `value` are reserved keywords, so
+// `--label <off|value|text>` / CO_AWARENESS_LABEL; `off` and `value` are reserved keywords, so
 // a literal custom label of "off"/"value" isn't expressible (documented; a non-issue in practice).
 private enum MenuBarLabel: Equatable {
     case off
@@ -1214,7 +1214,7 @@ private enum KeepAwakeDuration: Equatable {
         return formatter.string(from: date)
     }
 
-    // `--keep-awake <value>` / MENUBAR_LOAD_RUNNER_KEEP_AWAKE. Accepts "on"/"indefinite" (no window)
+    // `--keep-awake <value>` / CO_AWARENESS_KEEP_AWAKE. Accepts "on"/"indefinite" (no window)
     // or unit-suffixed durations, combinable: "30m", "2h", "1h30m", "90s". nil = unparseable, which the
     // caller turns into a warning + off rather than a launch failure.
     //
@@ -1314,7 +1314,7 @@ private struct Config {
 
     // A built-in preset keyword (e.g. "horse-white") or an absolute/tilde GIF path. Empty means
     // "no arg given" → the app falls back to the manifest's defaultPreset.
-    // Keyword→path resolution happens in MenuBarLoadRunnerApp.init against `allPresets`,
+    // Keyword→path resolution happens in CoAwarenessApp.init against `allPresets`,
     // so the shell launcher forwards this arg unchanged.
     let presetOrPath: String
     let speedMultiplierOverride: Double?
@@ -1326,30 +1326,30 @@ private struct Config {
     // Which reader drives the animation. Resolved from --load-source / env here (unknown →
     // .cpu, never a launch failure), so the app receives a concrete source, not a raw string.
     let loadSource: LoadSource
-    // Debug/test hook: if MENUBAR_LOAD_RUNNER_EXIT_AFTER=<seconds> (>0) is set, the app
+    // Debug/test hook: if CO_AWARENESS_EXIT_AFTER=<seconds> (>0) is set, the app
     // self-terminates after that many seconds. Lets a smoke test exit 0 on its own instead of
     // an external kill/timeout against the blocking AppKit run loop. nil = run until quit.
     let exitAfterSeconds: TimeInterval?
     // Whether to probe origin's release tags on launch (and enable the manual "Check for Updates…").
-    // Default true; disabled by --no-update-check or MENUBAR_LOAD_RUNNER_UPDATE_CHECK ∈ {0,false,no}.
+    // Default true; disabled by --no-update-check or CO_AWARENESS_UPDATE_CHECK ∈ {0,false,no}.
     let updateCheckEnabled: Bool
     // Launch default for the multi-source dashboard mode. Default false (active-only sampling);
-    // enabled by --show-all-sources or MENUBAR_LOAD_RUNNER_SHOW_ALL ∈ {1,true,yes}. Still runtime-
+    // enabled by --show-all-sources or CO_AWARENESS_SHOW_ALL ∈ {1,true,yes}. Still runtime-
     // toggleable from the menu regardless.
     let showAllSources: Bool
-    // Keep Awake at launch, from --keep-awake / MENUBAR_LOAD_RUNNER_KEEP_AWAKE. nil = not requested
+    // Keep Awake at launch, from --keep-awake / CO_AWARENESS_KEEP_AWAKE. nil = not requested
     // (the persisted window, if any, is restored instead). This is LAUNCH-time arming only: the
     // launcher's singleton refuses a second invocation, so it can't arm an instance that's already
     // running — that would need IPC, which a bundle-less binary doesn't have.
     let keepAwake: KeepAwakeLaunchOption?
     // Keep Awake's battery release point, from --battery-threshold /
-    // MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD, as a charge FRACTION (0.20), already clamped. nil = neither
+    // CO_AWARENESS_BATTERY_THRESHOLD, as a charge FRACTION (0.20), already clamped. nil = neither
     // flag nor env given, which is distinct from `0`: absent lets the saved setting stand, while `0` is
     // an explicit "never release on charge alone". Three states, not two — the asymmetry with `label`
     // is that here "off" is a value rather than a mode.
     let batteryThreshold: Double?
 
-    // `--battery-threshold <pct|off>` / MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD → a charge fraction, or
+    // `--battery-threshold <pct|off>` / CO_AWARENESS_BATTERY_THRESHOLD → a charge fraction, or
     // nil if the text is not a form we accept (the caller warns and falls back).
     //
     // WHOLE PERCENTS ONLY: `20` and `20%` mean 20%, while `0.20` is refused rather than guessed at.
@@ -1469,21 +1469,21 @@ private struct Config {
         }
 
         if presetOrPath == nil {
-            presetOrPath = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_PATH"]
+            presetOrPath = ProcessInfo.processInfo.environment["CO_AWARENESS_PATH"]
         }
 
         // No positional arg and no env override → empty, so the app resolves the manifest default.
         let value = (presetOrPath?.isEmpty == false) ? presetOrPath! : ""
 
         if loadSourceArg == nil {
-            loadSourceArg = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOAD_SOURCE"]
+            loadSourceArg = ProcessInfo.processInfo.environment["CO_AWARENESS_LOAD_SOURCE"]
         }
 
         if labelArg == nil {
-            labelArg = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LABEL"]
+            labelArg = ProcessInfo.processInfo.environment["CO_AWARENESS_LABEL"]
         }
         // An empty env value counts as absent (matching how the positional and --load-source treat
-        // empty), so `MENUBAR_LOAD_RUNNER_LABEL=` doesn't read as an explicit off and clobber a saved
+        // empty), so `CO_AWARENESS_LABEL=` doesn't read as an explicit off and clobber a saved
         // mode. Only a non-empty flag/env produces a non-nil launch request.
         let label = (labelArg?.isEmpty == false) ? MenuBarLabel.parse(labelArg) : nil
         // Unknown/absent → .cpu (today's behavior). Never a launch failure, per spec.
@@ -1508,7 +1508,7 @@ private struct Config {
         }
 
         var exitAfterSeconds: TimeInterval?
-        if let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_EXIT_AFTER"],
+        if let raw = ProcessInfo.processInfo.environment["CO_AWARENESS_EXIT_AFTER"],
            let parsed = Double(raw), parsed > 0 {
             exitAfterSeconds = parsed
         }
@@ -1516,13 +1516,13 @@ private struct Config {
         // Env can only disable (the --no-update-check flag already covers the CLI side). If the flag
         // disabled it, the env check is moot.
         if updateCheckEnabled,
-           let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_UPDATE_CHECK"]?.lowercased(),
+           let raw = ProcessInfo.processInfo.environment["CO_AWARENESS_UPDATE_CHECK"]?.lowercased(),
            ["0", "false", "no"].contains(raw) {
             updateCheckEnabled = false
         }
 
         if keepAwakeArg == nil {
-            keepAwakeArg = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_KEEP_AWAKE"]
+            keepAwakeArg = ProcessInfo.processInfo.environment["CO_AWARENESS_KEEP_AWAKE"]
         }
         // An unparseable value degrades to an explicit off with a warning, the way --load-source
         // degrades to cpu: this can be baked into a LaunchAgent, and a bad value must never cost the
@@ -1541,7 +1541,7 @@ private struct Config {
         }
 
         if keepAwakePIDArg == nil {
-            keepAwakePIDArg = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID"]
+            keepAwakePIDArg = ProcessInfo.processInfo.environment["CO_AWARENESS_KEEP_AWAKE_PID"]
         }
         // Resolved AFTER --keep-awake so it can win the collision: a pid binding is the more specific
         // intent of the two, and it is the one with a stopping condition the caller can point at.
@@ -1565,7 +1565,7 @@ private struct Config {
         }
 
         if batteryThresholdArg == nil {
-            batteryThresholdArg = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD"]
+            batteryThresholdArg = ProcessInfo.processInfo.environment["CO_AWARENESS_BATTERY_THRESHOLD"]
         }
         // An empty env value counts as absent, exactly as with --label: `…BATTERY_THRESHOLD=` must not
         // read as an explicit value and clobber the saved setting.
@@ -1589,7 +1589,7 @@ private struct Config {
 
         // Env can only enable the launch default (the menu toggle covers turning it off at runtime).
         if !showAllSources,
-           let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_SHOW_ALL"]?.lowercased(),
+           let raw = ProcessInfo.processInfo.environment["CO_AWARENESS_SHOW_ALL"]?.lowercased(),
            ["1", "true", "yes"].contains(raw) {
             showAllSources = true
         }
@@ -1610,22 +1610,22 @@ private struct Config {
     }
 
     static func printUsage() {
-        let envBin = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_BIN_NAME"]
+        let envBin = ProcessInfo.processInfo.environment["CO_AWARENESS_BIN_NAME"]
         let bin = (envBin?.isEmpty == false) ? envBin! : URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
-        print("MenuBar Load Runner \(AppInfo.version)")
+        print("co-awareness \(AppInfo.version)")
         print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
-        print("   or: MENUBAR_LOAD_RUNNER_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
-        print("Load source: which reader drives animation speed (default cpu). Also via MENUBAR_LOAD_RUNNER_LOAD_SOURCE; unknown values fall back to cpu.")
-        print("Label: an optional second menu-bar slot. --label value shows the active source's live reading; --label <text> (up to \(Tuning.labelMaxChars) chars) shows a fixed label; --label off (default) shows nothing. Also via MENUBAR_LOAD_RUNNER_LABEL; switchable from the menu.")
-        print("Show all sources: --show-all-sources (or MENUBAR_LOAD_RUNNER_SHOW_ALL=1) starts with the menu's \"Other Sources\" list expanded, sampling every available reader and showing each as a live row; click a row to switch the driving source. Collapsed by default (active source only). Toggle from the menu's disclosure header.")
-        print("Keep awake: --keep-awake <off|on|30m|2h|1h30m> arms sleep prevention at launch (a unit is required; up to \(Tuning.keepAwakeMaxHours)h). Also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE. Off by default; switchable from the menu. An armed window is saved and resumed on the next launch — passing this flag (even as off) overrides what was saved.")
-        print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
-        print("Battery threshold: --battery-threshold <pct|off> sets the charge at or below which Keep Awake releases on battery (default \(Int(Tuning.batteryLowThresholdDefault * Tuning.percentScale))%; off never releases on charge alone). Whole percents only — 20 or 20%, not 0.20. Also via MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD. Out-of-range values are clamped to \(Int(Tuning.batteryThresholdMin * Tuning.percentScale))–\(Int(Tuning.batteryThresholdMax * Tuning.percentScale))%, and below \(Int(Tuning.batteryCriticalThreshold * Tuning.percentScale))% on battery the Mac sleeps regardless — that floor is not configurable.")
+        print("   or: CO_AWARENESS_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
+        print("Load source: which reader drives animation speed (default cpu). Also via CO_AWARENESS_LOAD_SOURCE; unknown values fall back to cpu.")
+        print("Label: an optional second menu-bar slot. --label value shows the active source's live reading; --label <text> (up to \(Tuning.labelMaxChars) chars) shows a fixed label; --label off (default) shows nothing. Also via CO_AWARENESS_LABEL; switchable from the menu.")
+        print("Show all sources: --show-all-sources (or CO_AWARENESS_SHOW_ALL=1) starts with the menu's \"Other Sources\" list expanded, sampling every available reader and showing each as a live row; click a row to switch the driving source. Collapsed by default (active source only). Toggle from the menu's disclosure header.")
+        print("Keep awake: --keep-awake <off|on|30m|2h|1h30m> arms sleep prevention at launch (a unit is required; up to \(Tuning.keepAwakeMaxHours)h). Also via CO_AWARENESS_KEEP_AWAKE. Off by default; switchable from the menu. An armed window is saved and resumed on the next launch — passing this flag (even as off) overrides what was saved.")
+        print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via CO_AWARENESS_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
+        print("Battery threshold: --battery-threshold <pct|off> sets the charge at or below which Keep Awake releases on battery (default \(Int(Tuning.batteryLowThresholdDefault * Tuning.percentScale))%; off never releases on charge alone). Whole percents only — 20 or 20%, not 0.20. Also via CO_AWARENESS_BATTERY_THRESHOLD. Out-of-range values are clamped to \(Int(Tuning.batteryThresholdMin * Tuning.percentScale))–\(Int(Tuning.batteryThresholdMax * Tuning.percentScale))%, and below \(Int(Tuning.batteryCriticalThreshold * Tuning.percentScale))% on battery the Mac sleeps regardless — that floor is not configurable.")
         print("Snapshot: --once prints one line of JSON with every reading this machine answers for (physical units; an unavailable source is an absent key) and exits, with no GUI and no state file. Must be the only argument. Takes about \(Int(Tuning.snapshotWindow * Tuning.msPerSecond)) ms — the rate readers need a delta window.")
         print("Status: --status prints one line of JSON about the process rather than the hardware — whether an instance of this binary is already resident (running, pid) and whether it is holding the Mac awake (keep_awake.active, plus remaining_s for a timed window; absent when the hold is indefinite or bound to a pid) — and exits. Read-only: no GUI, and the state file is never written. Must be the only argument. Exits 0 whether or not an instance is up; for readings use --once.")
         print("Width: the menu-bar item sizes itself to the GIF's aspect ratio at menu-bar height — not configurable.")
         print("Default speed: auto (preset-dependent; per-preset ranges defined in gifs/presets.json).")
-        print("Updates: on launch, checks the git origin's release tags for a newer version (network access). Apply is a menu click; disable with --no-update-check or MENUBAR_LOAD_RUNNER_UPDATE_CHECK=0.")
+        print("Updates: on launch, checks the git origin's release tags for a newer version (network access). Apply is a menu click; disable with --no-update-check or CO_AWARENESS_UPDATE_CHECK=0.")
     }
 }
 
@@ -1689,13 +1689,13 @@ private struct PersistedState: Codable {
 // failure IS fatal.
 private enum StateStore {
     static let currentVersion = 1
-    private static let directoryName = "menubar-load-runner"
+    private static let directoryName = "co-awareness"
     private static let fileName = "state.json"
 
-    // Test scaffolding, like MENUBAR_LOAD_RUNNER_EXIT_AFTER: point the state file somewhere under
+    // Test scaffolding, like CO_AWARENESS_EXIT_AFTER: point the state file somewhere under
     // tmp/ so a smoke test never touches the real Application Support directory.
     static var fileURL: URL? {
-        if let override = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_STATE_FILE"],
+        if let override = ProcessInfo.processInfo.environment["CO_AWARENESS_STATE_FILE"],
            !override.isEmpty {
             return URL(fileURLWithPath: NSString(string: override).expandingTildeInPath)
         }
@@ -1704,6 +1704,22 @@ private enum StateStore {
         ) else { return nil }
         return base.appendingPathComponent(directoryName, isDirectory: true)
                    .appendingPathComponent(fileName)
+    }
+
+    // One-time silent migration from the directory this app used before it was renamed (R26). The
+    // legacy name appears here and nowhere else. Moves only when the CURRENT directory is absent, so
+    // a machine that already migrated — or that never had the old name — is never touched twice;
+    // failure is silent, like every other StateStore path. Deliberately not part of `fileURL`:
+    // `--status` must stay read-only (§ 8.3), so only the GUI boot path calls this.
+    static func migrateLegacyDirectoryIfNeeded() {
+        guard let base = try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+        ) else { return }
+        let legacy = base.appendingPathComponent("menubar-load-runner", isDirectory: true)
+        let current = base.appendingPathComponent(directoryName, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: legacy.path),
+              !FileManager.default.fileExists(atPath: current.path) else { return }
+        try? FileManager.default.moveItem(at: legacy, to: current)
     }
 
     static func load() -> PersistedState? {
@@ -1734,7 +1750,7 @@ private enum StateStore {
 // an absent key rather than a null for something there is no answer to.
 private enum StatusReport {
     static var jsonLine: String {
-        // The needle is our OWN executable name, not a hardcoded "MenuBarLoadRunner": the question is
+        // The needle is our OWN executable name, not a hardcoded literal: the question is
         // whether a second copy of THIS binary is up, which is also what lets a test build answer for
         // the instances a test started rather than for the one installed on the machine. newestMatch
         // already scopes to this uid (like the launcher's singleton guard) and skips our own pid.
@@ -2654,12 +2670,12 @@ enum KernelThermalPressure: String {
         }
     }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_THERMAL=<nominal|fair|serious|critical> pins the
+    // Debug/test hook: CO_AWARENESS_FORCE_THERMAL=<nominal|fair|serious|critical> pins the
     // level, so the throttled row is testable without cooking a real machine — the reason it would
-    // otherwise ship unverified. Mirrors MENUBAR_LOAD_RUNNER_FORCE_BATTERY. Unset or unparseable =
+    // otherwise ship unverified. Mirrors CO_AWARENESS_FORCE_BATTERY. Unset or unparseable =
     // no override, real read.
     private static let forced: KernelThermalPressure? = {
-        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_THERMAL"],
+        guard let raw = ProcessInfo.processInfo.environment["CO_AWARENESS_FORCE_THERMAL"],
               !raw.isEmpty else { return nil }
         return KernelThermalPressure(rawValue: raw.lowercased().trimmingCharacters(in: .whitespaces))
     }()
@@ -2868,18 +2884,18 @@ private final class BatteryLoadMonitor {
 
     private struct Reading { let charge: Double; let currentMilliamps: Double; let onBattery: Bool }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_BATTERY=<pct>[:battery|:ac] pins the power-source read
+    // Debug/test hook: CO_AWARENESS_FORCE_BATTERY=<pct>[:battery|:ac] pins the power-source read
     // so the low-battery and critical-floor paths are testable without draining a real battery — the
     // reason they went unverified long enough for arming below 20% to stay a silent no-op. Power state
     // defaults to `battery` (the interesting case); `:ac` exercises "threshold irrelevant". Unset or
-    // unparseable = no override, real IOKit read. Mirrors MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE.
+    // unparseable = no override, real IOKit read. Mirrors CO_AWARENESS_FORCE_UNAVAILABLE.
     //
     // It lives HERE, on the reader, rather than on the one caller that first needed it: two places in
     // this app read IOPS — Keep Awake's suspension policy and this monitor's charge readout — and a
     // hook that only one of them honored would have them disagree about the same battery under the
     // same run. Current (mA) is left real: the hook simulates a charge and a power state, nothing else.
     static let forcedState: (onBattery: Bool, percent: Double)? = {
-        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_BATTERY"],
+        guard let raw = ProcessInfo.processInfo.environment["CO_AWARENESS_FORCE_BATTERY"],
               !raw.isEmpty else { return nil }
         let parts = raw.lowercased().split(separator: ":", omittingEmptySubsequences: false)
         guard let percent = Double(parts[0].trimmingCharacters(in: .whitespaces)),
@@ -2929,7 +2945,7 @@ struct BatteryDiagnostics: Equatable, Sendable {
 
 enum BatteryDiagnosticsReader {
     static func readDiagnostics() -> BatteryDiagnostics? {
-        if let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE"],
+        if let raw = ProcessInfo.processInfo.environment["CO_AWARENESS_FORCE_UNAVAILABLE"],
            raw.lowercased().split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }).contains("battery") {
             return nil
         }
@@ -3562,12 +3578,12 @@ private final class TelemetryCore {
         return snap
     }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE=gpu,network,disk marks those sources
+    // Debug/test hook: CO_AWARENESS_FORCE_UNAVAILABLE=gpu,network,disk marks those sources
     // unavailable regardless of hardware, so QA can verify the disabled menu item, the launch-time
     // fallback-to-cpu, and the absent snapshot key. Empty/unset = no override. Mirrors the EXIT_AFTER
     // hook convention.
     private let forcedUnavailableSources: Set<String> = {
-        guard let raw = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE"] else { return [] }
+        guard let raw = ProcessInfo.processInfo.environment["CO_AWARENESS_FORCE_UNAVAILABLE"] else { return [] }
         return Set(raw.lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
     }()
 }
@@ -3998,7 +4014,7 @@ private final class SleepPreventer {
 }
 
 @MainActor
-private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
+private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private struct SpeedProfile {
         let label: String
         let min: Double
@@ -4114,7 +4130,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // see there). applyLabelMode()/updateValueLabel() are the only writers.
     //
     // **A length-0 item is not free: it still claims ~16pt of menu bar.** Measured with
-    // MENUBAR_LOAD_RUNNER_LOG_SLOTS on macOS 26 — hiding the idle item moves its neighbour 16pt over,
+    // CO_AWARENESS_LOG_SLOTS on macOS 26 — hiding the idle item moves its neighbour 16pt over,
     // reproducibly (an earlier comment here claimed "zero footprint, no clickable gap"; the width half of
     // that is simply false). So the pair costs 16pt more bar than a single item would, permanently. It is
     // still the right trade: the only way to switch sides without it is to destroy and rebuild the
@@ -4203,7 +4219,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // AVAILABLE reader is sampled each tick (not just the active one) and its live readout is surfaced
     // as an inline row under the "Other Sources" disclosure header, while the active source alone still
     // drives the animation. Off by default (collapsed → active-only sampling, the self-throttle ethos);
-    // opt-in via the disclosure header or --show-all-sources / MENUBAR_LOAD_RUNNER_SHOW_ALL.
+    // opt-in via the disclosure header or --show-all-sources / CO_AWARENESS_SHOW_ALL.
     private var showAllSources: Bool
     // Disclosure header row for the collapsible other-sources section, and the inline per-source
     // rows nested under it. The rows double as the source switcher (clicking one drives the animation
@@ -4363,7 +4379,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         self.showAllSources = config.showAllSources
 
         // Resolve the resource base directory (which holds `gifs/`). Prefer the running executable's
-        // own directory: the compiled `MenuBarLoadRunner` binary sits next to `gifs/`, and the
+        // own directory: the compiled `CoAwareness` binary sits next to `gifs/`, and the
         // executable path is absolute and independent of both the current working directory and the
         // path passed to the compiler. This is the robust anchor — `#filePath` (the source path baked
         // in at compile time) is only correct when the binary is run from the right CWD *and* was
@@ -4441,6 +4457,11 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before anything reads or writes persisted state: the one-time silent move out of the
+        // pre-rename directory (R26). GUI-only by construction — the headless paths never get
+        // here, and `--status` must stay read-only (§ 8.3).
+        StateStore.migrateLegacyDirectoryIfNeeded()
+
         NSApp.setActivationPolicy(.accessory)
 
         if let startupError {
@@ -4479,7 +4500,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         self.animationView = animationView
         button.toolTip = activeGifPath
         // Base label for VoiceOver; refreshMenuMetrics() enriches it with live CPU load.
-        button.setAccessibilityLabel("MenuBar Load Runner")
+        button.setAccessibilityLabel("co-awareness")
 
         // The left-hand label slot — newest item, so it lands left of the animation.
         labelItemLeft = makeLabelItem()
@@ -4989,10 +5010,10 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             startUpdateProbe(userInitiated: false)
         }
 
-        // Debug/test hook (MENUBAR_LOAD_RUNNER_EXIT_AFTER): self-terminate so smoke tests exit 0
+        // Debug/test hook (CO_AWARENESS_EXIT_AFTER): self-terminate so smoke tests exit 0
         // on their own rather than relying on an external kill against the blocking run loop.
         if let seconds = config.exitAfterSeconds {
-            fputs("MENUBAR_LOAD_RUNNER_EXIT_AFTER=\(seconds): terminating after \(seconds)s.\n", stderr)
+            fputs("CO_AWARENESS_EXIT_AFTER=\(seconds): terminating after \(seconds)s.\n", stderr)
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
                 MainActor.assumeIsolated { NSApp.terminate(nil) }
             }
@@ -5139,7 +5160,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         }
         guard let current = SemVer(AppInfo.version), latest > current else {
             informational(title: "You're up to date",
-                          message: "MenuBar Load Runner \(AppInfo.version) is the latest release.")
+                          message: "co-awareness \(AppInfo.version) is the latest release.")
             return
         }
         promptSelfUpdate()
@@ -5231,7 +5252,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             environment: ProcessInfo.processInfo.environment,
             isLaunchAgentJob: Restarter.isLaunchAgentJob()
         )
-        let manualHint = "Restart MenuBar Load Runner to load the new version — quit from the menu and relaunch (it also starts fresh at next login)."
+        let manualHint = "Restart co-awareness to load the new version — quit from the menu and relaunch (it also starts fresh at next login)."
         guard mode != .unsupported else {
             informational(title: title, message: manualHint)
             return
@@ -5393,7 +5414,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             return
         }
         let alert = NSAlert()
-        alert.messageText = "MenuBar Load Runner startup error"
+        alert.messageText = "co-awareness startup error"
         if let icon = makeMenuAlertIcon() {
             alert.icon = icon
         }
@@ -5689,14 +5710,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 usageItem.title = cpuUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .cpu), cpuStateText(for: telemetry.loadMonitor.smoothedUsage))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — CPU %.0f%%, %@",
+                    format: "co-awareness — CPU %.0f%%, %@",
                     telemetry.loadMonitor.smoothedUsage * Tuning.percentScale,
                     cpuStateText(for: telemetry.loadMonitor.smoothedUsage)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(MenuTitle.cpuUsageQualified, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .cpu), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring CPU load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring CPU load")
             }
         case .memory:
             // Memory pressure (state line) reflects the cached dispatch-source level and is valid
@@ -5705,34 +5726,34 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             if telemetry.memoryMonitor.hasSample {
                 usageItem.title = memoryUsageLineText()
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — memory %.0f%%, pressure %@",
+                    format: "co-awareness — memory %.0f%%, pressure %@",
                     telemetry.memoryMonitor.currentUsedFraction * Tuning.percentScale,
                     memoryPressureText()
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.memory.menuTitle, MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring memory load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring memory load")
             }
         case .gpu:
             if telemetry.gpuMonitor.hasSample {
                 usageItem.title = gpuUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .gpu), cpuStateText(for: telemetry.gpuMonitor.currentUtilization))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — GPU %.0f%%, %@",
+                    format: "co-awareness — GPU %.0f%%, %@",
                     telemetry.gpuMonitor.currentUtilization * Tuning.percentScale,
                     cpuStateText(for: telemetry.gpuMonitor.currentUtilization)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.gpu.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .gpu), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring GPU load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring GPU load")
             }
         case .network:
             if telemetry.networkMonitor.hasSample {
                 usageItem.title = networkUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .network), cpuStateText(for: telemetry.networkMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — network ↓%.1f MB/s ↑%.1f MB/s, %@",
+                    format: "co-awareness — network ↓%.1f MB/s ↑%.1f MB/s, %@",
                     telemetry.networkMonitor.currentInboundBytesPerSec / Tuning.bytesPerMiB,
                     telemetry.networkMonitor.currentOutboundBytesPerSec / Tuning.bytesPerMiB,
                     cpuStateText(for: telemetry.networkMonitor.currentLoad)
@@ -5740,14 +5761,14 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.network.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .network), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring network load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring network load")
             }
         case .disk:
             if telemetry.diskMonitor.hasSample {
                 usageItem.title = diskUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .disk), cpuStateText(for: telemetry.diskMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — disk read %.1f MB/s write %.1f MB/s, %@",
+                    format: "co-awareness — disk read %.1f MB/s write %.1f MB/s, %@",
                     telemetry.diskMonitor.currentReadBytesPerSec / Tuning.bytesPerMiB,
                     telemetry.diskMonitor.currentWriteBytesPerSec / Tuning.bytesPerMiB,
                     cpuStateText(for: telemetry.diskMonitor.currentLoad)
@@ -5755,21 +5776,21 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.disk.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .disk), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring disk load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring disk load")
             }
         case .fan:
             if telemetry.fanMonitor.hasSample {
                 usageItem.title = fanUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .fan), cpuStateText(for: telemetry.fanMonitor.currentUtilization))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — fan avg %.0f%%, %@",
+                    format: "co-awareness — fan avg %.0f%%, %@",
                     telemetry.fanMonitor.currentUtilization * Tuning.percentScale,
                     cpuStateText(for: telemetry.fanMonitor.currentUtilization)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.fan.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .fan), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring fan load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring fan load")
             }
         case .battery:
             if telemetry.batteryMonitor.hasSample {
@@ -5788,56 +5809,56 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
                 }
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .battery), stateText)
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — battery %.0f%%, %@",
+                    format: "co-awareness — battery %.0f%%, %@",
                     telemetry.batteryMonitor.currentChargeFraction * Tuning.percentScale,
                     stateText
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.battery.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .battery), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring battery load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring battery load")
             }
         case .temperature:
             if telemetry.temperatureMonitor.hasSample {
                 usageItem.title = temperatureUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .temperature), cpuStateText(for: telemetry.temperatureMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — temperature %.0f degrees Celsius, %@",
+                    format: "co-awareness — temperature %.0f degrees Celsius, %@",
                     telemetry.temperatureMonitor.currentCelsius,
                     cpuStateText(for: telemetry.temperatureMonitor.currentLoad)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.temperature.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .temperature), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring temperature")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring temperature")
             }
         case .ane:
             if telemetry.aneMonitor.hasSample {
                 usageItem.title = aneUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .ane), cpuStateText(for: telemetry.aneMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — neural engine %.2f watts, %@",
+                    format: "co-awareness — neural engine %.2f watts, %@",
                     telemetry.aneMonitor.currentWatts,
                     cpuStateText(for: telemetry.aneMonitor.currentLoad)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.ane.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .ane), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring neural engine load")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring neural engine load")
             }
         case .bandwidth:
             if telemetry.bandwidthMonitor.hasSample {
                 usageItem.title = bandwidthUsageLineText()
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .bandwidth), cpuStateText(for: telemetry.bandwidthMonitor.currentLoad))
                 statusItem.button?.setAccessibilityLabel(String(
-                    format: "MenuBar Load Runner — memory bandwidth %.1f gigabytes per second, %@",
+                    format: "co-awareness — memory bandwidth %.1f gigabytes per second, %@",
                     telemetry.bandwidthMonitor.currentGigabytesPerSec,
                     cpuStateText(for: telemetry.bandwidthMonitor.currentLoad)
                 ))
             } else {
                 usageItem.title = MenuTitle.line(LoadSource.bandwidth.menuTitle, MenuTitle.warmingUp)
                 stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: .bandwidth), MenuTitle.warmingUp)
-                statusItem.button?.setAccessibilityLabel("MenuBar Load Runner — measuring memory bandwidth")
+                statusItem.button?.setAccessibilityLabel("co-awareness — measuring memory bandwidth")
             }
         }
 
@@ -5870,8 +5891,8 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         // Refresh the adjacent live-value slot on the same cadence (2s tick + menuWillOpen). Cheap
         // when the label is off or custom — updateValueLabel() only rebuilds text in .value mode.
         updateValueLabel()
-        logSlotGeometry()   // no-op unless MENUBAR_LOAD_RUNNER_LOG_SLOTS=1
-        logThermalIfRequested()   // no-op unless MENUBAR_LOAD_RUNNER_LOG_THERMAL=1
+        logSlotGeometry()   // no-op unless CO_AWARENESS_LOG_SLOTS=1
+        logThermalIfRequested()   // no-op unless CO_AWARENESS_LOG_THERMAL=1
     }
 
     private func memoryPressureText() -> String {
@@ -6295,7 +6316,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         if let childPID = sleepPreventer.childPID { ignored.insert(childPID) }
         assertionMonitor.sample(now: now, ignoringPIDs: ignored)
         guard logAssertions else { return }
-        // Same contract as MENUBAR_LOAD_RUNNER_LOG_SLOTS: prints the FILTERED, post-hysteresis list, so a
+        // Same contract as CO_AWARENESS_LOG_SLOTS: prints the FILTERED, post-hysteresis list, so a
         // shell with no TCC grant can assert the filter and the retention window — which neither
         // menu-dump.applescript (Accessibility) nor screencapture (Screen Recording) can reach.
         let rows = assertionMonitor.holders
@@ -6308,15 +6329,15 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
               + (rows.isEmpty ? "" : " " + rows) + "\n", stderr)
     }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS=1. Mirrors the LOG_SLOTS hook convention.
-    private let logAssertions = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS"] == "1"
+    // Debug/test hook: CO_AWARENESS_LOG_ASSERTIONS=1. Mirrors the LOG_SLOTS hook convention.
+    private let logAssertions = ProcessInfo.processInfo.environment["CO_AWARENESS_LOG_ASSERTIONS"] == "1"
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_AWAKE=1, sibling to LOG_ASSERTIONS and LOG_SLOTS and there
+    // Debug/test hook: CO_AWARENESS_LOG_AWAKE=1, sibling to LOG_ASSERTIONS and LOG_SLOTS and there
     // for the same reason — a shell with no TCC grant can't read a menu, so the DERIVED state has to be
     // assertable from stderr or it goes verified by eyeball only. Prints the row text verbatim as well as
     // the flags, so qa.sh §3e can assert the rendering (attribution, "may still sleep", the countdown
     // moving) and not merely the booleans behind it.
-    private let logAwake = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_AWAKE"] == "1"
+    private let logAwake = ProcessInfo.processInfo.environment["CO_AWARENESS_LOG_AWAKE"] == "1"
 
     private func logAwakeHoldIfRequested() {
         guard logAwake else { return }
@@ -6336,11 +6357,11 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
               + " tint=\(tint) row=\"\(hold.rowText)\"\n", stderr)
     }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_ANIMATION=1, sibling to LOG_SLOTS/LOG_ASSERTIONS/
+    // Debug/test hook: CO_AWARENESS_LOG_ANIMATION=1, sibling to LOG_SLOTS/LOG_ASSERTIONS/
     // LOG_AWAKE and there for the same no-TCC-grant reason: whether the icon is animating is otherwise
     // only visible to a screenshot (Screen Recording) or an eyeball. Prints the DERIVED gate plus the
     // raw frame cursor, so a test asserts both the decision and its effect (frame stops moving).
-    private let logAnimation = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_ANIMATION"] == "1"
+    private let logAnimation = ProcessInfo.processInfo.environment["CO_AWARENESS_LOG_ANIMATION"] == "1"
 
     private func logAnimationIfRequested() {
         guard logAnimation else { return }
@@ -6356,7 +6377,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
               + String(format: "speed=%.2f", speedMultiplier) + " labelHandoff=\(handoff)\n", stderr)
     }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_THERMAL=1, sibling to LOG_SLOTS/LOG_ANIMATION and there
+    // Debug/test hook: CO_AWARENESS_LOG_THERMAL=1, sibling to LOG_SLOTS/LOG_ANIMATION and there
     // for the same no-TCC-grant reason: a shell cannot read an NSMenu, so the annotated usage row is
     // otherwise unassertable. Prints the kernel level, the derived gate, and the row the gate produced,
     // so a test asserts the decision and its rendered effect together.
@@ -6364,7 +6385,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // Read-only: it prints the title refreshMenuMetrics has just assigned and never assigns one itself,
     // so enabling it cannot make the menu render a branch it would not have rendered. Emitted on the
     // same 2s cadence as LOG_SLOTS, off the same call.
-    private let logThermal = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_THERMAL"] == "1"
+    private let logThermal = ProcessInfo.processInfo.environment["CO_AWARENESS_LOG_THERMAL"] == "1"
 
     private func logThermalIfRequested() {
         guard logThermal else { return }
@@ -6377,7 +6398,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
               + "source=\(activeLoadSource.key) row=\"\(usageItem.title)\" app=\"\(appRow)\"\n", stderr)
     }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1, sibling to LOG_SLOTS/LOG_ASSERTIONS/
+    // Debug/test hook: CO_AWARENESS_LOG_BATTERY_DIAGNOSTICS=1, sibling to LOG_SLOTS/LOG_ASSERTIONS/
     // LOG_AWAKE and there for the same reason — a shell with no TCC grant can't read an NSMenu, so
     // static battery diagnostics derived on menu open must be assertable from stderr.
     //
@@ -6385,7 +6406,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // make the menu render the diagnostics branch (§ 4.6) at a moment the menu was never open — an
     // observability hook may not move a business decision. Off the menu-open path it reads its own
     // throwaway copy, which is what lets a headless `EXIT_AFTER` run assert the reader at all.
-    private let logBatteryDiagnostics = ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS"] == "1"
+    private let logBatteryDiagnostics = ProcessInfo.processInfo.environment["CO_AWARENESS_LOG_BATTERY_DIAGNOSTICS"] == "1"
 
     private func logBatteryDiagnosticsIfRequested() {
         guard logBatteryDiagnostics else { return }
@@ -6403,7 +6424,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
         }
     }
 
-    // Debug/test hook: MENUBAR_LOAD_RUNNER_LOG_SLOTS=1 prints every status item's frame in SCREEN
+    // Debug/test hook: CO_AWARENESS_LOG_SLOTS=1 prints every status item's frame in SCREEN
     // coordinates on each 2s tick. Mirrors the EXIT_AFTER hook convention, and exists because the two
     // properties it measures are otherwise unverifiable outside a human's eyes:
     //
@@ -6416,7 +6437,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     // the app inspecting its own window, so unlike a screenshot (Screen Recording) or a menu dump
     // (Accessibility) it needs no TCC grant at all — which is what makes it scriptable in qa.sh §3.
     private func logSlotGeometry() {
-        guard ProcessInfo.processInfo.environment["MENUBAR_LOAD_RUNNER_LOG_SLOTS"] == "1" else { return }
+        guard ProcessInfo.processInfo.environment["CO_AWARENESS_LOG_SLOTS"] == "1" else { return }
         func frame(_ item: NSStatusItem?) -> String {
             guard let f = item?.button?.window?.frame else { return "x=n/a w=n/a" }
             return String(format: "x=%.1f w=%.1f", f.minX, f.width)
@@ -7121,7 +7142,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     }
 
     // Launch-time label mode, the same precedence shape as applyLaunchKeepAwakeState: an explicit
-    // --label / MENUBAR_LOAD_RUNNER_LABEL wins — including an explicit `off`, which suppresses the saved
+    // --label / CO_AWARENESS_LABEL wins — including an explicit `off`, which suppresses the saved
     // mode — otherwise the mode saved by the previous run is restored. Unlike a keep-awake window there
     // is nothing self-limiting to weigh here: a label holds no assertion and costs nothing but a slot,
     // so every mode is restorable, not just bounded ones.
@@ -7141,7 +7162,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
     }
 
     // Launch-time battery release threshold, in precedence order: an explicit --battery-threshold /
-    // MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD wins, otherwise the value saved by the previous run is
+    // CO_AWARENESS_BATTERY_THRESHOLD wins, otherwise the value saved by the previous run is
     // restored, otherwise the property keeps Tuning.batteryLowThresholdDefault. Same shape as the
     // label, with one asymmetry worth naming: `off` here is a *value* (0), not a mode, so a flag can
     // only override a saved setting — it can never mean "absent" the way an empty env value does.
@@ -7569,7 +7590,7 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
             return
         }
         let alert = NSAlert()
-        alert.messageText = "MenuBar Load Runner"
+        alert.messageText = "co-awareness"
         if let icon = makeMenuAlertIcon() {
             alert.icon = icon
         }
@@ -7733,9 +7754,9 @@ private final class MenuBarLoadRunnerApp: NSObject, NSApplicationDelegate, NSMen
 
         let callback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { ctx in
             guard let ctx else { return }
-            let app = Unmanaged<MenuBarLoadRunnerApp>.fromOpaque(ctx).takeUnretainedValue()
+            let app = Unmanaged<CoAwarenessApp>.fromOpaque(ctx).takeUnretainedValue()
             MainActor.assumeIsolated {
-                app.batteryState = MenuBarLoadRunnerApp.evaluateBatteryState()
+                app.batteryState = CoAwarenessApp.evaluateBatteryState()
                 app.conditionsDidChange()
             }
         }
@@ -8266,7 +8287,7 @@ case .status:
     exit(0)
 case .config(let config):
     let app = NSApplication.shared
-    let delegate = MenuBarLoadRunnerApp(config: config)
+    let delegate = CoAwarenessApp(config: config)
     app.delegate = delegate
     app.run()
 case .help:

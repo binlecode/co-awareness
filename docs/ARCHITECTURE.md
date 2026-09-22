@@ -1,7 +1,7 @@
 # ARCHITECTURE — As-Built System Architecture & Technical Specifications
 
-> **Canonical as-built architecture document for MenuBar Load Runner (v1.25.0).**
-> **Source ground truth:** `MenuBarLoadRunner.swift`, `menubar-load-runner` (launcher), `gifs/presets.json`.
+> **Canonical as-built architecture document for co-awareness (v1.25.0).**
+> **Source ground truth:** `CoAwareness.swift`, `co-awareness` (launcher), `gifs/presets.json`.
 > **Scope:** Complete architectural specifications, subsystem topologies, concurrency models, telemetry algorithms, and system invariants.
 
 ---
@@ -44,13 +44,13 @@ All repository documentation lives in `docs/`. The repository root holds only `R
 
 ## 1. System Topology & Architectural Philosophy
 
-MenuBar Load Runner is a single-file, unbundled native macOS menu bar application written in Swift and AppKit. It visualizes real-time hardware telemetry by driving the playback rate of an animated status-bar GIF and providing an integrated live diagnostic dashboard with built-in sleep inhibition.
+co-awareness is a single-file, unbundled native macOS menu bar application written in Swift and AppKit. It visualizes real-time hardware telemetry by driving the playback rate of an animated status-bar GIF and providing an integrated live diagnostic dashboard with built-in sleep inhibition.
 
 There are **three entry paths and one shared telemetry engine**. The GUI is the interactive status bar visualizer; `--once` is a single-shot JSON snapshot of physical hardware readings for non-visual consumers (§ 4.7); and `--status` is a lightweight JSON query reporting whether an instance is resident and its active sleep hold state (§ 8.3). The paths are strictly partitioned: `--status` inspects process and state files without initializing telemetry readers; `--once` and the GUI share `TelemetryCore` and nothing else.
 
 ```
                       +---------------------------------+
-                      |       menubar-load-runner       |
+                      |          co-awareness           |
                       |         (Zsh launcher)          |
                       +---------------------------------+
                                        |
@@ -59,7 +59,7 @@ There are **three entry paths and one shared telemetry engine**. The GUI is the 
         | (pre-guard, pre-compile)     | (pre-guard, pre-compile)     | singleton -> compile -> detach
         v                              v                              v
 +-------------------------------+ +-------------------------------+ +-------------------------------+
-| Status Query Path             | | Snapshot Path                 | | MenuBarLoadRunnerApp (GUI)    |
+| Status Query Path             | | Snapshot Path                 | | CoAwarenessApp (GUI)          |
 |                               | |                               | |                               |
 | ProcessProbe.newestMatch      | | sample, wait, sample again    | | status items, menu, labels    |
 | StateStore.load() (read-only) | | one JSON line, exit 0         | | Keep Awake, state.json        |
@@ -95,7 +95,7 @@ There are **three entry paths and one shared telemetry engine**. The GUI is the 
 ### Core Design Tenets
 
 1. **Read-Only Telemetry & Self-Throttling:** The application observes the system without modifying system settings or CPU governors. When system load or thermal conditions escalate, the application throttles its own rendering footprint to avoid exacerbating contention.
-2. **Zero-Xcode Single-File Architecture:** The entire runtime resides in `MenuBarLoadRunner.swift` (~8.3k lines) compiled via `swiftc` with complete concurrency checking (`-strict-concurrency=complete`).
+2. **Zero-Xcode Single-File Architecture:** The entire runtime resides in `CoAwareness.swift` (~8.3k lines) compiled via `swiftc` with complete concurrency checking (`-strict-concurrency=complete`).
 3. **No Mocks / Non-Privileged Execution:** Every metric is collected via unprivileged public Mach, IOKit, SMC, and IOReport APIs without root privileges, background daemons, or kernel extensions.
 4. **Jitter-Free Menu Bar Real Estate:** Status item widths are strictly reserved using figure-space padding (U+2007) and monospaced digits, ensuring that value oscillations never cause lateral layout jitter.
 
@@ -103,12 +103,12 @@ There are **three entry paths and one shared telemetry engine**. The GUI is the 
 
 ## 2. Launcher & Compilation Lifecycle
 
-Execution is governed by the `menubar-load-runner` zsh script, which manages compilation, process singletons, and detached execution.
+Execution is governed by the `co-awareness` zsh script, which manages compilation, process singletons, and detached execution.
 
 ```
                              +----------------------------+
                              |     Execution Request      |
-                             |   (menubar-load-runner)    |
+                             |       (co-awareness)       |
                              +-------------+--------------+
                                            |
                     +----------------------+----------------------+
@@ -174,11 +174,11 @@ Execution is governed by the `menubar-load-runner` zsh script, which manages com
 ### Compilation Mechanics
 
 - **Fast-Path Headless Interception:** Both `--once` and `--status` are handled in the first statement of argument parsing, prior to toolchain checks, prior to the singleton check, and prior to any compilation pass. If the Mach-O binary exists, the launcher directly replaces itself via `exec`. If missing, it exits 2 with guidance to run `--precompile`. This ensures headless queries never incur compilation latency or race against a running instance.
-- **Atomic Rename:** When compiling, the launcher outputs to `MenuBarLoadRunner.new` before invoking `mv` (`rename(2)`) over `MenuBarLoadRunner`. This guarantees that an existing live process paging from the Mach-O binary does not crash during a rebuild.
+- **Atomic Rename:** When compiling, the launcher outputs to `CoAwareness.new` before invoking `mv` (`rename(2)`) over `CoAwareness`. This guarantees that an existing live process paging from the Mach-O binary does not crash during a rebuild.
 - **Precompilation Hook (`--precompile`):** Exposes the compilation branch without launching the process. Used by the in-app self-updater to build newly pulled source code while the current instance remains live.
 - **Singleton Guard Before Compile:** On the interactive GUI launch path, `pgrep -U "$(id -u)"` executes strictly before `compile_if_stale`, ensuring that duplicate launch requests never attempt concurrent compilation against the same target binary.
 - **Strict Concurrency Safety:** Compiled with Swift 5 `-strict-concurrency=complete`. All UI and state-managing classes are annotated `@MainActor`.
-- **Interpreted Fallback & Singleton Scope:** If `swiftc` compilation fails or toolchain elements are unavailable, the launcher falls back to interpreted execution via `swift MenuBarLoadRunner.swift`. This degraded emergency fallback is intentionally not singleton-guarded: the launcher's singleton check (`pgrep -U "$(id -u)" -f "/MenuBarLoadRunner( |$)"`) explicitly matches the compiled binary path to avoid false positives against editors holding `MenuBarLoadRunner.swift` open or background `swiftc` builds, while the interpreted fallback process executes directly under `/usr/bin/swift`.
+- **Interpreted Fallback & Singleton Scope:** If `swiftc` compilation fails or toolchain elements are unavailable, the launcher falls back to interpreted execution via `swift CoAwareness.swift`. This degraded emergency fallback is intentionally not singleton-guarded: the launcher's singleton check (`pgrep -U "$(id -u)" -f "/CoAwareness( |$)"`) explicitly matches the compiled binary path to avoid false positives against editors holding `CoAwareness.swift` open or background `swiftc` builds, while the interpreted fallback process executes directly under `/usr/bin/swift`.
 
 ---
 
@@ -208,7 +208,7 @@ $$\text{slotLength} = \max\left(\text{menuBarHeight} \times \text{clamp}(\text{a
 On macOS 14+, the animation is driven by a `CADisplayLink` bound to the status item's button view (`NSView.displayLink(target:selector:)`). On older macOS releases, a 60 Hz fallback `Timer` (`Tuning.gameLoopFallbackInterval`) is used.
 
 ```swift
-// Abridged from MenuBarLoadRunner.advanceFrames(now:) — elided: the empty-frames guard
+// Abridged from CoAwareness.advanceFrames(now:) — elided: the empty-frames guard
 // and the first-tick latch (lastTickTime == 0 returns without advancing).
 let delta = now - lastTickTime
 lastTickTime = now
@@ -469,9 +469,9 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
    - **Normalizations**: Automatically maps Apple Silicon normalized `MaxCapacity` percentages (0..100) and legacy Intel raw mAh capacities against `DesignCapacity`. Computes service recommendation conditions when health falls below 80% or `PermanentFailureStatus != 0`.
    - **Presentation**: Enriches the battery status row (`Battery: 80% · AC · 100% health · 113 cycles`), `stateItem` (`Battery State: Normal · 8478/8579 mAh`, replacing the drain band while the menu is open), and provides multi-line AppKit tooltips with granular mAh capacities.
    - **Graceful Desktop Omission**: On AC-only desktop Macs lacking an `AppleSmartBattery` service, the reader cleanly returns `nil`, and the menu seamlessly preserves standard desktop AC status with zero visual defects or overhead.
-   - **Observability without behavior change**: `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS=1` prints one line at launch and one per menu open. It reads a throwaway copy and never assigns the cached field, so the hook cannot make the menu render the diagnostics branch at a moment the menu was never open — the reason it is not wired into `sampleSystemLoad()` where the other `LOG_*` hooks sit.
+   - **Observability without behavior change**: `CO_AWARENESS_LOG_BATTERY_DIAGNOSTICS=1` prints one line at launch and one per menu open. It reads a throwaway copy and never assigns the cached field, so the hook cannot make the menu render the diagnostics branch at a moment the menu was never open — the reason it is not wired into `sampleSystemLoad()` where the other `LOG_*` hooks sit.
 
-`MENUBAR_LOAD_RUNNER_FORCE_BATTERY=<pct>[:battery|:ac]` pins the charge and power state on `BatteryLoadMonitor` itself, not on a caller. Two places in the app read `IOPSCopyPowerSourcesInfo` — Keep Awake's suspension policy (§ 7.2) and this reader — and a hook honored by only one of them would let them disagree about the same battery in the same run. Current (mA) is left real: the hook simulates a charge and a power state, nothing else. On a desktop it also makes the reader *answer*, which is the only way a machine with no battery can exercise the path at all.
+`CO_AWARENESS_FORCE_BATTERY=<pct>[:battery|:ac]` pins the charge and power state on `BatteryLoadMonitor` itself, not on a caller. Two places in the app read `IOPSCopyPowerSourcesInfo` — Keep Awake's suspension policy (§ 7.2) and this reader — and a hook honored by only one of them would let them disagree about the same battery in the same run. Current (mA) is left real: the hook simulates a charge and a power state, nothing else. On a desktop it also makes the reader *answer*, which is the only way a machine with no battery can exercise the path at all.
 
 ### 4.7 Telemetry Core & the `--once` Snapshot (R24)
 
@@ -481,9 +481,9 @@ The unprivileged readers used to run inside a status item, so the only consumer 
 
 | Module | Owns | Not its business — canonical owner |
 |---|---|---|
-| `TelemetryCore` | Every reader, its availability probe and its scaler, plus `sampleSource(_:elapsed:)`, `isSourceAvailable(_:)`, and one `snapshot()` returning physical units | Speed mapping, menu text, labels, Keep Awake, `state.json` — all `MenuBarLoadRunnerApp` |
-| `MenuBarLoadRunnerApp` | Everything on screen and every intent that persists; asks the core for readings | How a reading is taken — `TelemetryCore` |
-| `menubar-load-runner` (launcher) | Singleton guard, `compile_if_stale`, detach — for **GUI launches only** | Telemetry; and on the `--once` path, compiling anything |
+| `TelemetryCore` | Every reader, its availability probe and its scaler, plus `sampleSource(_:elapsed:)`, `isSourceAvailable(_:)`, and one `snapshot()` returning physical units | Speed mapping, menu text, labels, Keep Awake, `state.json` — all `CoAwarenessApp` |
+| `CoAwarenessApp` | Everything on screen and every intent that persists; asks the core for readings | How a reading is taken — `TelemetryCore` |
+| `co-awareness` (launcher) | Singleton guard, `compile_if_stale`, detach — for **GUI launches only** | Telemetry; and on the `--once` path, compiling anything |
 
 The core never imports a display concept. It returns MB/s, °C, W, RPM, %, A — never the 0..1 driver value. Normalization to 0..1 is a speed-mapping question, which is why the scalers (§ 4.4) stay *inside* the readers, where they are how a rate reader produces its own number, and why nothing in a snapshot reads one. The core also never touches `state.json`: a snapshot describes the machine, not this app's intent, and a second writer would break the single-writer model (§ 8.2).
 
@@ -661,7 +661,7 @@ The engine reduces its own footprint under thermal or battery strain.
 
 It also closes a gap: `throttleStatusItem` is set only in the `isAutoSpeed` branch, so on a fixed `--speed-multiplier` the menu previously carried no thermal indication at all — and its wording could not simply be un-gated, since in that mode the app is not slowing anything.
 
-**Wiring invariant.** `loadReductionReasons` and `isUnderPowerPressure` read `ProcessInfo.thermalState` directly and must never consult `KernelThermalPressure`. The type is display-only, which is what keeps its `MENUBAR_LOAD_RUNNER_FORCE_THERMAL` hook an input simulator rather than a hook that moves a business decision (§ 10). `MENUBAR_LOAD_RUNNER_LOG_THERMAL` prints the level, the derived gate, the row it produced and the self-throttle row's state together, so a headless test asserts the separation instead of trusting it.
+**Wiring invariant.** `loadReductionReasons` and `isUnderPowerPressure` read `ProcessInfo.thermalState` directly and must never consult `KernelThermalPressure`. The type is display-only, which is what keeps its `CO_AWARENESS_FORCE_THERMAL` hook an input simulator rather than a hook that moves a business decision (§ 10). `CO_AWARENESS_LOG_THERMAL` prints the level, the derived gate, the row it produced and the self-throttle row's state together, so a headless test asserts the separation instead of trusting it.
 
 ### 5.3 Reduce Motion & Manual Freeze
 
@@ -693,7 +693,7 @@ To prevent lateral jitter and enable flexible placement, the application impleme
 
 ### 6.1 Fixed-Width Reservation & Jitter Elimination
 
-Auto-sizing status items causes neighboring items to jitter on every telemetry update. MenuBar Load Runner guarantees $0\text{ pt}$ jitter:
+Auto-sizing status items causes neighboring items to jitter on every telemetry update. co-awareness guarantees $0\text{ pt}$ jitter:
 1. **Monospaced Digits:** Uses `NSFont.monospacedDigitSystemFont(ofSize:weight:)`.
 2. **Figure Space Padding (U+2007):** Padded with U+2007 (whose glyph width exactly matches numeric digits):
    ```swift
@@ -945,7 +945,7 @@ route correctly is an eyes-and-hands check in the manual walk (§ 13), not a scr
 
 ### 8.2 State Persistence (`StateStore`)
 
-State is persisted to `~/Library/Application Support/menubar-load-runner/state.json`:
+State is persisted to `~/Library/Application Support/co-awareness/state.json`:
 
 ```json
 // `deadline` is a Swift `Date` under JSONEncoder's default strategy: seconds since the
@@ -969,6 +969,7 @@ State is persisted to `~/Library/Application Support/menubar-load-runner/state.j
 - **Fail-Silent:** Corrupt, missing, or unwritable files fall back to system defaults without surfacing dialogs.
 - **Atomic Persistence:** `data.write(to:options: .atomic)` — Foundation writes a temp file and renames it into place.
 - **Single-Writer Rule:** `persistState()` is the sole disk writer, assembling memory state atomically to avoid race conditions.
+- **Rename Migration:** On GUI launch only — never on the `--status` path, which must stay read-only (§ 8.3) — `StateStore` moves a pre-rename `Application Support/menubar-load-runner/` directory into `co-awareness/` when, and only when, the new directory is absent. Never merged, never repeated; failure stays fail-silent like everything else here.
 
 ### 8.3 The `--status` Query (R27)
 
@@ -993,7 +994,7 @@ State is persisted to `~/Library/Application Support/menubar-load-runner/state.j
 
 ```
                      +---------------------------------------+
-                     |        $ menubar-load-runner --status |
+                     |        $ co-awareness --status        |
                      +-------------------+-------------------+
                                          |
                                          v
@@ -1029,7 +1030,7 @@ State is persisted to `~/Library/Application Support/menubar-load-runner/state.j
                                             +----------------------------+
 ```
 
-**Sources.** `StatusReport` reads two things and writes neither: the process table, through `ProcessProbe.newestMatch`, and the state file, through `StateStore.load()`. The probe's needle is the running binary's **own executable name** rather than a literal `MenuBarLoadRunner`. The question is whether a second copy of *this* binary is up, which is also what makes a test build answer for the instances a test started instead of for the one installed on the machine. `newestMatch` already scopes to the calling uid — the same boundary as the launcher's singleton guard (§ 2) — and skips the caller's own pid.
+**Sources.** `StatusReport` reads two things and writes neither: the process table, through `ProcessProbe.newestMatch`, and the state file, through `StateStore.load()`. The probe's needle is the running binary's **own executable name** rather than a hardcoded literal. The question is whether a second copy of *this* binary is up, which is also what makes a test build answer for the instances a test started instead of for the one installed on the machine. `newestMatch` already scopes to the calling uid — the same boundary as the launcher's singleton guard (§ 2) — and skips the caller's own pid.
 
 **Interface.**
 
@@ -1087,7 +1088,7 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 ### 9.2 Git-Native In-App Update Engine
 
 - **Update Probe (`UpdateChecker`):** Executes `git ls-remote --tags --refs origin 'v*'` against the origin remote, comparing the highest strict three-component SemVer against `AppInfo.version`.
-- **Precompile Before Restart (`Builder`):** On user confirmation, runs `git pull --ff-only` followed by `menubar-load-runner --precompile`.
+- **Precompile Before Restart (`Builder`):** On user confirmation, runs `git pull --ff-only` followed by `co-awareness --precompile`.
 - **Supervisor-Preserving Relaunch (`Restarter`):** Dispatches a detached `/bin/sh` script waiting for the old process PID to terminate, then relaunches via either `launchctl kickstart` (for LaunchAgent jobs) or the original launcher command line.
 
 ---
@@ -1142,7 +1143,7 @@ Comprehensive reference of values defined in `Tuning`:
 
 ### 11.2 Command-Line Interface (CLI) Parameters
 
-Parameters accepted by `menubar-load-runner` and `MenuBarLoadRunner`:
+Parameters accepted by `co-awareness` and `CoAwareness`:
 
 | Parameter | Default | Domain / Format | Functional Role | Location |
 |---|---|---|---|---|
@@ -1169,26 +1170,26 @@ Parameters accepted by `menubar-load-runner` and `MenuBarLoadRunner`:
 
 | Variable Name | Type / Values | Default | Subsystem & Behavioral Role |
 |---|---|---|---|
-| `MENUBAR_LOAD_RUNNER_PATH` | Path string | unset | Overrides default GIF asset path |
-| `MENUBAR_LOAD_RUNNER_LOAD_SOURCE` | Source enum | `cpu` | Sets active telemetry monitor driving animation |
-| `MENUBAR_LOAD_RUNNER_LABEL` | Mode / string | `off` | Sets default menu bar label mode |
-| `MENUBAR_LOAD_RUNNER_KEEP_AWAKE` | Duration string | `off` | Sets startup Keep Awake hold duration |
-| `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID` | Integer PID | unset | Sets process-bound Keep Awake hold |
-| `MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD`| Percentage string | `20` | Sets battery release threshold |
-| `MENUBAR_LOAD_RUNNER_UPDATE_CHECK` | `0` or `1` | `1` | Toggles launch-time update check |
-| `MENUBAR_LOAD_RUNNER_LOG_FILE` | Path string | `/tmp/menubar-load-runner.log` | Detached execution output log path |
-| `MENUBAR_LOAD_RUNNER_BIN_NAME` | String | `MenuBarLoadRunner` | Binary name override for process matching |
-| `MENUBAR_LOAD_RUNNER_EXIT_AFTER` | Seconds (float) | unset | Test hook: cleanly terminates app (exit 0) after duration |
-| `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE` | Comma-separated sources | unset | Test hook: forces named telemetry sources unavailable |
-| `MENUBAR_LOAD_RUNNER_FORCE_BATTERY` | `pct[:battery\|:ac]` | unset | Test hook: simulates battery charge level and power source (§ 4.6) |
-| `MENUBAR_LOAD_RUNNER_FORCE_THERMAL` | `nominal\|fair\|serious\|critical` | unset | Test hook: simulates kernel thermal pressure level (display-only, § 5.2) |
-| `MENUBAR_LOAD_RUNNER_STATE_FILE` | Path string | `~/Library/.../state.json` | Test hook: overrides state persistence file location |
-| `MENUBAR_LOAD_RUNNER_LOG_SLOTS` | `1` | unset | Observability: logs status item screen coordinates and widths |
-| `MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS` | `1` | unset | Observability: logs external power assertion telemetry |
-| `MENUBAR_LOAD_RUNNER_LOG_AWAKE` | `1` | unset | Observability: logs sleep inhibition decider states |
-| `MENUBAR_LOAD_RUNNER_LOG_ANIMATION` | `1` | unset | Observability: logs animation loop tick deltas and freeze state |
-| `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS` | `1` | unset | Observability: logs static battery health diagnostics on menu open |
-| `MENUBAR_LOAD_RUNNER_LOG_THERMAL` | `1` | unset | Observability: logs thermal pressure level and display annotation |
+| `CO_AWARENESS_PATH` | Path string | unset | Overrides default GIF asset path |
+| `CO_AWARENESS_LOAD_SOURCE` | Source enum | `cpu` | Sets active telemetry monitor driving animation |
+| `CO_AWARENESS_LABEL` | Mode / string | `off` | Sets default menu bar label mode |
+| `CO_AWARENESS_KEEP_AWAKE` | Duration string | `off` | Sets startup Keep Awake hold duration |
+| `CO_AWARENESS_KEEP_AWAKE_PID` | Integer PID | unset | Sets process-bound Keep Awake hold |
+| `CO_AWARENESS_BATTERY_THRESHOLD`| Percentage string | `20` | Sets battery release threshold |
+| `CO_AWARENESS_UPDATE_CHECK` | `0` or `1` | `1` | Toggles launch-time update check |
+| `CO_AWARENESS_LOG_FILE` | Path string | `/tmp/co-awareness.log` | Detached execution output log path |
+| `CO_AWARENESS_BIN_NAME` | String | `CoAwareness` | Binary name override for process matching |
+| `CO_AWARENESS_EXIT_AFTER` | Seconds (float) | unset | Test hook: cleanly terminates app (exit 0) after duration |
+| `CO_AWARENESS_FORCE_UNAVAILABLE` | Comma-separated sources | unset | Test hook: forces named telemetry sources unavailable |
+| `CO_AWARENESS_FORCE_BATTERY` | `pct[:battery\|:ac]` | unset | Test hook: simulates battery charge level and power source (§ 4.6) |
+| `CO_AWARENESS_FORCE_THERMAL` | `nominal\|fair\|serious\|critical` | unset | Test hook: simulates kernel thermal pressure level (display-only, § 5.2) |
+| `CO_AWARENESS_STATE_FILE` | Path string | `~/Library/.../state.json` | Test hook: overrides state persistence file location |
+| `CO_AWARENESS_LOG_SLOTS` | `1` | unset | Observability: logs status item screen coordinates and widths |
+| `CO_AWARENESS_LOG_ASSERTIONS` | `1` | unset | Observability: logs external power assertion telemetry |
+| `CO_AWARENESS_LOG_AWAKE` | `1` | unset | Observability: logs sleep inhibition decider states |
+| `CO_AWARENESS_LOG_ANIMATION` | `1` | unset | Observability: logs animation loop tick deltas and freeze state |
+| `CO_AWARENESS_LOG_BATTERY_DIAGNOSTICS` | `1` | unset | Observability: logs static battery health diagnostics on menu open |
+| `CO_AWARENESS_LOG_THERMAL` | `1` | unset | Observability: logs thermal pressure level and display annotation |
 
 ---
 
@@ -1213,7 +1214,7 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v1.23** — a hold that isn't a guess | Keep Awake bound to a process instead of a clock (R19); the timed window counting down on the menu bar itself | A hold can take its end condition from the job rather than from a guessed duration (§ 7.4); the countdown became a glance, under the same occlusion gate the animation obeys (§ 6.3) |
 | **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu (R21); the dropdown reports battery health, cycle count and capacity (R22) | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); the first reading the app does not poll at all, gated entirely on menu open (§ 4.6) |
 | **v1.25.0** — the kernel's throttle vs our throttle | Temperature row annotates `· Thermal Throttling` on `.serious`/`.critical` pressure (R23) | Clear separation between what the kernel does to the machine (display-only) and what this app does about it (self-throttling), enforced in wiring and display (§ 5.2) |
-| **Unreleased (v1.26.0)** — headless contracts & silicon splits | `--once` JSON snapshot and `TelemetryCore` (R24); DRAM bus bandwidth via `BandwidthLoadMonitor` + CPU P/E cluster & GPU pipeline splits (R25); `--status` app query (R27) | Telemetry core decoupled from GUI display concepts (§ 4.7); physical rate observation on memory controller bus histograms (§ 4.8); headless non-invasive process and hold inspection (§ 8.3) |
+| **Unreleased (v2.0.0)** — headless contracts, silicon splits & the rename | `--once` JSON snapshot and `TelemetryCore` (R24); DRAM bus bandwidth via `BandwidthLoadMonitor` + CPU P/E cluster & GPU pipeline splits (R25); `--status` app query (R27); renamed to `co-awareness` — launcher, env prefix, state path | Telemetry core decoupled from GUI display concepts (§ 4.7); physical rate observation on memory controller bus histograms (§ 4.8); headless non-invasive process and hold inspection (§ 8.3); one name, one env prefix, one state path — no alias, no dual-prefix fallback (§ 8.2) |
 
 ---
 
