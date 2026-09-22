@@ -76,8 +76,8 @@ after that, commands against it go straight to Pages without it:
 env -u CLOUDFLARE_API_TOKEN npx wrangler pages project create co-awareness --production-branch=main --force
 ```
 
-The pre-rename project `menubar-load-runner` (`menubar-load-runner.pages.dev`) still exists on the
-account, frozen at its last pre-rename deploy. It gets no redeploys; deleting it is the owner's call.
+The pre-rename project `menubar-load-runner` is deleted; `co-awareness` is the only Pages project for
+this repo.
 The `pages.dev` namespace is global across all accounts — keep the distinctive `co-awareness`
 project name to avoid collisions.
 
