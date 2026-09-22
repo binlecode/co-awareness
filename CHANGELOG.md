@@ -34,6 +34,16 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.0.1] - 2026-09-22
+
+### Changed
+
+- **Internal restructuring, no behavior change.** The app's main class sheds what never needed its
+  state (GIF decoding, submenu construction) and its copy-pasted per-source branches: the dropdown's
+  readout, state and VoiceOver lines now come from one path, and the menu-bar label's text and the
+  width it reserves come from one builder, so the two can no longer drift apart. Every menu row,
+  VoiceOver label and label width was compared before and after for all ten sources and is unchanged.
+
 ## [2.0.0] - 2026-09-22
 
 ### Added

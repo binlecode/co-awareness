@@ -7,7 +7,7 @@
 Small macOS menu bar app that renders an animated GIF in the status bar.
 Animation speed automatically adapts to a system load source (CPU by default; also memory, DRAM bus bandwidth, GPU, network, disk, fan, battery, die temperature, or Neural Engine power — see Load source below).
 
-Current version: **2.0.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
+Current version: **2.0.1** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
 **Cover page:** [co-awareness.pages.dev](https://co-awareness.pages.dev)
 
