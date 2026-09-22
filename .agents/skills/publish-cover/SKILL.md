@@ -66,7 +66,18 @@ CLOUDFLARE_API_TOKEN npx -y wrangler login`, browser OAuth). Fixing the env toke
 Account → Cloudflare Pages → Edit, plus `CLOUDFLARE_ACCOUNT_ID`, since it can't enumerate accounts) is
 a valid alternative, but it's the owner's call — that token is scoped for something else.
 
-First run offers to create the project; accept. Re-running the same command redeploys to the same URL.
+The `co-awareness` project exists; re-running the deploy line redeploys to the same URL. Recreating it
+(new name, new account) needs `--force` **once**, at create time only: wrangler 4.13x delegates `pages`
+commands to Workers by default, which fails on this bundle ("Could not detect a directory containing
+static files") and would move the site off `pages.dev`. `--force` pins the project to classic Pages;
+after that, commands against it go straight to Pages without it:
+
+```bash
+env -u CLOUDFLARE_API_TOKEN npx wrangler pages project create co-awareness --production-branch=main --force
+```
+
+The pre-rename project `menubar-load-runner` (`menubar-load-runner.pages.dev`) still exists on the
+account, frozen at its last pre-rename deploy. It gets no redeploys; deleting it is the owner's call.
 The `pages.dev` namespace is global across all accounts — keep the distinctive `co-awareness`
 project name to avoid collisions.
 
