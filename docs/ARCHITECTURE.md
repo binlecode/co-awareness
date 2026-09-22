@@ -46,7 +46,7 @@ All repository documentation lives in `docs/`. The repository root holds only `R
 
 MenuBar Load Runner is a single-file, unbundled native macOS menu bar application written in Swift and AppKit. It visualizes real-time hardware telemetry by driving the playback rate of an animated status-bar GIF and providing an integrated live diagnostic dashboard with built-in sleep inhibition.
 
-There are **two entry paths and one set of readers**. The GUI is the app; `--once` is a single-shot snapshot for anything that is not a pair of eyes (§ 4.7). The paths never meet: they share `TelemetryCore` and nothing else.
+There are **three entry paths and one shared telemetry engine**. The GUI is the interactive status bar visualizer; `--once` is a single-shot JSON snapshot of physical hardware readings for non-visual consumers (§ 4.7); and `--status` is a lightweight JSON query reporting whether an instance is resident and its active sleep hold state (§ 8.3). The paths are strictly partitioned: `--status` inspects process and state files without initializing telemetry readers; `--once` and the GUI share `TelemetryCore` and nothing else.
 
 ```
                       +---------------------------------+
@@ -54,47 +54,49 @@ There are **two entry paths and one set of readers**. The GUI is the app; `--onc
                       |         (Zsh launcher)          |
                       +---------------------------------+
                                        |
-                       +---------------+---------------------+
-                       |  --once, intercepted first          |  GUI launch
-                       |  no guard, no compile               |  singleton -> compile -> detach
-                       v                                     v
-      +---------------------------------+   +---------------------------------+
-      | snapshot path                   |   | MenuBarLoadRunnerApp (GUI)      |
-      |                                 |   |                                 |
-      | sample, wait, sample again      |   | status items, menu, labels      |
-      | one JSON line, exit 0           |   | Keep Awake, state.json          |
-      |                                 |   | CADisplayLink game loop         |
-      | no NSApplication                |   | speed mapping 0..1              |
-      | no state.json                   |   |                                 |
-      +---------------------------------+   +---------------------------------+
-                       |                                     |
-                       +---------------+---------------------+
-                                       v
-              +--------------------------------------------------+
-              | TelemetryCore                                    |
-              |                                                  |
-              | the nine readers, their probes and scalers       |
-              | one snapshot(), physical units only              |
-              |                                                  |
-              | not its business: AppKit, speed mapping,         |
-              | Keep Awake, state.json                           |
-              +--------------------------------------------------+
-                                       |
-         +-----------------+-----------+-----+-----------------+
-         v                 v                 v                 v
-  +---------------+ +---------------+ +---------------+ +---------------+
-  | Mach          | | IOKit         | | SMCClient     | | IOReport      |
-  | CPU, memory   | | GPU, disk,    | | fan, die      | | ANE watts     |
-  |               | | network,      | | temperature   | |               |
-  |               | | battery       | |               | |               |
-  +---------------+ +---------------+ +---------------+ +---------------+
+        +------------------------------+------------------------------+
+        | --status                     | --once                       | GUI launch
+        | (pre-guard, pre-compile)     | (pre-guard, pre-compile)     | singleton -> compile -> detach
+        v                              v                              v
++-------------------------------+ +-------------------------------+ +-------------------------------+
+| Status Query Path             | | Snapshot Path                 | | MenuBarLoadRunnerApp (GUI)    |
+|                               | |                               | |                               |
+| ProcessProbe.newestMatch      | | sample, wait, sample again    | | status items, menu, labels    |
+| StateStore.load() (read-only) | | one JSON line, exit 0         | | Keep Awake, state.json        |
+| one JSON line, exit 0         | |                               | | CADisplayLink game loop       |
+|                               | | no NSApplication              | | speed mapping 0..1            |
+| no NSApplication              | | no state.json                 | |                               |
+| no TelemetryCore / readers    | | no ProcessProbe               | |                               |
++-------------------------------+ +-------------------------------+ +-------------------------------+
+                                                   |                                 |
+                                                   +----------------+----------------+
+                                                                    v
+                                                  +------------------------------------+
+                                                  | TelemetryCore                      |
+                                                  |                                    |
+                                                  | ten unprivileged hardware readers  |
+                                                  | probes, scalers, physical units    |
+                                                  |                                    |
+                                                  | not its business: AppKit, speed    |
+                                                  | mapping, Keep Awake, state.json    |
+                                                  +------------------------------------+
+                                                                    |
+                         +-----------------+------------------------+----+-------------------+
+                         v                 v                             v                   v
+                  +---------------+ +---------------+             +---------------+ +-----------------+
+                  | Mach          | | IOKit         |             | SMCClient     | | IOReportClient  |
+                  | CPU (total,   | | GPU (device,  |             | Fan RPM,      | | ANE power (W),  |
+                  |  P/E cluster),| |  rend/tiler), |             | Max die temp  | | DRAM bus BW     |
+                  | Memory & swap | | Network, Disk,|             | (binary search| | (AMCC histogram |
+                  |               | | Battery mA/diag             |  key table)   |  midpoint GB/s)   |
+                  +---------------+ +---------------+             +---------------+ +-----------------+
 ```
 
 ### Core Design Tenets
 
 1. **Read-Only Telemetry & Self-Throttling:** The application observes the system without modifying system settings or CPU governors. When system load or thermal conditions escalate, the application throttles its own rendering footprint to avoid exacerbating contention.
-2. **Zero-Xcode Single-File Architecture:** The entire runtime resides in `MenuBarLoadRunner.swift` (~6.6k lines) compiled via `swiftc` with complete concurrency checking (`-strict-concurrency=complete`).
-3. **No Mocks / Non-Privileged Execution:** Every metric is collected via unprivileged public Mach, IOKit, and SMC APIs without root privileges, background daemons, or kernel extensions.
+2. **Zero-Xcode Single-File Architecture:** The entire runtime resides in `MenuBarLoadRunner.swift` (~8.3k lines) compiled via `swiftc` with complete concurrency checking (`-strict-concurrency=complete`).
+3. **No Mocks / Non-Privileged Execution:** Every metric is collected via unprivileged public Mach, IOKit, SMC, and IOReport APIs without root privileges, background daemons, or kernel extensions.
 4. **Jitter-Free Menu Bar Real Estate:** Status item widths are strictly reserved using figure-space padding (U+2007) and monospaced digits, ensuring that value oscillations never cause lateral layout jitter.
 
 ---
@@ -104,52 +106,77 @@ There are **two entry paths and one set of readers**. The GUI is the app; `--onc
 Execution is governed by the `menubar-load-runner` zsh script, which manages compilation, process singletons, and detached execution.
 
 ```
-                      +----------------------------+
-                      |     Execution Request      |
-                      +-------------+--------------+
-                                    |
-                                    v
-                      +----------------------------+
-                      |  Per-User Singleton Check  |
-                      |   (pgrep -U <uid> -f ...)  |
-                      +-------------+--------------+
-                                    |
-                      +-------------+--------------+
-             Instance Running?             No Instance Running
-                      |                            |
-                      v                            v
-         [Exit with notice / --extra]   +----------------------------+
-                                        | Is Source Newer than Mach-O|
-                                        +-------------+--------------+
-                                                      |
-                                           +----------+----------+
-                                         Stale                Up to date
-                                           |                     |
-                                           v                     |
-                                +---------------------------+    |
-                                |   swiftc -O -strict-      |    |
-                                |   concurrency=complete    |    |
-                                |   -o MenuBarLoadRunner.new|    |
-                                +----------+----------------+    |
-                                           |                     |
-                                           v                     |
-                                +---------------------------+    |
-                                | rename(2) atomically over |    |
-                                |    MenuBarLoadRunner      |    |
-                                +----------+----------------+    |
-                                           |                     |
-                                           +---------------------+
-                                           v
-                                +---------------------------+
-                                | Launch Process (Detached  |
-                                |      or Foreground)       |
-                                +---------------------------+
+                             +----------------------------+
+                             |     Execution Request      |
+                             |   (menubar-load-runner)    |
+                             +-------------+--------------+
+                                           |
+                    +----------------------+----------------------+
+                    | --once or --status                          | GUI launch / --precompile
+                    | (Headless fast-path)                        |
+                    v                                             v
+     +------------------------------+              +------------------------------+
+     | Does Mach-O binary exist     |              | Swift toolchain available?   |
+     | and is executable?           |              | (command -v swift)           |
+     +--------------+---------------+              +--------------+---------------+
+                    |                                             |
+            +-------+-------+                             +-------+-------+
+            |               |                             |               |
+           Yes              No                           Yes              No
+            |               |                             |               |
+            v               v                             v               v
+     +--------------+ +-----------+                +--------------+ +-----------+
+     | exec binary  | | Print err |                | Parse CLI    | | Print err |
+     | with argv    | |  exit 2   |                | flags / opts | |  exit 127 |
+     +--------------+ +-----------+                +------+-------+ +-----------+
+                                                          |
+                                           +--------------+--------------+
+                                           | --precompile flag?          |
+                                           |                             |
+                                          Yes                            No
+                                           |                             |
+                                           v                             v
+                                  +------------------+         +--------------------+
+                                  | compile_if_stale |         | Singleton Guard:   |
+                                  | & exit (0 or 1)  |         | pgrep -U <uid>     |
+                                  +------------------+         +---------+----------+
+                                                                         |
+                                                          +--------------+--------------+
+                                                          |                             |
+                                                     Match found                    No match
+                                                    & no --extra                  (or --extra)
+                                                          |                             |
+                                                          v                             v
+                                                   +--------------+           +------------------+
+                                                   | Exit 0 with  |           | compile_if_stale |
+                                                   | notice       |           +--------+---------+
+                                                   +--------------+                    |
+                                                                         +-------------+-------------+
+                                                                         |                           |
+                                                                    swiftc ok                  swiftc failed
+                                                                         |                           |
+                                                                         v                           v
+                                                              +---------------------+     +--------------------+
+                                                              | Atomic rename:      |     | Fallback:          |
+                                                              | mv .new -> binary   |     | swift script.swift |
+                                                              +----------+----------+     +---------+----------+
+                                                                         |                          |
+                                                                         +------------+-------------+
+                                                                                      |
+                                                                                      v
+                                                                      +--------------------------------+
+                                                                      | Launch Process:                |
+                                                                      | - Detached: nohup & + verify   |
+                                                                      | - Foreground: exec             |
+                                                                      +--------------------------------+
 ```
 
 ### Compilation Mechanics
 
+- **Fast-Path Headless Interception:** Both `--once` and `--status` are handled in the first statement of argument parsing, prior to toolchain checks, prior to the singleton check, and prior to any compilation pass. If the Mach-O binary exists, the launcher directly replaces itself via `exec`. If missing, it exits 2 with guidance to run `--precompile`. This ensures headless queries never incur compilation latency or race against a running instance.
 - **Atomic Rename:** When compiling, the launcher outputs to `MenuBarLoadRunner.new` before invoking `mv` (`rename(2)`) over `MenuBarLoadRunner`. This guarantees that an existing live process paging from the Mach-O binary does not crash during a rebuild.
 - **Precompilation Hook (`--precompile`):** Exposes the compilation branch without launching the process. Used by the in-app self-updater to build newly pulled source code while the current instance remains live.
+- **Singleton Guard Before Compile:** On the interactive GUI launch path, `pgrep -U "$(id -u)"` executes strictly before `compile_if_stale`, ensuring that duplicate launch requests never attempt concurrent compilation against the same target binary.
 - **Strict Concurrency Safety:** Compiled with Swift 5 `-strict-concurrency=complete`. All UI and state-managing classes are annotated `@MainActor`.
 - **Interpreted Fallback & Singleton Scope:** If `swiftc` compilation fails or toolchain elements are unavailable, the launcher falls back to interpreted execution via `swift MenuBarLoadRunner.swift`. This degraded emergency fallback is intentionally not singleton-guarded: the launcher's singleton check (`pgrep -U "$(id -u)" -f "/MenuBarLoadRunner( |$)"`) explicitly matches the compiled binary path to avoid false positives against editors holding `MenuBarLoadRunner.swift` open or background `swiftc` builds, while the interpreted fallback process executes directly under `/usr/bin/swift`.
 
@@ -216,22 +243,22 @@ if advanced { renderCurrentFrame() }                                        // l
 The application includes ten unprivileged telemetry monitors, owned by `TelemetryCore` (§ 4.7) and sampled by the GUI every 2 seconds (`Tuning.loadSampleInterval`).
 
 ```
-+----------------------------------------------------------------------------------------+
-|                                   Telemetry Monitors                                   |
-+------------------------+---------------------------+-----------------------------------+
-| Monitor Class          | Primary Kernel/Mach API   | Normalization / Scaling Model     |
-+------------------------+---------------------------+-----------------------------------+
-| CPULoadMonitor         | host_processor_info()     | Exponential Moving Average (EMA)  |
-| MemoryLoadMonitor      | host_statistics64()       | Composite: max(RAM%, ScaledSwap)  |
-| GPULoadMonitor         | IORegistry IOAccelerator  | Direct Percentage (0.0 .. 1.0)    |
-| SMCClient (Fan)        | AppleSMCKeysEndpoint      | RPM / Max RPM (Average of Fans)   |
-| SMCClient (Temp)       | AppleSMCKeysEndpoint      | Fixed 30°C .. 100°C Window        |
-| NetworkLoadMonitor     | getifaddrs() (AF_LINK)    | ThroughputScaler (Bytes/Sec)      |
-| DiskLoadMonitor        | IOBlockStorageDriver      | ThroughputScaler (Bytes/Sec)      |
-| BatteryLoadMonitor     | IOKit Power Sources       | ThroughputScaler (Discharge mA)   |
-| ANELoadMonitor         | IOReport (Energy Model)   | ThroughputScaler (Watts)          |
-| BandwidthLoadMonitor   | IOReport (PMP / DCS BW)   | ThroughputScaler (GB/s)           |
-+------------------------+---------------------------+-----------------------------------+
++-----------------------------------------------------------------------------------------------------------------------+
+|                                                  Telemetry Monitors                                                   |
++------------------------+---------------------------+-----------------------+------------------------------------------+
+| Monitor Class          | Primary Kernel/Mach API   | Native Reading Unit   | Normalization / Scaling Model            |
++------------------------+---------------------------+-----------------------+------------------------------------------+
+| CPULoadMonitor         | host_processor_info()     | Core tick deltas      | EMA (alpha=0.20); IODeviceTree P/E split |
+| MemoryLoadMonitor      | host_statistics64()       | Pages, swapins/outs   | max(RAM%, ScaledSwap); idle floor 0.55   |
+| GPULoadMonitor         | IORegistry IOAccelerator  | Device utilization %  | Direct percentage (0.0..1.0); Rend/Tiler |
+| SMCClient (Fan)        | AppleSMCKeysEndpoint      | F{n}Ac / F{n}Mx RPM   | RPM / Max RPM (fan mean percentage)      |
+| SMCClient (Temp)       | AppleSMCKeysEndpoint      | Tp** / Tpx* max °C    | Fixed 30°C .. 100°C linear clamp         |
+| NetworkLoadMonitor     | getifaddrs() (AF_LINK)    | Interface byte deltas | ThroughputScaler (Bytes/Sec, floor 1MB/s)|
+| DiskLoadMonitor        | IOBlockStorageDriver      | Drive byte deltas     | ThroughputScaler (Bytes/Sec, floor 4MB/s)|
+| BatteryLoadMonitor     | IOKit Power Sources       | Discharge mA, %       | ThroughputScaler (Discharge mA, floor 0.5A)
+| ANELoadMonitor         | IOReport (Energy Model)   | Millijoules delta     | ThroughputScaler (Watts, floor 1.0 W)    |
+| BandwidthLoadMonitor   | IOReport (PMP / DCS BW)   | AMCC residency hist   | ThroughputScaler (GB/s, floor 150 GB/s)  |
++------------------------+---------------------------+-----------------------+------------------------------------------+
 ```
 
 Two readers publish a second figure on the row they already own rather than a row of their own: the
@@ -329,7 +356,7 @@ For unbounded rates (network bytes/sec, disk bytes/sec, swap bytes/sec, battery 
 ### 4.5 The `IOReport` Binding & Neural Engine Power (`IOReportClient`, `ANELoadMonitor`)
 
 The only private API in the app, and the two readers built on it. It exists because the NPU is the one busy
-state the other eight cannot see: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
+state the other nine cannot see: on-device inference (Apple Intelligence, CoreML, MLX's ANE backend,
 Vision) runs the Neural Engine while CPU and GPU utilization sit near idle, so every other source
 reports a quiet machine while it is working hard.
 
@@ -359,21 +386,45 @@ subscription API. A subscription is opened for the life of the process (the `SMC
 one long-lived handle, never a per-sample open), and a reading is the difference between two samples.
 Both channel shapes come through the same delta: a **simple** channel carries one accumulated integer
 (the ANE's millijoules), a **state** channel carries a residency histogram (the bus's
-time-per-bandwidth-bucket, § 4.8). For the ANE:
+time-per-bandwidth-bucket, § 4.8).
 
 ```
-  bind: dlopen -> dlsym -> IOReportCopyChannelsInGroup("Energy Model")
-          |                         |
-          |                   filter to the "ANE" row alone
-          v                         v
-  IOReportCreateSubscription(nil, channels, &subscribed, 0, nil)   <-- see note below
-          |
-          v
-  tick:  S1 = IOReportCreateSamples(...)        (t1)
-         S2 = IOReportCreateSamples(...)        (t2)
-         D  = IOReportCreateSamplesDelta(S1, S2)
-         P  = joules(D["ANE"], unit) / (t2 - t1)     -> Watts
-         S1 <- S2
+           +-------------------------------------------------------------+
+           |                     IOReportClient.shared                   |
+           |   dlopen("/usr/lib/libIOReport.dylib", RTLD_LAZY) -> dlsym  |
+           +------------------------------+------------------------------+
+                                          |
+                  +-----------------------+-----------------------+
+                  | subscribe(...)                                | subscribe(...)
+                  v                                               v
+   +------------------------------+                +------------------------------+
+   | ANELoadMonitor               |                | BandwidthLoadMonitor         |
+   | Group: "Energy Model"        |                | Group: "PMP", Sub: "DCS BW"  |
+   | Filter: keeps "ANE" row      |                | Filter: keeps "AMCC" rows    |
+   +--------------+---------------+                +--------------+---------------+
+                  |                                               |
+                  v                                               v
+   +------------------------------+                +------------------------------+
+   | Subscription:                |                | Subscription:                |
+   | IOReportCreateSubscription   |                | IOReportCreateSubscription   |
+   | (&subscribed out-parameter)  |                | (&subscribed out-parameter)  |
+   +--------------+---------------+                +--------------+---------------+
+                  |                                               |
+                  | Delta Sampling (2s GUI or snapshotWindow)     | Delta Sampling
+                  v                                               v
+   +------------------------------+                +------------------------------+
+   | S1 = IOReportCreateSamples() |                | S1 = IOReportCreateSamples() |
+   | S2 = IOReportCreateSamples() |                | S2 = IOReportCreateSamples() |
+   | D  = CreateSamplesDelta(S1,S2)|               | D  = CreateSamplesDelta(S1,S2)|
+   +--------------+---------------+                +--------------+---------------+
+                  |                                               |
+                  v                                               v
+   +------------------------------+                +------------------------------+
+   | Simple Channel (Accumulated):|                | State Channel (Residency):   |
+   | P = delta_mJ / delta_sec => W|                | Weighted mean across bucket  |
+   | Scaler(floor: aneFloorWatts) |                |  midpoints => GB/s rate      |
+   |                              |                | Scaler(floor: bandwidthFloor)|
+   +------------------------------+                +------------------------------+
 ```
 
 - **The subscribed-channels out-parameter is not optional.** Passing `nil` makes
@@ -718,31 +769,68 @@ Sleep inhibition integrates directly into the visualizer while observing system-
 
 ```
                                   +--------------------------+
-                                  |   User Arms Keep Awake   |
+                                  |   Arm Sleep Prevention   |
                                   +------------+-------------+
+                                               |
+                        +----------------------+----------------------+
+                        |                                             |
+            [Timed / Indefinite Window]                    [Process-Bound Window]
+         --keep-awake / Menu duration selection         --keep-awake-pid / Menu process prompt
+                        |                                             |
+                        v                                             v
+            +-----------------------+                     +-----------------------+
+            | StateStore Persists:  |                     | Ephemeral Target PID  |
+            | deadline in state.json|                     | (Never saved across   |
+            | (resumed on restart)  |                     |  reboots or login)    |
+            +-----------+-----------+                     +-----------+-----------+
+                        |                                             |
+                        +----------------------+----------------------+
                                                |
                                                v
                                   +--------------------------+
-                                  | StateStore Persists      |
-                                  | Target Deadline (JSON)   |
+                                  | Evaluate Safety Release  |
+                                  | (Battery & Power Check)  |
                                   +------------+-------------+
+                                               |
+                        +----------------------+----------------------+
+                        |                                             |
+             [Hardware Critical Floor]                      [Low Battery Threshold]
+             Battery <= 5%                                  Battery <= threshold (default 20%)
+             (Hard floor, non-overridable)                  without active user override
+                        |                                             |
+                        +----------------------+----------------------+
                                                |
                                                v
                                   +--------------------------+
-                                  |  Evaluate Safety Release |
+                                  | Keep Awake Suspended     |
+                                  | - caffeinate terminated  |
+                                  | - User intent preserved  |
+                                  | - Auto-resumes on AC/chr |
+                                  +--------------------------+
+                                               |
+                                       (Safe Operating State)
+                                               |
+                                               v
+                                  +--------------------------+
+                                  | Spawn Child Process:     |
+                                  | caffeinate -di -w <pid>  |
+                                  | [-t <window_seconds>]    |
                                   +------------+-------------+
                                                |
-               +-------------------------------+-------------------------------+
-               |                                                               |
-               v                                                               v
-   [Battery ≤ 5% Hard Floor OR]                                    [Safe Operating State]
-   [Battery ≤ Configured Threshold without Override]                           |
-               |                                                               v
-               v                                                   +---------------------------+
-   KeepAwake Suspended / Paused                                    | Spawns Subprocess:        |
-   (caffeinate terminated, intent kept)                            | caffeinate -di -w <pid>   |
-                                                                   |            -t <seconds>   |
-                                                                   +---------------------------+
+                        +----------------------+----------------------+
+                        |                                             |
+             [Clock Expiry / Disarm]                       [Target Process Exits]
+             Timer countdown reaches zero                  DispatchSourceProcess (.exit)
+             or user clicks Off/Option-click               or 2s fallback kill(target, 0)
+                        |                                             |
+                        +----------------------+----------------------+
+                                               |
+                                               v
+                                  +--------------------------+
+                                  | Release Hold & Teardown  |
+                                  | Child process terminated |
+                                  | Intent cleared / off     |
+                                  +--------------------------+
 ```
 
 ### 7.1 Child Process Binding & Intent Separation
@@ -886,6 +974,61 @@ State is persisted to `~/Library/Application Support/menubar-load-runner/state.j
 
 `--once` (§ 4.7) answers for the machine. It cannot answer for *this app*: a snapshot is stateless and knows no other process, so nothing could ask whether an instance was already resident or whether the Mac was being held awake and for how much longer. `--status` is that question, and only that one — the readers are not on this path at all.
 
+```
++-----------------------------------------------------------------------------------------------+
+|                                    Headless Query Pathways                                    |
++---------------------------------------------------------------+-------------------------------+
+| Property / Dimension          | --once (Hardware Telemetry)   | --status (Process/Hold State) |
++---------------------------------------------------------------+-------------------------------+
+| Target Entity                 | The Machine                   | The App                       |
+| Query Engine                  | TelemetryCore                 | StatusReport                  |
+| Backing Subsystems            | Mach, IOKit, SMC, IOReport    | ProcessProbe, StateStore      |
+| Latency Profile               | ~290 ms (two-pass delta)      | < 10 ms (point probe)         |
+| state.json Access             | None (neither read nor write) | Read-only (skipped if no pid) |
+| Output Format                 | Single line JSON (units)      | Single line JSON (status)     |
+| Unavailable Fields            | Absent keys (never null or 0) | Absent keys (never null or 0) |
+| Exit Codes                    | 0: valid, 1: usage, 2: no bin | 0: answered, 1: usage, 2: no  |
++---------------------------------------------------------------+-------------------------------+
+```
+
+```
+                     +---------------------------------------+
+                     |        $ menubar-load-runner --status |
+                     +-------------------+-------------------+
+                                         |
+                                         v
+                     +---------------------------------------+
+                     | ProcessProbe.newestMatch(execName)    |
+                     | Mach / KERN_PROC_UID, uid == getuid() |
+                     +-------------------+-------------------+
+                                         |
+                        +----------------+----------------+
+                        |                                 |
+                   No match found                    Instance found (PID)
+                        |                                 |
+                        v                                 v
+          +----------------------------+    +----------------------------+
+          | StateStore.load() SKIPPED  |    | StateStore.load()          |
+          | (avoid stale intent drift) |    | Read-only state.json       |
+          +-------------+--------------+    +-------------+--------------+
+                        |                                 |
+                        v                                 v
+          +----------------------------+    +----------------------------+
+          | Emit JSON:                 |    | Check keepAwake.enabled:   |
+          | {"running":false}          |    | - If true: active: true    |
+          |                            |    |   + remaining_s if window  |
+          | Exit 0                     |    | - If false: omit key       |
+          +----------------------------+    +-------------+--------------+
+                                                          |
+                                                          v
+                                            +----------------------------+
+                                            | Emit JSON:                 |
+                                            | {"running":true,"pid":N,   |
+                                            |  "keep_awake":{...}}       |
+                                            | Exit 0                     |
+                                            +----------------------------+
+```
+
 **Sources.** `StatusReport` reads two things and writes neither: the process table, through `ProcessProbe.newestMatch`, and the state file, through `StateStore.load()`. The probe's needle is the running binary's **own executable name** rather than a literal `MenuBarLoadRunner`. The question is whether a second copy of *this* binary is up, which is also what makes a test build answer for the instances a test started instead of for the one installed on the machine. `newestMatch` already scopes to the calling uid — the same boundary as the launcher's singleton guard (§ 2) — and skips the caller's own pid.
 
 **Interface.**
@@ -997,19 +1140,55 @@ Comprehensive reference of values defined in `Tuning`:
 | `assertionRowCap` | `4` | Rows | Maximum external assertion rows displayed before overflow row |
 | `labelSlotPadding` | `4.0` | Points | Slack padding added to reserved status item label widths |
 
-Parameters that are not `Tuning` constants because they live on an interface rather than in the binary's interior:
+### 11.2 Command-Line Interface (CLI) Parameters
 
-| Name | Default | Unit | Role | Lives in |
+Parameters accepted by `menubar-load-runner` and `MenuBarLoadRunner`:
+
+| Parameter | Default | Domain / Format | Functional Role | Location |
 |---|---|---|---|---|
-| `--once` | off | flag | Single-shot JSON snapshot; exclusive of every other argument (§ 4.7) | binary and launcher |
-| `--status` | off | flag | Single-shot JSON about the resident instance and its sleep hold; exclusive of every other argument (§ 8.3) | binary and launcher |
-| `--load-source bandwidth` | — | enum value | Selects the DRAM bus as the speed driver (§ 4.8); the only public surface R25 adds | binary and launcher |
-| `v` | `1` | int | Snapshot contract version | output |
-| `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE` | unset | source keys | Marks readers unavailable; honored on both paths, so QA can assert an absent snapshot key | binary |
-| `MENUBAR_LOAD_RUNNER_FORCE_BATTERY` | unset | `pct[:battery\|:ac]` | Pins charge and power state on the reader itself (§ 4.6); honored on both paths | binary |
-| `MENUBAR_LOAD_RUNNER_FORCE_THERMAL` | unset | level | Pins the kernel thermal level; display-only, honored on both paths | binary |
+| `[preset\|path]` | `horse-white` | Built-in key or `.gif` path | Selects the active runner animation preset or local GIF asset | CLI positional |
+| `--speed-multiplier <x>` | auto-speed | Float (e.g. `0.5`, `1.0`, `2.0`) | Overrides dynamic load scaling with a fixed animation playback speed | binary & launcher |
+| `--load-source <src>` | `cpu` | `cpu` · `memory` · `gpu` · `network` · `disk` · `fan` · `battery` · `temperature` · `ane` · `bandwidth` | Telemetry monitor driving animation rate (§ 4) | binary & launcher |
+| `--show-all-sources` | off | Flag | Expands "Other Sources" dropdown on start, actively sampling all available readers | binary & launcher |
+| `--label <mode>` | `off` | `off` · `value` · `<text>` (<= 24 chars) | Configures adjacent menu bar label slot; `value` shows active reading, text shows string | binary & launcher |
+| `--keep-awake <dur>` | `off` | `off` · `on` · `<dur>` (`30m`, `2h`, `1h30m`) | Arms sleep prevention until turned off or until window expires (§ 7.1) | binary & launcher |
+| `--keep-awake-pid <pid>`| off | Positive integer PID | Binds sleep prevention to lifetime of target process; terminates on exit (§ 7.4) | binary & launcher |
+| `--battery-threshold <x>`| `20` | Whole % (`6`–`100`) or `off`/`0` | Charge level where Keep Awake suspends on battery (§ 7.2; floor at 5% is hard) | binary & launcher |
+| `--no-update-check` | off | Flag | Disables background update tag polling on startup (§ 9.2) | binary & launcher |
+| `--foreground` / `--no-detach` | detached | Flag | Runs process attached to current terminal shell (disables default nohup detach) | launcher only |
+| `--detach` | default | Flag | Launches process detached in the background via nohup and logging | launcher only |
+| `--extra` | off | Flag | Bypasses launcher singleton guard to permit concurrent instance execution | launcher only |
+| `--precompile` | off | Flag | Compiles Swift source atomically if newer than Mach-O, then exits 0/1 without launch | launcher only |
+| `--once` | off | Flag (strictly exclusive) | Emits single-line JSON snapshot of all available hardware sensors; physical units (§ 4.7) | binary & launcher |
+| `--status` | off | Flag (strictly exclusive) | Emits single-line JSON reporting resident instance status and Keep Awake hold (§ 8.3) | binary & launcher |
+| `-h` / `--help` | off | Flag | Displays CLI usage synopsis and options reference | binary & launcher |
 
-`MENUBAR_LOAD_RUNNER_EXIT_AFTER` has no meaning on the snapshot path and is ignored there: it already exits on its own.
+*Mutual Exclusion Invariant:* `--once` and `--status` must each be the sole argument passed. Companion flags trigger an immediate exit 1 usage error to prevent conflicting GUI configuration.
+
+### 11.3 Environment Variables & Test / Observability Hooks
+
+| Variable Name | Type / Values | Default | Subsystem & Behavioral Role |
+|---|---|---|---|
+| `MENUBAR_LOAD_RUNNER_PATH` | Path string | unset | Overrides default GIF asset path |
+| `MENUBAR_LOAD_RUNNER_LOAD_SOURCE` | Source enum | `cpu` | Sets active telemetry monitor driving animation |
+| `MENUBAR_LOAD_RUNNER_LABEL` | Mode / string | `off` | Sets default menu bar label mode |
+| `MENUBAR_LOAD_RUNNER_KEEP_AWAKE` | Duration string | `off` | Sets startup Keep Awake hold duration |
+| `MENUBAR_LOAD_RUNNER_KEEP_AWAKE_PID` | Integer PID | unset | Sets process-bound Keep Awake hold |
+| `MENUBAR_LOAD_RUNNER_BATTERY_THRESHOLD`| Percentage string | `20` | Sets battery release threshold |
+| `MENUBAR_LOAD_RUNNER_UPDATE_CHECK` | `0` or `1` | `1` | Toggles launch-time update check |
+| `MENUBAR_LOAD_RUNNER_LOG_FILE` | Path string | `/tmp/menubar-load-runner.log` | Detached execution output log path |
+| `MENUBAR_LOAD_RUNNER_BIN_NAME` | String | `MenuBarLoadRunner` | Binary name override for process matching |
+| `MENUBAR_LOAD_RUNNER_EXIT_AFTER` | Seconds (float) | unset | Test hook: cleanly terminates app (exit 0) after duration |
+| `MENUBAR_LOAD_RUNNER_FORCE_UNAVAILABLE` | Comma-separated sources | unset | Test hook: forces named telemetry sources unavailable |
+| `MENUBAR_LOAD_RUNNER_FORCE_BATTERY` | `pct[:battery\|:ac]` | unset | Test hook: simulates battery charge level and power source (§ 4.6) |
+| `MENUBAR_LOAD_RUNNER_FORCE_THERMAL` | `nominal\|fair\|serious\|critical` | unset | Test hook: simulates kernel thermal pressure level (display-only, § 5.2) |
+| `MENUBAR_LOAD_RUNNER_STATE_FILE` | Path string | `~/Library/.../state.json` | Test hook: overrides state persistence file location |
+| `MENUBAR_LOAD_RUNNER_LOG_SLOTS` | `1` | unset | Observability: logs status item screen coordinates and widths |
+| `MENUBAR_LOAD_RUNNER_LOG_ASSERTIONS` | `1` | unset | Observability: logs external power assertion telemetry |
+| `MENUBAR_LOAD_RUNNER_LOG_AWAKE` | `1` | unset | Observability: logs sleep inhibition decider states |
+| `MENUBAR_LOAD_RUNNER_LOG_ANIMATION` | `1` | unset | Observability: logs animation loop tick deltas and freeze state |
+| `MENUBAR_LOAD_RUNNER_LOG_BATTERY_DIAGNOSTICS` | `1` | unset | Observability: logs static battery health diagnostics on menu open |
+| `MENUBAR_LOAD_RUNNER_LOG_THERMAL` | `1` | unset | Observability: logs thermal pressure level and display annotation |
 
 ---
 
@@ -1032,7 +1211,9 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v1.20** — the sensor tier | A shared `SMCClient` opened fan, then die temperature | The family of hardware readings the app can keep growing through without privileges (§ 4.3) |
 | **v1.21 → v1.22** — restart cost, and standing still | Build-before-restart in the update path; Freeze Animation honoring Reduce Motion (R17) | The compile moved out of the window where the app is gone (§ 9.2); a single stop/start decider total over occlusion + freeze (§ 5.1, § 5.3) |
 | **v1.23** — a hold that isn't a guess | Keep Awake bound to a process instead of a clock (R19); the timed window counting down on the menu bar itself | A hold can take its end condition from the job rather than from a guessed duration (§ 7.4); the countdown became a glance, under the same occlusion gate the animation obeys (§ 6.3) |
-| **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu (R21); the dropdown reports battery health, cycle count and capacity (R22); the temperature row names the kernel's own throttling (R23) | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); the first reading the app does not poll at all, gated entirely on menu open (§ 4.6); and the line between what the kernel does to the machine and what this app does about it, drawn in the menu and enforced in the wiring (§ 5.2) |
+| **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu (R21); the dropdown reports battery health, cycle count and capacity (R22) | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); the first reading the app does not poll at all, gated entirely on menu open (§ 4.6) |
+| **v1.25.0** — the kernel's throttle vs our throttle | Temperature row annotates `· Thermal Throttling` on `.serious`/`.critical` pressure (R23) | Clear separation between what the kernel does to the machine (display-only) and what this app does about it (self-throttling), enforced in wiring and display (§ 5.2) |
+| **Unreleased (v1.26.0)** — headless contracts & silicon splits | `--once` JSON snapshot and `TelemetryCore` (R24); DRAM bus bandwidth via `BandwidthLoadMonitor` + CPU P/E cluster & GPU pipeline splits (R25); `--status` app query (R27) | Telemetry core decoupled from GUI display concepts (§ 4.7); physical rate observation on memory controller bus histograms (§ 4.8); headless non-invasive process and hold inspection (§ 8.3) |
 
 ---
 
