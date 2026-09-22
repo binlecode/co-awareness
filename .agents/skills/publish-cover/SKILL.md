@@ -31,7 +31,7 @@ Live URL: `https://co-awareness.pages.dev`. Scripts live in `scripts/` next to t
 ## 1. Build + audit the bundle (automated)
 
 ```bash
-.claude/skills/publish-cover/scripts/build-cover-dist.sh
+.agents/skills/publish-cover/scripts/build-cover-dist.sh
 ```
 
 Assembles `tmp/cover-dist/` and self-scores: path rewrite (`../gifs/`→`gifs/`), no secrets/local

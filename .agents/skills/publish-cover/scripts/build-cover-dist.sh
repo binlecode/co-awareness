@@ -11,11 +11,11 @@
 # every wrangler line needs `env -u CLOUDFLARE_API_TOKEN`. See the skill's SKILL.md §2 before
 # reaching for `wrangler login`. Exits non-zero if any audit gate fails.
 #
-# Usage (from anywhere):  .claude/skills/publish-cover/scripts/build-cover-dist.sh
+# Usage (from anywhere):  .agents/skills/publish-cover/scripts/build-cover-dist.sh
 #
 set -uo pipefail
 
-# repo root = four levels up from .claude/skills/publish-cover/scripts/
+# repo root = four levels up from .agents/skills/publish-cover/scripts/ (or .claude/skills/...)
 ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
 cd "$ROOT"
 
