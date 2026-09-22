@@ -16,23 +16,22 @@ All repository documentation lives in `docs/`. The repository root holds only `R
    docs/
    +-- ARCHITECTURE.md          <-- You are here: system topology, subsystem specs (§1–§13),
    |                              telemetry algorithms, invariants, parameter reference, release hygiene.
-   +-- ROADMAP.md                 The standing product tracker: candidate backlog (R<n>),
-   |                              and declined proposals with rationale.
+   +-- ROADMAP.md                 The standing product tracker: candidate backlog (R<n>).
    +-- RESEARCH-<topic>.md        External peer surveys and ecosystem research (e.g. peer-survey.md);
    |                              facts-only, dated evidence outside the ADLC landing chain.
    +-- PLAN-<topic>.md            Active feature / issue design and implementation plans;
    |                              distilled into ARCHITECTURE.md upon landing, then `git rm` deleted.
    +-- cover.html, media/         Public landing page and visual assets.
-   +-- .claude/skills/<name>/     Agent-executable operational workflows (build-visuals, etc.).
+   +-- .agents/skills/<name>/    Agent-executable operational workflows (build-visuals, etc.; symlinked from .claude/skills).
 ```
 
 ### Document Taxonomy & Lifecycle Table
 
 | Document Type | Naming Convention | Lifecycle & Purpose |
 |---|---|---|
-| **Roadmap** | `docs/ROADMAP.md` | Single standing tracker for open candidate backlog (`R<n>`) and declined proposals. Never deleted. |
+| **Roadmap** | `docs/ROADMAP.md` | Single standing tracker for open candidate backlog (`R<n>`). Never deleted. |
 | **Plan / Proposal** | `docs/PLAN-<topic>.md` | Active feature design, options, and verification checklist. **Absorbed into `docs/ARCHITECTURE.md` upon landing, then immediately deleted (`git rm`)**. |
-| **As-Built Architecture** | `docs/ARCHITECTURE.md` | Canonical description of what the code actually is and why. Updated only after code lands and stabilizes. |
+| **As-Built Architecture** | `docs/ARCHITECTURE.md` | Canonical description of what the code actually is, system boundaries, architectural decisions, and declined proposals with rationale. Updated only after code lands and stabilizes. |
 | **External Research** | `docs/RESEARCH-<topic>.md` | Public surveys and external benchmarks. Does not enter the ADLC landing cycle; retained as dated evidence. |
 
 - **Strict Document Kinds:** No invented prefixes (`REPORT-`, `DESIGN-`, `TODO-`, `LESSONS`, `RUNBOOK-`, `JOURNAL`).
@@ -92,12 +91,14 @@ There are **three entry paths and one shared telemetry engine**. The GUI is the 
                   +---------------+ +---------------+             +---------------+ +-----------------+
 ```
 
-### Core Design Tenets
+### Core Design Tenets & System Boundaries
 
-1. **Read-Only Telemetry & Self-Throttling:** The application observes the system without modifying system settings or CPU governors. When system load or thermal conditions escalate, the application throttles its own rendering footprint to avoid exacerbating contention.
-2. **Zero-Xcode Single-File Architecture:** The entire runtime resides in `CoAwareness.swift` (~8.3k lines) compiled via `swiftc` with complete concurrency checking (`-strict-concurrency=complete`).
-3. **No Mocks / Non-Privileged Execution:** Every metric is collected via unprivileged public Mach, IOKit, SMC, and IOReport APIs without root privileges, background daemons, or kernel extensions.
-4. **Jitter-Free Menu Bar Real Estate:** Status item widths are strictly reserved using figure-space padding (U+2007) and monospaced digits, ensuring that value oscillations never cause lateral layout jitter.
+1. **Read-Only Telemetry & The Observer Principle:** The observer must never become the load. The application samples aggregate physical hardware capacity via $O(1)$ Mach and IOKit counters without modifying system governors or traversing per-PID task trees (§ 4.10). Rendering frame rate throttles down under thermal or battery strain (§ 5.2, § 10.2).
+2. **Zero-Xcode Single-File & Unbundled Binary:** The entire runtime resides in `CoAwareness.swift` (~8.3k lines) compiled via `swiftc -O -strict-concurrency=complete`. Direct Mach-O execution avoids `.app` bundle complexity, code signature sealing that blocks in-place atomic recompilation, and Apple Developer notarization overhead (§ 10.2).
+3. **Pure User-Space & Kernel Lifetime Binding:** Every metric is collected via unprivileged Mach, IOKit, SMC, and IOReport interfaces. Sleep prevention is strictly bound to child process lifetimes (`caffeinate -di -w <pid>`), guaranteeing automatic kernel reclamation on termination and prohibiting persistent NVRAM mutations via root `pmset` (§ 7.5, § 10.2).
+4. **Jitter-Free Menu Bar Geometry:** Status item widths are strictly reserved using figure-space padding (U+2007) and monospaced tabular digits, preventing variable-width telemetry readings from triggering WindowServer lateral layout reflows (§ 6.1).
+5. **Single-Process, CLI-First Architecture:** Directly invokable via standard CLI argv with side-effect-free query paths (`--once`, `--status`). Background daemon sockets, IPC servers, and embedded protocol parsers (e.g. MCP) are excluded, eliminating idle memory footprint and orphan socket hazards (§ 4.7, § 8.3, § 10.2).
+6. **Self-Contained Dotfile Philosophy:** Runner presets and configuration reside entirely in local Git-tracked files (`gifs/`) or explicit filesystem paths. Remote asset downloads and online repositories are excluded, guaranteeing full offline operation, transparent auditability, and zero network attack surface (§ 9.1, § 10.2).
 
 ---
 
@@ -274,7 +275,7 @@ neither can drive the animation — they answer *which part* of a chip the drivi
 - Smoothed via EMA with smoothing factor $\alpha = 0.20$ (`Tuning.cpuSmoothingAlpha`):
   $$\text{smoothedUsage}_t = \alpha \times \text{rawFraction} + (1 - \alpha) \times \text{smoothedUsage}_{t-1}$$
 
-**The P/E cluster split (R25).** The same tick deltas, summed per cluster instead of per machine, and
+**The P/E cluster split.** The same tick deltas, summed per cluster instead of per machine, and
 smoothed with the same $\alpha$ so a jumpy split cannot sit beside a settled total. It answers a
 different question from the figure above it: four saturated E-cores and four saturated P-cores both
 read 35% on an M4 Max, and they are different machine states with different thermal futures.
@@ -462,7 +463,7 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
    - Sampled periodically during active telemetry.
    - Reads instantaneous discharge current (`kIOPSCurrentKey`) and battery charge percentage via unprivileged `IOPSCopyPowerSourcesInfo()`.
    - While on battery, discharge current (mA) normalizes through `ThroughputScaler` (`Tuning.batteryFloorMilliamps` = 500 mA). While plugged into AC, discharge draw is 0, driving the animation at idle speed.
-2. **Static Health & Capacity Diagnostics (`BatteryDiagnosticsReader`, R22)**:
+2. **Static Health & Capacity Diagnostics (`BatteryDiagnosticsReader`)**:
    - Battery health and cycle counts are slow-moving hardware metrics that degrade over months, not seconds.
    - **Strict Zero-Polling Invariant**: Health diagnostics are **never** queried in the background 2s telemetry loop or vsync game loop.
    - **Menu-Gated Single Read**: Queried unprivileged from `AppleSmartBattery` via `IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))` strictly once on `menuWillOpen(_:)`, and cleared on `menuDidClose(_:)`.
@@ -473,17 +474,20 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
 
 `CO_AWARENESS_FORCE_BATTERY=<pct>[:battery|:ac]` pins the charge and power state on `BatteryLoadMonitor` itself, not on a caller. Two places in the app read `IOPSCopyPowerSourcesInfo` — Keep Awake's suspension policy (§ 7.2) and this reader — and a hook honored by only one of them would let them disagree about the same battery in the same run. Current (mA) is left real: the hook simulates a charge and a power state, nothing else. On a desktop it also makes the reader *answer*, which is the only way a machine with no battery can exercise the path at all.
 
-### 4.7 Telemetry Core & the `--once` Snapshot (R24)
+### 4.7 Telemetry Core & the `--once` Snapshot
 
 The unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `--once` is the one way anything else asks. It answers for the *machine* only — the sibling question, about this app's own process and its sleep hold, is `--status` (§ 8.3), which reaches no reader.
 
 **Module boundaries.** Each row's *not its business* column names the canonical owner, so nothing has to be inferred:
 
-| Module | Owns | Not its business — canonical owner |
+| Module / Boundary | Owns | Not its business — canonical owner |
 |---|---|---|
 | `TelemetryCore` | Every reader, its availability probe and its scaler, plus `sampleSource(_:elapsed:)`, `isSourceAvailable(_:)`, and one `snapshot()` returning physical units | Speed mapping, menu text, labels, Keep Awake, `state.json` — all `CoAwarenessApp` |
 | `CoAwarenessApp` | Everything on screen and every intent that persists; asks the core for readings | How a reading is taken — `TelemetryCore` |
 | `co-awareness` (launcher) | Singleton guard, `compile_if_stale`, detach — for **GUI launches only** | Telemetry; and on the `--once` path, compiling anything |
+| Field projection / filtering | Caller piping to `jq` or JSON parsers | Not `--once` (no `--query`; § 10.2) |
+| Admission decisions | Caller's workload orchestrator applying thresholds | Not `--once` (no `--check`; § 10.2) |
+| Tool schema export | Calling agent harness native registry | Not `--once` (no `--tool-spec`; § 10.2) |
 
 The core never imports a display concept. It returns MB/s, °C, W, RPM, %, A — never the 0..1 driver value. Normalization to 0..1 is a speed-mapping question, which is why the scalers (§ 4.4) stay *inside* the readers, where they are how a rate reader produces its own number, and why nothing in a snapshot reads one. The core also never touches `state.json`: a snapshot describes the machine, not this app's intent, and a second writer would break the single-writer model (§ 8.2).
 
@@ -532,7 +536,9 @@ Precision follows the reader, not the field: percentages and °C carry one decim
 
 **Headless is measured, not assumed.** The GPU (IOAccelerator), SMC and IOReport readers are kernel-side and were *expected* to answer with no WindowServer connection. `tests/qa.sh` §2a is what turns that into a measurement: it runs in the core tier, which never boots a GUI, and asserts the always-present keys are there rather than only that the JSON parses — a snapshot degrading to `{"v":1}` would otherwise pass "absent when unavailable" while telling the truth about nothing.
 
-### 4.8 DRAM Bus Bandwidth (`BandwidthLoadMonitor`, R25)
+**Headless negative space.** `--once` emits the full JSON snapshot line exclusively. Single-field extraction (`--query`), admission gating (`--check`), and agent tool-schema export (`--tool-spec`) are explicitly declined to avoid duplicate spawn latency, policy coupling, and schema drift; callers handle projection, admission, and tool wrapping downstream (§ 10.2).
+
+### 4.8 DRAM Bus Bandwidth (`BandwidthLoadMonitor`)
 
 The one reading that shows a machine at its ceiling while every other row says it is fine. The memory
 reader beside it (§ 4.2) measures **capacity and paging**; during local model inference the limit is
@@ -611,6 +617,17 @@ at no additional syscall:
 - These are driver point reads, not interval integrations — the same character as the device figure
   beside them.
 
+### 4.10 Telemetry Scope & Negative Space
+
+The telemetry engine strictly measures whole-system unprivileged physical capacity. Proposed extensions outside this scope are governed by the following negative boundaries:
+
+| Excluded Telemetry Area | Boundary & Canonical Owner | Architectural Rationale & Reference |
+|---|---|---|
+| Per-process task table (`--proc-list`) | `top`, `ps`, Activity Monitor | Violates self-throttling; Mach task walks consume 1–3% CPU, turning observer into load (§ 1, § 10.2). |
+| External metric polling (custom JSON) | External monitoring tools | Dilutes kernel/Mach/IOKit/SMC core; introduces schema debt and unverified failure modes (§ 10.2). |
+| GPU & SoC package power rails | `CPULoadMonitor`, `GPULoadMonitor`, SMC temp | Energy Model channels nest arbitrarily across silicon; high collinearity with existing metrics (§ 4.5, § 10.2). |
+| Synthetic CPU frequency throttle % | `KernelThermalPressure` discrete levels | Apple Silicon CLPC does not publish frequency caps; percentage would be fabricated (§ 5.2, § 10.2). |
+
 ---
 
 ## 5. Power Management, Occlusion & Accessibility
@@ -653,7 +670,7 @@ The engine reduces its own footprint under thermal or battery strain.
   - Memory Pressure is `.warning` or `.critical` (`DispatchSource.makeMemoryPressureSource`)
 - **Action:** Speed multiplier is capped at `Tuning.constrainedSpeedCeilingFraction` ($0.5\times$ range midpoint). Immediate recalculation bypasses standard 2s hysteresis.
 
-**Kernel throttling is a separate fact from this self-throttling, and the menu states them separately (R23).** `KernelThermalPressure` maps `ProcessInfo.thermalState` to a level and annotates the *temperature* row with `· Thermal Throttling` at `.serious` / `.critical`, replacing the sensor count rather than extending the row. Three constraints shape it:
+**Kernel throttling is a separate fact from this self-throttling, and the menu states them separately.** `KernelThermalPressure` maps `ProcessInfo.thermalState` to a level and annotates the *temperature* row with `· Thermal Throttling` at `.serious` / `.critical`, replacing the sensor count rather than extending the row. Three constraints shape it:
 
 - **Level only, never a percentage.** Apple Silicon manages clocks on-die via CLPC and publishes no unprivileged frequency cap: `IOPMCopyCPUPowerStatus` answers `kIOReturnNotFound` (probed on M4 Max; `pmset -g therm` agrees). Intel's `CPU_Speed_Limit` was declined rather than special-cased: no Intel hardware is available to this project, so both the IOKit read and the row it would annotate would ship unverified — and § 4.3's claim that `Tp**` discovery spans Intel is itself untested here (`floatKey` accepts only `flt `-typed keys, so an Intel Mac may answer with a different type rather than a different name). Deriving a percentage from a level would be a fabricated reading.
 - **No new telemetry source, no new timer, no new sample.** It reads a property the app already observes, inline in `refreshMenuMetrics()` — so it is evaluated on that method's existing cadence (the 2s tick and `menuWillOpen`) and adds no cache, no timer of its own, and no IOKit call.
@@ -896,10 +913,11 @@ one that costs the job.
 ### 7.5 OS Power & Multi-User Boundaries
 
 - **Machine-Wide Sleep Semantics:** Sleep is a system-wide hardware/kernel state managed by `powerd`. A `caffeinate` assertion prevents the entire Mac from sleeping, so holds from two concurrent user sessions do not compose independently. User intent remains cleanly partitioned per user via per-account `state.json` (§ 8.2).
-- **Fast User Switching GUI Isolation:** Windows and status items belonging to a background login session are invisible from the foreground session due to macOS WindowServer security boundaries. Background Keep Awake assertions deliberately continue running across user switches so unattended jobs finish without interruption.
-- **Unprivileged Clamshell Sleep Boundary:** Subprocess `caffeinate -di -w <pid>` cannot prevent clamshell (closed-lid) sleep on battery power. Inhibiting clamshell sleep on battery requires mutating system-wide NVRAM power settings via root-privileged `pmset disablesleep`, which violates the unprivileged execution tenet and risks leaving sleep permanently disabled if the process terminates abnormally. Supported closed-lid operation requires Apple's standard clamshell conditions (AC power + external display).
+- **Fast User Switching GUI Isolation:** Windows and status items belonging to a background login session are invisible from the foreground session due to macOS WindowServer security boundaries. Background Keep Awake assertions deliberately persist across user switches so unattended jobs finish without interruption (§ 10.2).
+- **Unprivileged Clamshell Sleep Boundary:** Subprocess `caffeinate -di -w <pid>` cannot prevent clamshell (closed-lid) sleep on battery power. Inhibiting clamshell sleep on battery requires mutating system-wide NVRAM power settings via root-privileged `pmset disablesleep`, which violates the unprivileged execution tenet and risks leaving sleep permanently disabled on crash. Supported closed-lid operation requires Apple's standard clamshell conditions (AC power + external display; § 10.2).
+- **Persistent-Only Notification Boundary:** State transitions (such as battery suspension) are conveyed exclusively via the status item's persistent dimmed track line (§ 7.2). Transient HUD panels and system notifications are excluded: transient panels are missed during unattended operation, and native notifications require an application bundle (§ 10.2).
 
-### 7.6 Option-Click Quick Toggle (R21)
+### 7.6 Option-Click Quick Toggle
 
 Option-clicking any of the three status item slots (§ 6.4) arms or disarms Keep Awake without opening
 the dropdown, matching the modifier-click convention of the system's own Wi-Fi and Battery items.
@@ -971,7 +989,7 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
 - **Single-Writer Rule:** `persistState()` is the sole disk writer, assembling memory state atomically to avoid race conditions.
 - **Rename Migration:** On GUI launch only — never on the `--status` path, which must stay read-only (§ 8.3) — `StateStore` moves a pre-rename `Application Support/menubar-load-runner/` directory into `co-awareness/` when, and only when, the new directory is absent. Never merged, never repeated; failure stays fail-silent like everything else here.
 
-### 8.3 The `--status` Query (R27)
+### 8.3 The `--status` Query
 
 `--once` (§ 4.7) answers for the machine. It cannot answer for *this app*: a snapshot is stateless and knows no other process, so nothing could ask whether an instance was already resident or whether the Mac was being held awake and for how much longer. `--status` is that question, and only that one — the readers are not on this path at all.
 
@@ -1085,15 +1103,20 @@ Built-in preset identities are decoupled from Swift code into `gifs/presets.json
 
 At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining menu items, keywords, and speed curves dynamically.
 
+- **Preset Sourcing Boundary:** Presets are data-driven via `gifs/presets.json` or supplied via raw CLI positional path (`./co-awareness /path/to.gif`). In-app community asset stores, remote downloaders, and dynamic runtime preset import are excluded to preserve local auditability, offline operation, and the self-contained dotfile philosophy (§ 10.2).
+
 ### 9.2 Git-Native In-App Update Engine
 
 - **Update Probe (`UpdateChecker`):** Executes `git ls-remote --tags --refs origin 'v*'` against the origin remote, comparing the highest strict three-component SemVer against `AppInfo.version`.
 - **Precompile Before Restart (`Builder`):** On user confirmation, runs `git pull --ff-only` followed by `co-awareness --precompile`.
 - **Supervisor-Preserving Relaunch (`Restarter`):** Dispatches a detached `/bin/sh` script waiting for the old process PID to terminate, then relaunches via either `launchctl kickstart` (for LaunchAgent jobs) or the original launcher command line.
+- **Update Frequency Boundary:** Update checks execute strictly on launch (`UpdateChecker`) and on user demand via the menu. Background periodic polling timers are excluded to avoid unnecessary network activity and timer lifecycle debt (§ 10.2).
 
 ---
 
-## 10. Key Invariants & System Guardrails
+## 10. Key Invariants, System Boundaries & Declined Alternatives
+
+### 10.1 Key Invariants & System Guardrails
 
 | Subsystem | Hard Invariant | Architectural Rationale |
 |---|---|---|
@@ -1107,6 +1130,28 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 | **State File** | Single-writer centralized save | `persistState()` is the only function permitted to write `state.json`, eliminating partial block overwrites. |
 | **Headless Paths** | `--once` and `--status` write nothing and hold nothing | Side-effect freedom is what makes them safe beside a live instance and in parallel with themselves; it is also why both are exempt from the singleton guard and the compile (§ 4.7, § 8.3). `--status` reads `state.json` and must never write it — a query cannot be allowed to disturb the instance it asks about. |
 | **Telemetry Core** | Physical units out, no display concepts in | `TelemetryCore` never returns a 0..1 driver value from `snapshot()` and never reads AppKit, Keep Awake or `state.json`, so one set of readers serves both entry paths without either defining the other (§ 4.7). |
+
+### 10.2 System Boundaries & Declined Alternatives (Architectural Negative Space)
+
+An architecture is defined as much by what it refuses to build as by what it builds. A row earns its place here by guarding an invariant the current design rests on. Re-proposals require satisfying the stated precondition with a concrete report of the behavior being missed, rather than re-arguing established trade-offs.
+
+| Category | Item / Proposal | Why Not (Violated Tenet & Architectural Rationale) | Re-Proposal Condition |
+|---|---|---|---|
+| **CLI & Agent Interfaces** | Single-field extraction — `--query <key>` | **Slower than the pipe it would replace:** rate counters physically require a discrete delta integration window (`Tuning.snapshotWindow` = 200 ms). Querying $N$ individual fields via CLI spawn costs $N \times (\text{fork/exec} + 200\text{ ms})$ vs. a single 200 ms `--once` run. It also introduces a redundant entrance to facts `--once` already carries, violating the single canonical JSON schema rule (`AGENTS.md` Red Line 9; § 4.7). | Re-propose with a concrete caller environment that demonstrably cannot pipe stdout to `jq` or an equivalent JSON parser. |
+| **CLI & Agent Interfaces** | Pre-flight admission gate — `--check` | **The threshold is the caller's, and the verdict would corrupt a test hook:** What counts as "too hot to start" or "insufficient battery" is a property of the workload about to run, not of the observed system. The gate would also conflate the Keep Awake battery threshold — a sleep-prevention intent — with task admission. Worse, its verdict reads `KernelThermalPressure`, which § 5.2 and § 10.1 hold display-only precisely so `CO_AWARENESS_FORCE_THERMAL` remains an input simulator rather than a hook that moves a business decision. `--once` already publishes raw `thermal` and `battery_pct` (§ 4.7). | Re-propose as the caller's own threshold applied by the caller against `--once` output. |
+| **CLI & Agent Interfaces** | Agent tool-schema export — `--tool-spec` | **Nothing consumes it:** Agent harnesses (such as `co-cli`) register native tools from decorated Python/TypeScript in their own registries and reach an external binary through `shell_exec`, which reads `--help`. The export would also be a second hardcoded copy of the `jsonLine` field set, drifting at the first schema change (§ 4.7). | Re-propose with an external agent harness that dynamically ingests an external CLI's machine-readable schema definition. |
+| **CLI & Agent Interfaces** | Embedded Model Context Protocol (MCP) server or background daemon | **Violates the single-process, CLI-first architecture:** Background daemon sockets, IPC framing, and protocol parsers add runtime complexity and daemon lifecycle overhead when agents already integrate natively via standard CLI flags, `state.json`, and `--keep-awake-pid` (§ 1, § 8.3). | Re-propose with a workflow where CLI process invocation, `--status`, and `--keep-awake-pid` are fundamentally insufficient. |
+| **Telemetry & Sensor Scope** | Per-process CPU/RAM breakdown table (like Stats v3 or Activity Monitor) — including on-demand `--proc-list` | **Violates self-throttling and minimal-footprint tenets:** Continuously walking the Mach task list for per-PID statistics consumes 1–3% CPU, turning the observer into the load it measures (§ 1). Making it on-demand answers only the cost, not the need: standard tools (`top`, `ps`) already answer per-process attribution, while `co-awareness` visualizes aggregate whole-machine physical capacity (§ 4.10). | Re-propose with a concrete user decision that whole-machine capacity leaves unanswerable and that cannot be answered by `top`/`ps`. |
+| **Telemetry & Sensor Scope** | Arbitrary external metric polling / custom JSON telemetry (like RunCat Neo Custom Metrics) | **Out of scope:** Ingesting arbitrary external files or streams introduces custom schema maintenance, file-watching event loops, and unbounded external failure modes that dilute the unprivileged direct kernel/Mach/SMC/IOReport telemetry core (§ 4.10). | Re-propose with evidence that direct kernel/Mach/IOKit/SMC hardware telemetry is fundamentally inadequate for load visualization. |
+| **Telemetry & Sensor Scope** | GPU power and SoC package power readers (IOReport Energy Model) | **Deep schema fragility for negligible gain:** Energy Model channels nest arbitrarily with cross-chip schema debt across Apple Silicon generations, while closely correlating with existing CPU/GPU utilization monitors and die temperature. Offers negligible ROI compared to the isolated ANE leaf rail (§ 4.5, § 4.10). | Re-propose with a clean, cross-generation Apple Silicon IOReport rail that exposes package power without recursive driver channel parsing. |
+| **Telemetry & Sensor Scope** | Numeric CPU speed-limit percentage on the temperature row | **Derived fabrication on Apple Silicon; unverified on Intel:** Apple Silicon manages clocks on-die via CLPC and publishes no unprivileged frequency cap (`IOPMCopyCPUPowerStatus` answers `kIOReturnNotFound`), so any percentage would be derived from a discrete level rather than measured. Intel's `CPU_Speed_Limit` is real, but no Intel hardware is available to this project — both the read and the row would ship unverified (§ 4.10, § 5.2). | Re-propose with verified implementation and physical readings from a real Intel Mac. |
+| **Power & Sleep Management** | Closed-lid (clamshell) sleep prevention via `pmset disablesleep` (like modafinil) | **Violates unprivileged execution and clean-teardown tenets:** Mutating system-wide sleep policy via `pmset` requires root and risks leaving sleep permanently disabled on abnormal termination or crash, unlike PID-bound `caffeinate -di -w <pid>` which the kernel automatically reclaims (§ 7.5). | Re-propose with an unprivileged, process-lifetime-bound kernel mechanism for clamshell sleep prevention without root or NVRAM mutation. |
+| **Power & Sleep Management** | Release Keep Awake on fast user switching | **Contradicts chosen semantics:** A Keep Awake hold is a time or process promise for unattended background workloads (e.g., builds, simulations, model downloads); background sessions must continue running when another user switches in (§ 7.5). | Re-propose with documented user demand for per-session sleep suspension where background tasks are expected to be halted. |
+| **Power & Sleep Management** | Transient announcement of Keep Awake events (HUD panel, notifications) | **Ineffective and technically barred:** Transient HUD panels are missed during unattended battery release events (which already wear a persistent dimmed paused tone in the status bar), while native macOS user notifications require an application bundle (§ 7.5). | Re-propose with an unbundled, non-obtrusive mechanism that does not miss unattended background events. |
+| **Packaging & Distribution** | First-class local custom-GIF presets / runtime import | **Over-design:** Custom GIF import is not a core requirement. The system only requires a reproducible SOP to add whatever art is needed (adding optimized GIFs to `gifs/` and registering in `gifs/presets.json`, per `AGENTS.md`), while a raw positional path (`./co-awareness /path/to.gif`) remains the unbundled escape hatch (§ 9.1). | Re-propose with high-frequency preset switching workflows that cannot use the standard filesystem SOP or CLI path arguments. |
+| **Packaging & Distribution** | Online community asset store / in-app GIF downloader (like RunCat Runner Gallery) | **Violates the self-contained dotfile philosophy:** Remote asset downloads introduce network attack surfaces and untrusted runtime ingestion, whereas local Git/directory presets remain transparent, auditable, and offline-capable (§ 9.1). | None; antithetical to the self-contained dotfile philosophy. |
+| **Packaging & Distribution** | An `.app` bundle · notarization · Homebrew cask · Sparkle · URL scheme / automation interface | **Preserves unbundled, direct CLI execution:** Stays an unbundled source-built binary to preserve direct CLI argv execution, zero-cost ad-hoc signing, and git-native in-place updates without $99/yr Apple Developer notarization overhead or bundle complexity (§ 1, § 9.2). | Re-propose only if Apple platform changes completely prohibit unbundled CLI binaries from displaying status bar items. |
+| **Packaging & Distribution** | Periodic background update polling | **Avoids background timers:** Launch-time discovery plus on-demand menu checks are sufficient for non-critical releases without adding background network timers or lifecycle complexity (§ 9.2). | Re-propose with security-critical vulnerabilities requiring immediate, urgent out-of-band notification to running instances. |
 
 ---
 
@@ -1210,11 +1255,11 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v1.10 → v1.16** — the second slot | The live-value label as its own status item: reserved width, figure-space padding, the no-jitter guarantee | The dual-slot layout model and the jitter-free contract (§ 6, § 6.1, § 6.2); the dropdown becomes a live dashboard (§ 8) |
 | **v1.17 → v1.19** — from *our* hold to *the machine's* | Other sleep assertions, the machine-hold row, brightness-tracks-the-hold tint | Report the whole truth about sleep, not just this app's part of it (§ 7.3); the submenu's subject-grouped layout |
 | **v1.20** — the sensor tier | A shared `SMCClient` opened fan, then die temperature | The family of hardware readings the app can keep growing through without privileges (§ 4.3) |
-| **v1.21 → v1.22** — restart cost, and standing still | Build-before-restart in the update path; Freeze Animation honoring Reduce Motion (R17) | The compile moved out of the window where the app is gone (§ 9.2); a single stop/start decider total over occlusion + freeze (§ 5.1, § 5.3) |
-| **v1.23** — a hold that isn't a guess | Keep Awake bound to a process instead of a clock (R19); the timed window counting down on the menu bar itself | A hold can take its end condition from the job rather than from a guessed duration (§ 7.4); the countdown became a glance, under the same occlusion gate the animation obeys (§ 6.3) |
-| **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu (R21); the dropdown reports battery health, cycle count and capacity (R22) | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); the first reading the app does not poll at all, gated entirely on menu open (§ 4.6) |
-| **v1.25.0** — the kernel's throttle vs our throttle | Temperature row annotates `· Thermal Throttling` on `.serious`/`.critical` pressure (R23) | Clear separation between what the kernel does to the machine (display-only) and what this app does about it (self-throttling), enforced in wiring and display (§ 5.2) |
-| **v2.0.0** — headless contracts, silicon splits & the rename | `--once` JSON snapshot and `TelemetryCore` (R24); DRAM bus bandwidth via `BandwidthLoadMonitor` + CPU P/E cluster & GPU pipeline splits (R25); `--status` app query (R27); renamed to `co-awareness` — launcher, env prefix, state path | Telemetry core decoupled from GUI display concepts (§ 4.7); physical rate observation on memory controller bus histograms (§ 4.8); headless non-invasive process and hold inspection (§ 8.3); one name, one env prefix, one state path — no alias, no dual-prefix fallback (§ 8.2) |
+| **v1.21 → v1.22** — restart cost, and standing still | Build-before-restart in the update path; Freeze Animation honoring Reduce Motion | The compile moved out of the window where the app is gone (§ 9.2); a single stop/start decider total over occlusion + freeze (§ 5.1, § 5.3) |
+| **v1.23** — a hold that isn't a guess | Keep Awake bound to a process instead of a clock; the timed window counting down on the menu bar itself | A hold can take its end condition from the job rather than from a guessed duration (§ 7.4); the countdown became a glance, under the same occlusion gate the animation obeys (§ 6.3) |
+| **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu; the dropdown reports battery health, cycle count and capacity | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); the first reading the app does not poll at all, gated entirely on menu open (§ 4.6) |
+| **v1.25.0** — the kernel's throttle vs our throttle | Temperature row annotates `· Thermal Throttling` on `.serious`/`.critical` pressure | Clear separation between what the kernel does to the machine (display-only) and what this app does about it (self-throttling), enforced in wiring and display (§ 5.2) |
+| **v2.0.0** — headless contracts, silicon splits & the rename | `--once` JSON snapshot and `TelemetryCore`; DRAM bus bandwidth via `BandwidthLoadMonitor` + CPU P/E cluster & GPU pipeline splits; `--status` app query; renamed to `co-awareness` — launcher, env prefix, state path | Telemetry core decoupled from GUI display concepts (§ 4.7); physical rate observation on memory controller bus histograms (§ 4.8); headless non-invasive process and hold inspection (§ 8.3); one name, one env prefix, one state path — no alias, no dual-prefix fallback (§ 8.2) |
 
 ---
 

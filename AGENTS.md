@@ -44,29 +44,40 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 全部架构与生命周期文档统一位于 `docs/`。根目录只留 `README.md`（人的入口）和 `CLAUDE.md` / `AGENTS.md`（Agent 指令）。
 
 - 🔴 **全文档唯一正本路由在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §0**，这是架构伞文档。
-- 🔴 **未决议题、待做特性与记录在案的 NO 只认 [`docs/ROADMAP.md`](docs/ROADMAP.md)**。
-- 🔴 **已建成架构细则正本在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**。本文不维护第二份产品设计/架构细则。
+- 🔴 **未决候选议题与待做特性只认 [`docs/ROADMAP.md`](docs/ROADMAP.md)**。
+- 🔴 **已建成架构细则、系统边界与记录在案的拒绝决策/NO 正本在 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**。本文不维护第二份产品设计/架构细则。
 
 ### 文档命名与 ADLC 流水线硬规矩
 
 | 文种 | 命名规范 | 职责与生命周期 |
 |---|---|---|
-| **路线图** | `docs/ROADMAP.md` | 悬着的议题总表（记录在案的 NO、候选议题 `R<n>`、排期）；只记决定与条件，不记流水账；议题落成即移出 |
+| **路线图** | `docs/ROADMAP.md` | 悬着的候选议题总表（候选议题 `R<n>`、排期）；只记跟踪与设计落点，不记流水账；议题落成即移出 |
 | **计划书** | `docs/PLAN-<topic>.md` | 单项特性的设计与实施草案；**主体做完蒸馏入 `docs/ARCHITECTURE.md` 后当场 `git rm` 删除**（绝不留存归档） |
-| **架构正本** | `docs/ARCHITECTURE.md` | 系统已建成架构的正本（why 与 how，不重复代码中的 what）；包含 §0 路由表、系统拓扑、子系统规约与参数基线 |
+| **架构正本** | `docs/ARCHITECTURE.md` | 系统已建成架构的正本（why 与 how，不重复代码中的 what）；包含 §0 路由表、系统拓扑、子系统规约、系统边界/拒绝决策与参数基线 |
 | **外部调研** | `docs/RESEARCH-<topic>.md` | 外部竞品与业界生态调研及实测数据（**不入 ADLC 链**，不 land、不改名、不退休，供决策参考，测量过时后清理或重测） |
 
 - **严禁新建文种**：没有 `REPORT-`、`DESIGN-`、`TODO-`、`LESSONS`、`RUNBOOK-` 或 `JOURNAL`。
 - **系统结构图硬规则**：一律使用纯 ASCII 字符（`+ - | = v ^ < >`）绘制，严禁使用制表符（`┌─│`），对齐严格按 CJK 双倍字宽计算。
 - **修改文档正文一律使用编辑工具（Edit）**，严禁使用 `sed` 破坏文档排版。
 - **一个事实只在一处声明 (One fact, one place)**：文档严禁复制代码中已有陈述的 what；文档只记录 why 与 how，并跨文件交叉引用。
+- **以给人（工程师）看的第一性原理撰写（First-Principles Engineering Documentation）**：
+  - 架构文档是写给工程师看的硬核工程规约，**严禁空洞的形式主义、循环论证或口号式陈述**（例如只写「违反自限流原则」却不给出底层物理机理）。
+  - **技术决策必须落到底层物理现实与内核调度机理**：硬件物理约束（如速率计数器的离散差分积分时间窗 $\Delta t$）、内核生命周期与调度（Mach port/PID 死亡生命周期回收 vs NVRAM 持久变异、Mach task 遍历的上下文切换开销与观察者效应、CLPC 片上闭环自主调频 vs 缺失的软件寄存器）、虚拟内存与进程安全（mmap 需求分页映射 vs 原地覆盖 Mach-O 内存分页崩溃）。
+  - **拒绝决策（负向空间）三要素闭环**：拒绝一项设计必须同时明确**物理/内核机理（Why Not）**、**所守护的核心不变量（Protected Invariant）**与**明确可证伪的重新立项前提（Re-Proposal Condition）**，绝不搞不可撼动的教条主义。
+- **拒绝决策归位架构负向空间，路线图彻底去噪**：
+  - `docs/ROADMAP.md` 永远保持极致轻量，仅记录待办候选（`R<n>`）的跟踪落点与优先级；**严禁在路线图中沉积 Declined 提案、设计辩论或系统定性陈述**。
+  - 任何设计决议一旦落地或被否决，其正向规约或负向边界必须直接蒸馏入 `docs/ARCHITECTURE.md`（正向入各子系统规约，负向统归 § 10.2 负向总表），从 `ROADMAP.md` 中当场移出。
+- **文档彻底去噪与结构化表达（De-Noising & Strict Anti-Duplication）**：
+  - **严禁同文档跨节双重复写**：子系统规约节内仅用结构化表格界定边界与所有权（`Module / Boundary | Owns | Not its business`），禁止在子系统里写大段拒绝散文又在 § 10.2 完整复述。全系统级拒绝决策与论据统一收敛至 § 10.2 权威总表，跨节精准交叉引用。
+  - **语言技术化去噪**：剔除口语化吐槽、情绪化辞藻与历史包袱，通篇保持客观、严密、高信息密度的系统工程语言。
+  - **严禁将路标跟踪编号（`R<n>`）引入架构正本**：`R<n>` 纯粹是 `docs/ROADMAP.md` 与进行中计划书 `docs/PLAN-*.md` 的过程工单代号。`docs/ARCHITECTURE.md` 是面向工程师的现行架构正本，所有子系统、标题、规约与负向总表一律使用正式技术名（如 `--once` 快照、P/E 簇拆分、进程绑定睡眠），严禁在标题或正文中保留 `(R24)`、`(R27)` 等过期路标编号，杜绝误导读者。
 
 🔴 **一份设计文档（`PLAN-` / `ARCHITECTURE.md` 的子系统节）先答清四件事，顺序就是这个顺序**：
 
 | 要素 | 写什么 | 判据 |
 |---|---|---|
 | 模块 | 这一块管什么 | 一句话说得完 |
-| 边界 | 哪些事不归它、归谁 | 逐行给出正本落点，别人不用猜 |
+| 边界 | 哪些事不归它、归谁 | 逐行给出正本落点，别人不用猜；负向边界必须用第一性原理解释为何不归它、归谁所有，并链接到 § 10.2 决策总表 |
 | 接口 | 对外的旗标 / 输出 / 退出码 + 前后置条件与不变量 | 别人照它接，不用读实现 |
 | 参数与阈值 | 名 · 默认 · 单位 · 作用 · 住在哪（二进制 / 启动脚本 / 输出） | 读表的人不查代码就能跑起来 |
 
@@ -122,7 +133,7 @@ pkill -f 'CoAwareness'                 # 停止当前用户正在运行的实例
 - **遥测核心与单发快照** (`docs/ARCHITECTURE.md` §4.7)：全部读数由 `TelemetryCore` 统一持有，GUI 与 `--once` 两条入口路径共用同一套 reader，互不定义；`--once` 只输出一份 schema（缺读数即缺键），且必须是唯一参数。
 - **10 种无特权硬件遥测源** (`docs/ARCHITECTURE.md` §4)：CPU (Mach，含 P/E 簇拆分，簇归属取自 IODeviceTree `cluster-type`，严禁按 `hw.perflevel` 序号切片)、Memory + Swap (Mach `vm_statistics64`)、DRAM 带宽 (`IOReport` "PMP"/"DCS BW" 的 `AMCC…RD+WR` 残留直方图，按桶**中点**加权求均，正本见 §4.8)、GPU (IOAccelerator，含 Renderer/Tiler 拆分)、Network/Disk (IOKit 计数器增量)、Fan RPM (SMC)、Battery mA (IOKit PS)、Max Die Temp (SMC 二分查找 `Tp**`/`Tpx*` 传感器集群最大值)、ANE Watts (`IOReport` "Energy Model" 订阅式增量采样)。`IOReport` 是唯一的私有 API，由 `IOReportClient` 单点 `dlopen`/`dlsym` 绑定、各 reader 各自窄订阅（正本见 §4.5）。每种源均具备 `isAvailable` 探测，不可用时平滑降级。
 - **ThroughputScaler 速率归一化** (`docs/ARCHITECTURE.md` §4.2)：无界速率（网速/磁盘/swap/电池电流）经自适应滑动窗口归一化到 0..1，双向非对称裕量 + 迟滞计数器防抖；有界百分比与绝对温度映射不走 Scaler。
-- **CADisplayLink 与自限流** (`docs/ARCHITECTURE.md` §3, §5)：屏幕刷新率同步的 vsync 游戏循环；全遮挡（刘海/隐藏/灭屏）时完全暂停渲染（0% CPU）；高热/低电量/内存压力下自动减半自身帧率；尊重系统 Reduce Motion 与手动 Freeze（冻结时读数自动交接给标签栏，R17）。
+- **CADisplayLink 与自限流** (`docs/ARCHITECTURE.md` §3, §5)：屏幕刷新率同步的 vsync 游戏循环；全遮挡（刘海/隐藏/灭屏）时完全暂停渲染（0% CPU）；高热/低电量/内存压力下自动减半自身帧率；尊重系统 Reduce Motion 与手动 Freeze（冻结时读数自动交接给标签栏）。
 - **Keep Awake 睡眠阻止与外部断言嗅探** (`docs/ARCHITECTURE.md` §7)：通过 `SleepPreventer` 启动 `caffeinate -di -w <pid>` 绑定进程生命周期；支持预设/自定义定时窗口（跨重启恢复）；底线 5% 电池保护；通过 `IOPMCopyAssertionsByProcess` 嗅探系统其他进程断言，两段式归因排布（This Mac vs This App）。
 - **双槽位状态栏标签模型** (`docs/ARCHITECTURE.md` §6)：标签采用独立状态栏项而非在 GIF 上烘焙文字；预建左右两个槽位（`labelItemLeft`, `labelItemRight`）以克服 macOS 状态栏槽位不可重排限制，严格采用花样空格（U+2007）预占位防抖。
 - **状态持久化单点守恒** (`docs/ARCHITECTURE.md` §8.2)：`~/Library/Application Support/co-awareness/state.json` 由 `persistState()` 统一全量写盘，持久化意图（Intent）而非易失运行状态。
@@ -138,7 +149,7 @@ pkill -f 'CoAwareness'                 # 停止当前用户正在运行的实例
 
 ## 改动时的红线
 
-动手改动代码前必须确认以下八项硬约束：
+动手改动代码前必须确认以下九项硬约束：
 
 1. **严禁引入构建系统或外部运行时依赖**：坚守单文件 Swift 架构与原生启动脚本，`-strict-concurrency=complete` 必须保持零警告。
 2. **严禁破坏无特权只读原则**：遥测只能通过系统公开/免提权接口读取；严禁请求 root，严禁通过 `pmset` 篡改系统全局电源配置。
@@ -147,7 +158,7 @@ pkill -f 'CoAwareness'                 # 停止当前用户正在运行的实例
 5. **单例守卫必须前置于编译**：启动脚本必须在编译前执行 `pgrep -U "$(id -u)"`，防止多实例并发编译写入同一输出。
 6. **Keep Awake 5% 电池保护底线不可逾越**：电量 ≤ 5% 必须无条件释放断言，任何 CLI 参数、状态恢复或菜单点击均严禁绕过此底线。
 7. **严禁破坏状态持久化单写者模型**：`state.json` 的写盘只能由 `persistState()` 统一驱动，禁止在局部 observer 或高频采样循环中自行写盘。
-8. **一个事实只在一处声明**：详细架构机制与参数一律维护在 `docs/ARCHITECTURE.md`；改动代码后必须同步更新 as-built 文档；落地后立即删除对应的 `PLAN-*.md`。
+8. **一个事实只在一处声明与第一性原理**：详细架构机制、参数与拒绝决策（负向空间）一律由 `docs/ARCHITECTURE.md`（§ 10.2 权威总表闭环）独家持有；技术决策以物理与内核机理说明 why 与 why not；严禁同文档跨节双重复述；落地后立即删除对应 `PLAN-*.md`；`docs/ROADMAP.md` 仅留待办候选 `R<n>`。
 9. **接口按第一性原理最小化 —— 先减后加**：一件事只给一个入口，严禁为同一件事开出「简版 / 全版 / 人读版」三个旗标；新旗标必须先证明两档都得长期活着，证不出就是常量；输出只有一份 schema，字段名自带单位，缺读数一律**缺键**而不是补 0 或 `null`；无意义的参数组合一律**启动报错**，不许静默忽略。改名、加兼容别名、加双前缀回退都不是能力，单独立项单独拍板。
 
 ---
