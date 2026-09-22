@@ -1,6 +1,6 @@
 # ROADMAP
 
-The product tracker: candidate backlog (`R<n>`). Shipped work, architectural invariants, system boundaries, and declined alternatives are documented as-built in `docs/ARCHITECTURE.md` (see § 10.2 for the negative architecture and declined proposals register).
+The product tracker: candidate backlog (`R<n>`). Shipped work, architectural invariants, and subsystem boundaries (including declined proposals and re-open triggers) are documented as-built in `docs/ARCHITECTURE.md`.
 
 Items are `R<n>`, assigned once, never reused. **P1** user-visible defect or silent failure · **P2**
 real capability gap · **P3** nice to have · **P4** parity for its own sake. Nothing here is a
