@@ -727,7 +727,7 @@ macOS orders status items right-to-left based on creation time with no reorderin
 When Keep Awake is armed with a windowed duration (`keepAwakeDeadline != nil`):
 - **Menu Bar Presentation:** The countdown timer (`MM:SS` or `HH:MM:SS`) is rendered in the active status bar slot (`activeLabelItem`).
   - When `labelMode == .off`: The slot dynamically reveals the countdown (e.g., `29:58`), collapsing back to length 0 upon timer expiry or disarming.
-  - When `labelMode == .value` or `.custom`: Both telemetry/custom text and the countdown are displayed together (e.g., `CPU 45%  29:58` when placed left of the icon, or `29:58  CPU 45%` when placed right), positioning the countdown immediately adjacent to the runner icon.
+  - When `labelMode == .value`, `.chart`, or `.custom`: Both telemetry/chart/custom text and the countdown are displayed together (e.g., `CPU 45%  29:58` or `[Chart]  29:58` when placed left of the icon, or `29:58  CPU 45%` / `29:58  [Chart]` when placed right), positioning the countdown immediately adjacent to the runner icon.
 - **Zero-Jitter Template Reservation:** `labelSlotWidth` accounts for the countdown template (`88:88` or `88:88:88`), ensuring that second-by-second decrements introduce $0\text{ pt}$ lateral shift.
 - **1-Second Countdown Ticker:** A unified 1-second timer (`syncKeepAwakeCountdownTicker()`) drives live updates while a windowed countdown is active on the bar, stopping when disarmed or expired to preserve the self-throttling footprint.
 - **Occlusion Gate:** The bar branch of that ticker reads the same `statusItemOccluded` verdict the frame driver does (§5), so a hidden item (notch, overflow, another Space, display off) costs 0 measure/relayout passes per second rather than 1 — a countdown exists to be looked at, and an 8-hour window is the case that makes the difference material. The *menu* branch is deliberately ungated: an open menu is its own window, visible whatever the status item is doing. On resume `updateAnimationForOcclusion()` redraws through `refreshKeepAwakeCountdown()` before restarting the timer, so the slot never shows the second it went dark on for up to a tick.
@@ -1158,6 +1158,8 @@ Comprehensive reference of values defined in `Tuning`:
 | `assertionRetentionSeconds` | `8.0` | Seconds | Hysteresis retention time for external sleep assertion display |
 | `assertionRowCap` | `4` | Rows | Maximum external assertion rows displayed before overflow row |
 | `labelSlotPadding` | `4.0` | Points | Slack padding added to reserved status item label widths |
+| `labelChartWidth` | `45.0` | Points | Fixed plot width for the menu bar trace chart (sparkline) |
+| `labelChartHeight` | `14.0` | Points | Plot height for the menu bar trace chart |
 
 ### 11.2 Command-Line Interface (CLI) Parameters
 
@@ -1169,7 +1171,7 @@ Parameters accepted by `co-awareness` and `CoAwareness`:
 | `--speed-multiplier <x>` | auto-speed | Float (e.g. `0.5`, `1.0`, `2.0`) | Overrides dynamic load scaling with a fixed animation playback speed | binary & launcher |
 | `--load-source <src>` | `cpu` | `cpu` · `memory` · `gpu` · `network` · `disk` · `fan` · `battery` · `temperature` · `ane` · `bandwidth` | Telemetry monitor driving animation rate (§ 4) | binary & launcher |
 | `--show-all-sources` | off | Flag | Expands "Other Sources" dropdown on start, actively sampling all available readers | binary & launcher |
-| `--label <mode>` | `off` | `off` · `value` · `<text>` (<= 24 chars) | Configures adjacent menu bar label slot; `value` shows active reading, text shows string | binary & launcher |
+| `--label <mode>` | `off` | `off` · `value` · `chart` · `<text>` (<= 24 chars) | Configures adjacent menu bar label slot; `value` shows active reading, `chart` shows trace chart, text shows string | binary & launcher |
 | `--keep-awake <dur>` | `off` | `off` · `on` · `<dur>` (`30m`, `2h`, `1h30m`) | Arms sleep prevention until turned off or until window expires (§ 7.1) | binary & launcher |
 | `--keep-awake-pid <pid>`| off | Positive integer PID | Binds sleep prevention to lifetime of target process; terminates on exit (§ 7.4) | binary & launcher |
 | `--battery-threshold <x>`| `20` | Whole % (`6`–`100`) or `off`/`0` | Charge level where Keep Awake suspends on battery (§ 7.2; floor at 5% is hard) | binary & launcher |

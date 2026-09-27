@@ -35,8 +35,8 @@ resolve_script_path() {
 print_help() {
   cat <<EOF
 Usage:
-  $APP_CMD_NAME [dog-white|dog-black|horse-black|horse-white|chihiro|chihiro-white|chihiro-black|totoro|totoro-group-white|totoro-group-black|totoro-white|totoro-black|/path/to.gif] [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
-  CO_AWARENESS_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--label <off|value|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
+  $APP_CMD_NAME [dog-white|dog-black|horse-black|horse-white|chihiro|chihiro-white|chihiro-black|totoro|totoro-group-white|totoro-group-black|totoro-white|totoro-black|/path/to.gif] [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--label <off|value|chart|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
+  CO_AWARENESS_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--label <off|value|chart|text>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
 
 Presets:
   dog-white   Built-in running dog (white)
@@ -59,7 +59,8 @@ Options:
   --show-all-sources         Start with the menu's "Other Sources" list expanded, sampling every available
                              reader and showing each as a live row (also via CO_AWARENESS_SHOW_ALL=1;
                              click a row to switch source; the active source still drives the animation)
-  --label <off|value|text>   Optional second menu-bar slot: 'value' shows the active source's live reading,
+  --label <off|value|chart|text> Optional second menu-bar slot: 'value' shows the active source's live reading,
+                             'chart' shows the active source's trace chart,
                              any other text is a fixed label (up to 24 chars), 'off' (default) shows nothing
                              (also via CO_AWARENESS_LABEL; switchable from the menu)
   --keep-awake <off|on|dur>  Arm Keep Awake at launch: 'on' until turned off, or a duration with a unit

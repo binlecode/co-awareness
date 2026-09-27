@@ -511,6 +511,13 @@ private enum Tuning {
     // font; too little would truncate the text to an ellipsis, which is the failure to avoid.
     static let labelSlotPadding: CGFloat = 4
 
+    // Dimensions for the status-bar trace chart (sparkline) mode (--label chart).
+    static let labelChartWidth: CGFloat = 45
+    static let labelChartHeight: CGFloat = 14
+    static let labelChartImageHeight: CGFloat = 16
+    static let labelChartBarGap: CGFloat = 0.5
+    static let labelChartCountdownGap: CGFloat = 6.0
+
     // Keep Awake auto-disengage: on battery power at or below this charge fraction we kill
     // `caffeinate` so an unattended Mac doesn't drain to death mid-task. See SleepPreventer.
     //
@@ -749,6 +756,7 @@ private enum MenuTitle {
     static let labelOff = "off"
     static let labelOffItem = "Off"
     static let labelValueItem = "Live Value"
+    static let labelChartItem = "Trace Chart"
     static func labelCustomItem(max: Int) -> String { "Custom Text… (max \(max))" }
     static let labelPositionHeader = "Position"
 
@@ -959,23 +967,26 @@ private enum LoadSource: Int, CaseIterable {
 }
 
 // The optional second menu-bar slot's content. `.off` claims no slot; `.value` shows the active
-// source's live reading (refreshed on the 2s tick); `.custom` shows a fixed user string (handy for
-// labeling multiple instances). Replaces the old baked-on overlay, which was illegible atop a 22pt
-// animated icon — an adjacent slot renders in the native menu-bar font instead. Parsed from
-// `--label <off|value|text>` / CO_AWARENESS_LABEL; `off` and `value` are reserved keywords, so
-// a literal custom label of "off"/"value" isn't expressible (documented; a non-issue in practice).
+// source's live reading (refreshed on the 2s tick); `.chart` shows the active source's trace chart;
+// `.custom` shows a fixed user string (handy for labeling multiple instances). Replaces the old baked-on
+// overlay, which was illegible atop a 22pt animated icon — an adjacent slot renders in the native menu-bar
+// font instead. Parsed from `--label <off|value|chart|text>` / CO_AWARENESS_LABEL; `off`, `value`, and `chart`
+// are reserved keywords, so a literal custom label of "off"/"value"/"chart" isn't expressible (documented;
+// a non-issue in practice).
 private enum MenuBarLabel: Equatable {
     case off
     case value
+    case chart
     case custom(String)
 
-    // Parse a raw `--label` / env value. nil/empty → .off. "off"/"value" are keywords; anything else
+    // Parse a raw `--label` / env value. nil/empty → .off. "off"/"value"/"chart" are keywords; anything else
     // is trimmed and truncated to Tuning.labelMaxChars as custom text (empty after trim → .off).
     static func parse(_ raw: String?) -> MenuBarLabel {
         guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return .off }
         switch raw.lowercased() {
         case "off": return .off
         case "value": return .value
+        case "chart": return .chart
         default: return .custom(String(raw.prefix(Tuning.labelMaxChars)))
         }
     }
@@ -988,6 +999,7 @@ private enum MenuBarLabel: Equatable {
         switch self {
         case .off: return "off"
         case .value: return "value"
+        case .chart: return "chart"
         case .custom: return "custom"
         }
     }
@@ -1004,6 +1016,7 @@ private enum MenuBarLabel: Equatable {
         switch self {
         case .off: return "off"
         case .value: return "value"
+        case .chart: return "chart"
         case .custom(let text): return text
         }
     }
@@ -1015,6 +1028,7 @@ private enum MenuBarLabel: Equatable {
         switch mode {
         case "off": return .off
         case "value": return .value
+        case "chart": return .chart
         case "custom":
             guard let text = customText?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !text.isEmpty else { return nil }
@@ -1420,7 +1434,7 @@ private struct Config {
                 speedMultiplierOverride = parsed
             case "--label":
                 guard let value = iterator.next() else {
-                    fputs("Invalid value for --label. Expected off, value, or custom text.\n", stderr)
+                    fputs("Invalid value for --label. Expected off, value, chart, or custom text.\n", stderr)
                     printUsage()
                     return nil
                 }
@@ -1613,10 +1627,10 @@ private struct Config {
         let envBin = ProcessInfo.processInfo.environment["CO_AWARENESS_BIN_NAME"]
         let bin = (envBin?.isEmpty == false) ? envBin! : URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
         print("co-awareness \(AppInfo.version)")
-        print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
-        print("   or: CO_AWARENESS_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--label <off|value|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
+        print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--label <off|value|chart|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
+        print("   or: CO_AWARENESS_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--label <off|value|chart|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
         print("Load source: which reader drives animation speed (default cpu). Also via CO_AWARENESS_LOAD_SOURCE; unknown values fall back to cpu.")
-        print("Label: an optional second menu-bar slot. --label value shows the active source's live reading; --label <text> (up to \(Tuning.labelMaxChars) chars) shows a fixed label; --label off (default) shows nothing. Also via CO_AWARENESS_LABEL; switchable from the menu.")
+        print("Label: an optional second menu-bar slot. --label value shows the active source's live reading; --label chart shows the active source's trace chart; --label <text> (up to \(Tuning.labelMaxChars) chars) shows a fixed label; --label off (default) shows nothing. Also via CO_AWARENESS_LABEL; switchable from the menu.")
         print("Show all sources: --show-all-sources (or CO_AWARENESS_SHOW_ALL=1) starts with the menu's \"Other Sources\" list expanded, sampling every available reader and showing each as a live row; click a row to switch the driving source. Collapsed by default (active source only). Toggle from the menu's disclosure header.")
         print("Keep awake: --keep-awake <off|on|30m|2h|1h30m> arms sleep prevention at launch (a unit is required; up to \(Tuning.keepAwakeMaxHours)h). Also via CO_AWARENESS_KEEP_AWAKE. Off by default; switchable from the menu. An armed window is saved and resumed on the next launch — passing this flag (even as off) overrides what was saved.")
         print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via CO_AWARENESS_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
@@ -4363,6 +4377,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     private var labelMenuItem: NSMenuItem!
     private var labelOffItem: NSMenuItem!
     private var labelValueItem: NSMenuItem!
+    private var labelChartItem: NSMenuItem!
     private var labelCustomItem: NSMenuItem!
     // Second radio group in the same submenu: the slot's side. Rows carry indices into
     // MenuBarLabelSide.allCases, read only by selectLabelSide.
@@ -5002,6 +5017,9 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
 
         labelValueItem = makeSelectionItem(MenuTitle.labelValueItem, action: #selector(selectLabelValue))
         labelSubmenu.addItem(labelValueItem)
+
+        labelChartItem = makeSelectionItem(MenuTitle.labelChartItem, action: #selector(selectLabelChart))
+        labelSubmenu.addItem(labelChartItem)
 
         labelCustomItem = makeSelectionItem(MenuTitle.labelCustomItem(max: Tuning.labelMaxChars), action: #selector(promptCustomLabel))
         labelSubmenu.addItem(labelCustomItem)
@@ -6601,7 +6619,13 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             guard let f = item?.button?.window?.frame else { return "x=n/a w=n/a" }
             return String(format: "x=%.1f w=%.1f", f.minX, f.width)
         }
-        let text = activeLabelItem?.button?.title ?? ""
+        let text: String = {
+            if effectiveLabelMode == .chart {
+                let cd = activeKeepAwakeCountdownText
+                return cd.map { "chart \($0)" } ?? "chart"
+            }
+            return activeLabelItem?.button?.title ?? ""
+        }()
         fputs(
             "SLOTS icon[\(frame(statusItem))] left[\(frame(labelItemLeft))]"
                 + " right[\(frame(labelItemRight))] side=\(labelSide.rawValue) label=\"\(text)\"\n",
@@ -6633,11 +6657,14 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             labelMenuItem.title = MenuTitle.label(MenuTitle.labelOff + suffix)
         case .value:
             labelMenuItem.title = MenuTitle.label(MenuTitle.labelValueItem.lowercased())
+        case .chart:
+            labelMenuItem.title = MenuTitle.label(MenuTitle.labelChartItem.lowercased())
         case .custom(let text):
             labelMenuItem.title = MenuTitle.label("\"\(text)\"")
         }
         labelOffItem.state = (labelMode == .off) ? .on : .off
         labelValueItem.state = (labelMode == .value) ? .on : .off
+        labelChartItem.state = (labelMode == .chart) ? .on : .off
         if case .custom = labelMode { labelCustomItem.state = .on } else { labelCustomItem.state = .off }
         // Position group. The rows stay live while the label is off — picking a side then is a
         // preference for the next time it's on, not a no-op the user has to redo.
@@ -6702,9 +6729,13 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
 
     private func applyLabelMode() {
         guard let live = activeLabelItem, let left = labelItemLeft, let right = labelItemRight else { return }
-        (live === left ? right : left).length = 0
+        let idle = (live === left ? right : left)
+        idle.length = 0
+        idle.button?.image = nil
+        idle.button?.title = ""
         guard effectiveLabelMode != .off || activeKeepAwakeCountdownText != nil else {
             live.length = 0
+            live.button?.image = nil
             live.button?.title = ""
             return
         }
@@ -6732,9 +6763,21 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             return isHourScale ? "88:88:88" : "88:88"
         }()
 
+        if effectiveLabelMode == .chart {
+            let chartBase = Tuning.labelChartWidth
+            let width: CGFloat
+            if let cd = countdownTemplate {
+                let cdWidth = measuredLabelWidth(cd)
+                width = chartBase + Tuning.labelChartCountdownGap + cdWidth
+            } else {
+                width = chartBase
+            }
+            return ceil(width) + Tuning.labelSlotPadding
+        }
+
         let baseReserved: String?
         switch effectiveLabelMode {
-        case .off:
+        case .off, .chart:
             baseReserved = nil
         case .value:
             baseReserved = compactLabelText(for: activeLoadSource, ceiling: true)
@@ -6772,13 +6815,31 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         let countdown = activeKeepAwakeCountdownText
         guard effectiveLabelMode != .off || countdown != nil else {
             if item.length != 0 { item.length = 0 }
+            button.image = nil
             button.title = ""
             return
         }
 
+        if effectiveLabelMode == .chart {
+            let width = labelSlotWidth(for: "")
+            if abs(item.length - width) > 0.01 {
+                item.length = width
+            }
+            button.image = makeTraceChartImage(countdown: countdown, appearance: button.effectiveAppearance)
+            button.imagePosition = .imageOnly
+            button.title = ""
+            let cdSpoken = countdown.map { ", \($0) remaining" } ?? ""
+            let reading = spokenReading(for: activeLoadSource)
+            button.setAccessibilityLabel("co-awareness — \(reading) trace chart\(cdSpoken)")
+            return
+        }
+
+        button.image = nil
+        button.imagePosition = .noImage
+
         let baseText: String?
         switch effectiveLabelMode {
-        case .off:
+        case .off, .chart:
             baseText = nil
         case .value:
             baseText = compactLabelText(for: activeLoadSource)
@@ -6817,6 +6878,119 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         }
         // Strip the width padding for VoiceOver — the figure spaces are a layout device.
         button.setAccessibilityLabel(text.replacingOccurrences(of: "\u{2007}", with: ""))
+    }
+
+    // MARK: - Status Bar Trace Chart
+
+    private func traceChartColor(for value: Double, isBattery: Bool) -> NSColor {
+        if isBattery {
+            if value < Tuning.batteryChartLowThreshold { return .systemRed }
+            if value < Tuning.batteryChargeMediumThreshold { return .systemYellow }
+            return .systemGreen
+        } else {
+            if value < Tuning.cpuStateLowThreshold { return .systemGreen }
+            if value < Tuning.cpuStateMediumThreshold { return .systemYellow }
+            return .systemRed
+        }
+    }
+
+    private func makeTraceChartImage(countdown: String?, appearance: NSAppearance?) -> NSImage {
+        let chartWidth = Tuning.labelChartWidth
+        let chartHeight = Tuning.labelChartHeight
+        let imageHeight = Tuning.labelChartImageHeight
+        let gap = Tuning.labelChartCountdownGap
+        let font = Self.labelFont
+
+        let countdownWidth: CGFloat
+        if countdown != nil {
+            let isHourScale = (keepAwakeSelectedDuration.seconds ?? 0) >= 3600
+                || (keepAwakeRemainingSeconds ?? 0) >= 3600
+            let template = isHourScale ? "88:88:88" : "88:88"
+            countdownWidth = measuredLabelWidth(template)
+        } else {
+            countdownWidth = 0
+        }
+
+        let totalContentWidth = countdown != nil ? chartWidth + gap + countdownWidth : chartWidth
+        let imageSize = NSSize(width: totalContentWidth, height: imageHeight)
+        let samples = loadHistory
+        let capacity = Tuning.loadHistoryCapacity
+        let isBattery = (activeLoadSource == .battery)
+        let sideIsLeft = (labelSide == .left)
+
+        let textColor = keepAwakeTintColor(
+            for: awakeHold,
+            paused: keepAwakeArmedNotHolding,
+            appearance: appearance
+        ) ?? NSColor.labelColor
+
+        let img = NSImage(size: imageSize, flipped: false) { [weak self] _ in
+            guard let self else { return false }
+
+            let chartX: CGFloat
+            let textX: CGFloat
+            if countdown != nil {
+                if sideIsLeft {
+                    chartX = 0
+                    textX = chartWidth + gap
+                } else {
+                    textX = 0
+                    chartX = countdownWidth + gap
+                }
+            } else {
+                chartX = 0
+                textX = 0
+            }
+
+            // 1. Draw chart
+            let chartOriginY = (imageHeight - chartHeight) / 2.0
+            let plot = NSRect(x: chartX, y: chartOriginY, width: chartWidth, height: chartHeight)
+
+            NSColor.quaternaryLabelColor.setFill()
+            NSBezierPath(rect: NSRect(x: plot.minX, y: plot.minY, width: plot.width, height: 1)).fill()
+
+            if !samples.isEmpty {
+                let slotWidth = plot.width / CGFloat(capacity)
+                let barWidth = max(1.0, slotWidth - Tuning.labelChartBarGap)
+                let count = min(samples.count, capacity)
+                let trailing = samples.suffix(count)
+                for (offset, value) in trailing.enumerated() {
+                    let clamped = min(max(value, 0), 1)
+                    let slot = capacity - count + offset
+                    let x = plot.minX + CGFloat(slot) * slotWidth
+                    let h = max(1.0, CGFloat(clamped) * plot.height)
+                    let barRect = NSRect(x: x, y: plot.minY, width: barWidth, height: h)
+                    self.traceChartColor(for: clamped, isBattery: isBattery)
+                        .withAlphaComponent(0.9)
+                        .setFill()
+                    NSBezierPath(roundedRect: barRect, xRadius: 0.5, yRadius: 0.5).fill()
+                }
+            }
+
+            // 2. Draw countdown if present
+            if let countdownText = countdown {
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: font,
+                    .foregroundColor: textColor,
+                ]
+                let textSize = (countdownText as NSString).size(withAttributes: attrs)
+                let textY = (imageHeight - textSize.height) / 2.0
+                let alignedTextX: CGFloat
+                if sideIsLeft {
+                    alignedTextX = textX + (countdownWidth - textSize.width)
+                } else {
+                    alignedTextX = textX
+                }
+                (countdownText as NSString).draw(
+                    at: NSPoint(x: alignedTextX, y: textY),
+                    withAttributes: attrs
+                )
+            }
+
+            return true
+        }
+        img.isTemplate = false
+        return img
     }
 
     // A short, menu-bar-sized readout of a source's live value: "CPU 47%", "MEM 63%", "NET ↓3.4 ↑0.1",
@@ -7364,6 +7538,11 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     @objc
     private func selectLabelValue() {
         setLabelMode(.value)
+    }
+
+    @objc
+    private func selectLabelChart() {
+        setLabelMode(.chart)
     }
 
     // Tag is an index into MenuBarLabelSide.allCases — see the Position group's construction.

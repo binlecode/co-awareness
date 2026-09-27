@@ -485,7 +485,7 @@
   .readout-grid{display:grid; grid-template-columns:1.02fr .98fr; gap:28px; align-items:center}
   .readout-copy p{margin:0 0 16px; font-size:14.5px; color:var(--fg-soft); line-height:1.55; max-width:48ch}
   .readout-copy p b{color:var(--fg); font-weight:600}
-  /* segmented control — mirrors the Menu Bar Label submenu (Off / Live Value / Custom Text) */
+  /* segmented control — mirrors the Menu Bar Label submenu (Off / Live Value / Trace Chart / Custom Text) */
   .seg{display:inline-flex; background:var(--surface-2); border:1px solid var(--hair); border-radius:999px;
     padding:3px; gap:3px; margin-bottom:14px}
   .seg button{font-family:var(--mono); font-size:12px; letter-spacing:.02em; color:var(--fg-soft);
@@ -517,6 +517,9 @@
     font-variant-numeric:tabular-nums; white-space:nowrap; margin-right:10px;
     opacity:0; transition:opacity .25s}
   .label-slot.on{opacity:1}
+  .label-slot .mini{display:inline-flex; align-items:flex-end; gap:1px; height:14px; width:45px; vertical-align:middle;
+    border-bottom:1px solid rgba(255,255,255,.18)}
+  .label-slot .mini i{flex:1; border-radius:1px 1px 0 0; opacity:.9}
   .readout-stage .runner-slot{display:inline-flex; align-items:center; margin:0 6px}
   .readout-stage .runner-slot img{height:26px; width:auto; display:block}
   .readout-stage .clock{font-variant-numeric:tabular-nums; font-size:12px; opacity:.9; margin-left:10px}
@@ -706,7 +709,8 @@
         <p>The animation gives you the <b>feel</b>; an optional <b>second menu-bar slot</b> gives you the
           <b>figure</b>. Set <span class="mono">--label&nbsp;value</span> and it prints the active source’s
           live reading — <span class="mono">CPU&nbsp;47%</span>, <span class="mono">NET&nbsp;↓3.4&nbsp;↑0.1</span> —
-          refreshed on the same tick as the icon. Set <span class="mono">--label&nbsp;&lt;text&gt;</span> for a
+          refreshed on the same tick as the icon. <span class="mono">--label&nbsp;chart</span> puts the last 60&nbsp;seconds
+          there instead — the dropdown’s sparkline, shrunk to menu-bar size. Set <span class="mono">--label&nbsp;&lt;text&gt;</span> for a
           fixed tag (handy for telling two instances apart). It’s a real status item in the native menu-bar
           font — never text baked onto the tiny icon.</p>
         <p>Its slot is a <b>fixed width</b>, sized for the widest reading it could ever show, with the digits
@@ -719,6 +723,7 @@
         <div class="seg" role="group" aria-label="Menu Bar Label mode">
           <button type="button" data-mode="off" aria-pressed="false">Off</button>
           <button type="button" data-mode="value" aria-pressed="true">Live Value</button>
+          <button type="button" data-mode="chart" aria-pressed="false">Trace Chart</button>
           <button type="button" data-mode="custom" aria-pressed="false">Custom Text</button>
         </div>
         <p class="readout-note">…and the dropdown is a live dashboard: a 60-second sparkline, per-source
@@ -1302,10 +1307,20 @@
   }
   renderMark();
 
-  // menu-bar label — mirrors the Menu Bar Label submenu (off / live value / custom text)
+  // menu-bar label — mirrors the Menu Bar Label submenu (off / live value / trace chart / custom text)
   var segBtns=document.querySelectorAll('#readout .seg button');
   var labelSlot=document.getElementById('labelSlot');
   var labelCap=document.getElementById('labelCaption');
+  var trace=[22,26,30,28,34,40,52,48,44,58,66,72,63,55,49,44,47,51,46,42,38,45,50,47];
+  function traceBars(){
+    var html='';
+    for(var t=0;t<trace.length;t++){
+      var u=trace[t];
+      var col=u<45?'var(--river)':(u<70?'var(--lantern)':'var(--ember)');
+      html+='<i style="height:'+Math.max(u,8)+'%;background:'+col+'"></i>';
+    }
+    return html;
+  }
   function setLabelMode(mode){
     for(var i=0;i<segBtns.length;i++){
       segBtns[i].setAttribute('aria-pressed', segBtns[i].getAttribute('data-mode')===mode?'true':'false');
@@ -1316,6 +1331,9 @@
     } else if(mode==='value'){
       if(labelSlot){ labelSlot.textContent='CPU 47%'; labelSlot.classList.add('on'); }
       if(labelCap) labelCap.textContent='live value — the active source, on the 2s tick';
+    } else if(mode==='chart'){
+      if(labelSlot){ labelSlot.innerHTML='<span class="mini">'+traceBars()+'</span>'; labelSlot.classList.add('on'); }
+      if(labelCap) labelCap.textContent='trace chart — the last 60s of the active source';
     } else {
       if(labelSlot){ labelSlot.textContent='BUILD'; labelSlot.classList.add('on'); }
       if(labelCap) labelCap.textContent='custom text — a fixed tag, up to 24 chars';
@@ -1328,15 +1346,6 @@
 
   // dashboard sparkline — a curated 60s trace (green/amber/vermilion by the same load thresholds)
   var spark=document.getElementById('dashSpark');
-  if(spark){
-    var trace=[22,26,30,28,34,40,52,48,44,58,66,72,63,55,49,44,47,51,46,42,38,45,50,47];
-    var html='';
-    for(var t=0;t<trace.length;t++){
-      var u=trace[t];
-      var col=u<45?'var(--river)':(u<70?'var(--lantern)':'var(--ember)');
-      html+='<i style="height:'+Math.max(u,8)+'%;background:'+col+'"></i>';
-    }
-    spark.innerHTML=html;
-  }
+  if(spark) spark.innerHTML=traceBars();
 })();
 </script>

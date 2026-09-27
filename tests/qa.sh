@@ -277,6 +277,7 @@ run "show-all-sources (env)"   "" env CO_AWARENESS_SHOW_ALL=1 $BIN --load-source
 # result back off the bar, §3b launches a custom one and asserts what it persisted, and every §3f arm
 # carries --no-update-check. A clean-launch row for them would only restate those.
 run "wide preset + label"      "" $BIN totoro-group-white --label NET --load-source network
+run "trace chart label"          "" $BIN --label chart
 run "custom path + memory"     "" $BIN "$GIF" --load-source memory
 run "env LOAD_SOURCE"          "" env CO_AWARENESS_LOAD_SOURCE=network $BIN
 run "env PATH=<gif>"           "" env CO_AWARENESS_PATH="$GIF" $BIN --load-source disk
@@ -598,6 +599,8 @@ sp(){ desc="$1"; expect="$2"; shift 2
 rm -f "$SF"
 sp "explicit --label value persists"  value  $BIN --label value
 sp "restored on relaunch, no flag"    value  $BIN
+sp "explicit chart persists"          chart  $BIN --label chart
+sp "chart restored"                   chart  $BIN
 sp "explicit off suppresses saved"    off    $BIN --label off
 sp "custom text persists"             custom $BIN --label "build box"
 sp "custom text restored"             custom $BIN
