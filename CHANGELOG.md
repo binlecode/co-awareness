@@ -34,6 +34,20 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.1.0] - 2026-09-26
+
+### Added
+
+- **`--label chart`: the last 60 seconds, on the menu bar.** The label slot could show a number or
+  a fixed tag, but a single reading can't tell you whether a spike is just starting or already over,
+  and the dropdown's sparkline only showed that after a click. A new label mode, **Trace Chart**
+  (`--label chart`, `CO_AWARENESS_LABEL=chart`, or Settings ▸ Menu Bar Label), draws the active
+  source's load history as a 45 pt bar sparkline in the adjacent slot. It uses the same
+  green/amber/red thresholds as the dropdown (inverted for battery) and redraws on the same 2 s tick.
+  The slot keeps a fixed width, so nothing beside it moves; a Keep Awake countdown sits next to the
+  chart, closest to the icon, in the Keep Awake tint. Remembered across relaunches like the other modes.
+  `chart` is now a reserved keyword, so a custom label reading literally "chart" can't be expressed.
+
 ## [2.0.1] - 2026-09-22
 
 ### Changed
