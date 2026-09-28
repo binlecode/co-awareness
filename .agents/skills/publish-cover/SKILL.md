@@ -1,6 +1,6 @@
 ---
 name: publish-cover
-description: Publish or redeploy the marketing/design cover page (docs/cover.html) to Cloudflare Pages as <project>.pages.dev. Use when asked to publish, redeploy, or update the cover / landing / web page, or after cutting a release when the cover's version badge or embedded GIFs changed. Builds + audits the deploy bundle and deploys it, all automatically — wrangler runs on stored OAuth creds, but every wrangler line needs `env -u CLOUDFLARE_API_TOKEN` (see §2). Only a fresh login is a human step.
+description: Publish or redeploy the marketing/design cover page (docs/cover.html) to Cloudflare Pages as <project>.pages.dev. Use when asked to publish, redeploy, or update the cover / landing / web page, or after cutting a release when the cover's version badge or embedded GIFs changed. Builds + audits the deploy bundle and deploys it, all automatically — wrangler runs on stored OAuth creds, but every wrangler line needs `env -u CLOUDFLARE_API_TOKEN` (see §2). If auth is expired, immediately launches `wrangler login` in background and opens the OAuth page in browser.
 ---
 
 # Publish the web cover
@@ -15,9 +15,11 @@ Live URL: `https://co-awareness.pages.dev`. Scripts live in `scripts/` next to t
 ## What I can and can't do
 
 - **Build + audit the bundle: automated** — run `scripts/build-cover-dist.sh` (below). Safe, deterministic.
-- **Deploy: automated too, as long as auth is already on disk** — stored OAuth creds (§2) deploy fine
-  non-interactively. Only a *fresh login* is a human step: if §2's `whoami` shows no valid creds,
-  build + audit, then hand the user the login command to run via `!` — never attempt the login itself.
+- **Deploy: automated end-to-end** — stored OAuth creds (§2) deploy non-interactively. If `whoami`
+  shows creds are expired or missing, **immediately open the login page**: launch
+  `env -u CLOUDFLARE_API_TOKEN npx wrangler login` in a background job (`run_in_background: true`),
+  read the auth URL from `job_output`, and open it in the default browser (`open "<url>"`). As soon
+  as the background job completes with `exit 0`, proceed straight to deployment.
 
 ## 0. Decision gate (read first)
 
@@ -61,10 +63,20 @@ env -u CLOUDFLARE_API_TOKEN npx wrangler whoami    # expect: "logged in with an 
 env -u CLOUDFLARE_API_TOKEN npx wrangler pages deploy tmp/cover-dist --project-name=co-awareness --commit-dirty=true
 ```
 
-Only if `whoami` shows no OAuth creds is a login needed — that one is the human's (`env -u
-CLOUDFLARE_API_TOKEN npx -y wrangler login`, browser OAuth). Fixing the env token instead (grant it
-Account → Cloudflare Pages → Edit, plus `CLOUDFLARE_ACCOUNT_ID`, since it can't enumerate accounts) is
-a valid alternative, but it's the owner's call — that token is scoped for something else.
+### When auth is expired or missing: open login page immediately
+
+If `whoami` reports that the token has expired (`Not logged in. Your auth token has expired...`) or no valid OAuth creds exist:
+1. **Launch `wrangler login` in background**:
+   Run `env -u CLOUDFLARE_API_TOKEN npx wrangler login` in a background job (`run_in_background: true`).
+2. **Open the browser login page immediately**:
+   Read `job_output` to obtain the OAuth URL, and immediately execute `open "<auth_url>"` so the user's browser opens the Cloudflare authorization page without delay.
+3. **Wait for login completion**:
+   When the user completes authorization in the browser, the background job settles with `exit 0` (`Successfully logged in`), storing the fresh token to `~/Library/Preferences/.wrangler/config/default.toml`.
+4. **Deploy immediately**:
+   Proceed directly to:
+   ```bash
+   env -u CLOUDFLARE_API_TOKEN npx wrangler pages deploy tmp/cover-dist --project-name=co-awareness --commit-dirty=true
+   ```
 
 The `co-awareness` project exists; re-running the deploy line redeploys to the same URL. Recreating it
 (new name, new account) needs `--force` **once**, at create time only: wrangler 4.13x delegates `pages`
