@@ -34,6 +34,20 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.2.1] - 2026-09-28
+
+### Changed
+
+- **Menu structure simplification**: eliminated the intermediate `Settings ▸` submenu wrapper.
+  `Battery Threshold` is now a standalone root-level submenu with nested value selection, and
+  `Start at Login` is a direct root-level toggle.
+
+### Removed
+
+- **Manual Freeze Animation**: removed the manual `Freeze Animation` menu toggle and its
+  `state.json` persistence (`settings.freezeAnimation`). System Reduce Motion accessibility
+  continues to be honored live.
+
 ## [2.2.0] - 2026-09-27
 
 ### Added

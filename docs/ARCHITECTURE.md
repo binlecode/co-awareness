@@ -639,13 +639,13 @@ The engine reduces its own footprint under thermal or battery strain.
               +--------------------------------+--------------------------------+
               |                                |                                |
               v                                v                                v
-   [Occlusion State Change]       [Thermal / Power / Memory]         [Reduce Motion Toggle]
- (NSWindow Occlusion Notification)  (ProcessInfo / DispatchSource)   (NSWorkspace / Menu Toggle)
+   [Occlusion State Change]       [Thermal / Power / Memory]         [Reduce Motion Change]
+ (NSWindow Occlusion Notif.)    (ProcessInfo / DispatchSource)      (NSWorkspace Notif.)
               |                                |                                |
               v                                v                                v
-    Is Fully Occluded?              Is Under Power Pressure?             Is Animation Frozen?
+    Is Fully Occluded?              Is Under Power Pressure?             Is Reduce Motion Active?
      * Notch Coverage               * Low Power Mode                     * System Reduce Motion
-     * Inactive Space               * Thermal Serious/Critical           * Manual Settings Toggle
+     * Inactive Space               * Thermal Serious/Critical           * Display Setting
      * Display Sleep                * Memory Warning/Critical                   |
               |                                |                                |
               v                                v                                v
@@ -677,12 +677,11 @@ It also closes a gap: `throttleStatusItem` is set only in the `isAutoSpeed` bran
 
 **Wiring invariant.** `loadReductionReasons` and `isUnderPowerPressure` read `ProcessInfo.thermalState` directly and must never consult `KernelThermalPressure`. The type is display-only, which is what keeps its `CO_AWARENESS_FORCE_THERMAL` hook an input simulator rather than a hook that moves a business decision (§ 10). `CO_AWARENESS_LOG_THERMAL` prints the level, the derived gate, the row it produced and the self-throttle row's state together, so a headless test asserts the separation instead of trusting it.
 
-### 5.3 Reduce Motion & Manual Freeze
+### 5.3 Reduce Motion
 
 - **System Accessibility:** Listens for `NSWorkspace.accessibilityDisplayOptionsDidChangeNotification` to observe `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion`.
-- **Manual Toggle:** `Settings ▸ Freeze Animation` (persisted in `state.json`).
-- **Unified Decider (`syncGameLoopRunning()`):** If either system reduce motion or manual freeze is active, the game loop stops, holding the current frame.
-- **Label Handoff:** While frozen, if the display mode is `.gif`, it automatically switches to `.value` mode temporarily so the user still receives live telemetry.
+- **Unified Decider (`syncGameLoopRunning()`):** While system reduce motion is active, the game loop stops, holding the current frame.
+- **Label Handoff:** While frozen under Reduce Motion, if the display mode is `.gif`, it automatically switches to `.value` mode temporarily so the user still receives live telemetry.
 
 ---
 
@@ -712,7 +711,7 @@ Only ONE representation is active at any time:
 - `.gif` (Default): Shows the animated runner GIF. The CADisplayLink game loop runs.
 - `.trace`: Shows the compact 12-slot desaturated mineral sparkline chart (Sage/Sand/Terracotta). The game loop is stopped (0% CPU).
 - `.value`: Shows the live monospaced telemetry reading (e.g. `CPU 45%`). The game loop is stopped (0% CPU).
-- **Freeze Handoff:** While frozen with mode set to `.gif`, the item temporarily hands off to `.value` mode so the user receives live telemetry.
+- **Freeze Handoff:** Under system Reduce Motion with mode set to `.gif`, the item temporarily hands off to `.value` mode so the user receives live telemetry.
 
 ### 6.2 Zero-Jitter Reservation Guarantee
 
@@ -988,8 +987,7 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
   },
   "settings": {
     "displayMode": "gif",
-    "batteryThreshold": 0.20,
-    "freezeAnimation": false
+    "batteryThreshold": 0.20
   }
 }
 ```

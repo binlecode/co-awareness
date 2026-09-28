@@ -7,7 +7,7 @@
 Small macOS menu bar app that renders an animated GIF in the status bar.
 Animation speed automatically adapts to a system load source (CPU by default; also memory, DRAM bus bandwidth, GPU, network, disk, fan, battery, die temperature, or Neural Engine power — see Load source below).
 
-Current version: **2.2.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
+Current version: **2.2.1** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
 **Cover page:** [co-awareness.pages.dev](https://co-awareness.pages.dev)
 
@@ -141,7 +141,7 @@ the Background"** — not the top "Open at Login" list, which is only for `.app`
 
 Uninstall is the exact inverse and leaves no residue (deregisters the agent, deletes the plist + log).
 
-You can also toggle it from the menu: **Settings ▸ "Start at Login"** — no terminal needed.
+You can also toggle it from the menu: **"Start at Login"** — no terminal needed.
 
 ### Upgrading vs. reconfiguring the login item
 
@@ -265,7 +265,7 @@ source, refreshed while it's open:
 
 - **Source list** — unified list of every available telemetry monitor (`CPU`, `Memory`, `GPU`, `Network`, `Disk`, `Fan`, `Battery`, `Temperature`, `ANE`, `Memory Bandwidth`), each displaying its live readout. Hovering or clicking any source opens its submenu offering three display representations: **Runner GIF**, **Trace Chart**, or **Live Value**.
 - **Animation & Width status** below — speed multiplier, self-throttling reason (when active), and status item width.
-- A **Settings** submenu (**Battery Threshold**, **Freeze Animation**, **Start at Login**), a **Keep Awake** submenu, and a **Presets** submenu.
+- A **Keep Awake** submenu, a **Battery Threshold** submenu, a **Presets** submenu, and a **Start at Login** toggle.
 
 ### Battery health, cycles, and capacity
 
@@ -437,8 +437,8 @@ doesn't reboot the Mac. If you pass both `--keep-awake` and `--keep-awake-pid`, 
 CO_AWARENESS_BATTERY_THRESHOLD=10 ./co-awareness
 ```
 
-Also settable from the menu: `Settings ▸ Battery Threshold` offers 10 / 15 / 20 / 30%, `Never`, and a
-`Custom…` percent prompt, with the current value in the parent row's title. A change there applies
+Also settable from the menu: `Battery Threshold` offers 10 / 15 / 20 / 30%, `Never`, and a
+`Custom…` percent prompt, with the current value in the menu row's title. A change there applies
 immediately — a Keep Awake window that is already running picks up the new release point without
 waiting for the next battery event.
 
@@ -491,8 +491,8 @@ active preset, and the current load level:
 - **CPU:** ~0.4–0.9% of one core while the icon is animating and visible; **0% when hidden** (the game
   loop stops when the item is occluded by the notch, a full-screen app, or an inactive Space). Usage
   scales with the animation rate — lower at light load — and is capped at half speed under Low Power
-  Mode / thermal / memory pressure. `Settings ▸ Freeze Animation` — or the system **Reduce Motion**
-  accessibility setting, which the app honors — stops the animation entirely: the icon holds its
+  Mode / thermal / memory pressure. The system **Reduce Motion**
+  accessibility setting, which the app honors, stops the animation entirely: the icon holds its
   current frame and the status bar temporarily shows the live value instead.
 - **Memory:** ~10 MB at launch, ~20–24 MB once the menu (with its live load-history graph) has been
   opened — essentially the AppKit framework floor for a menu-bar app.
@@ -530,10 +530,8 @@ Click the menu bar item — the creature, trace chart, or value slot — to open
 - `Load Avg (1/5/15m)` — 1, 5, and 15-minute system load averages.
 - `Speed Multiplier` (shows the active load source and mode; a separate `Slowing animation — <cause>` line appears only when a self-throttle condition is active, naming the cause: thermal throttling, Low Power Mode, or memory pressure)
 - `Width` (read-only: shows the item width in points and the aspect ratio; not configurable)
-- `Settings` (submenu) — where preferences live, so they don't crowd the top level
-  - `Battery Threshold` -> `10%` / `15%` / `20%` / `30%` / `Never` / `Custom…` (any whole percent from 6 to 100). The charge at which Keep Awake stops holding the Mac awake on battery; 20% by default, and the parent title shows the current setting. `Never` means it never releases on charge alone — **below 5% the Mac still sleeps regardless**, so that is not a way to run the battery flat. A change takes effect immediately, including on a window that is already armed. **Remembered across relaunches**, and settable at launch via [`--battery-threshold`](#the-battery-release-point---battery-threshold) / `CO_AWARENESS_BATTERY_THRESHOLD`, which wins over the saved value for that run
-  - `Freeze Animation` — stops the animation entirely and holds the current frame (zero redraws, less than even the slowest animation costs). So the indicator never goes silent, while it's frozen in GIF mode the status bar temporarily shows the live value instead — your saved mode choice is untouched. Also engages automatically while the macOS accessibility setting **Reduce Motion** (System Settings → Accessibility → Display) is on: the row then reads `Freeze Animation — on via Reduce Motion`, and its checkmark keeps showing your own toggle, which stays editable underneath. **Remembered across relaunches.**
-  - `Start at Login` — toggles launchd user LaunchAgent.
+- `Battery Threshold` (submenu) -> `10%` / `15%` / `20%` / `30%` / `Never` / `Custom…` (any whole percent from 6 to 100). The charge at which Keep Awake stops holding the Mac awake on battery; 20% by default, and the root menu title shows the current setting. `Never` means it never releases on charge alone — **below 5% the Mac still sleeps regardless**, so that is not a way to run the battery flat. A change takes effect immediately, including on a window that is already armed. **Remembered across relaunches**, and settable at launch via [`--battery-threshold`](#the-battery-release-point---battery-threshold) / `CO_AWARENESS_BATTERY_THRESHOLD`, which wins over the saved value for that run.
+- `Start at Login` — toggles launchd user LaunchAgent.
 - `Keep Awake` (submenu) — keeps the Mac awake while the app runs by spawning `caffeinate -di -w <pid>` (prevents both display and idle system sleep — an idle-only assertion is unreliable on modern macOS, where the system follows the display into sleep). Bound to the app's PID, so it's reaped automatically on crash/quit. Auto-disengages on low battery (≤20% on battery by default — movable with [`--battery-threshold`](#the-battery-release-point---battery-threshold)) or serious/critical thermal state, and re-engages when the condition clears. A thin track line along the icon's bottom edge shows while it's actively keeping the Mac awake, and in Live Value or Trace Chart mode the item wears the same tint for as long as it runs. **When it's paused, it says so without you opening anything:** the line stays, dimmed further — armed but not currently holding — so a window that released itself overnight doesn't look like one you never switched on. In the menu the `Keep Awake` row reads `(paused)` and the submenu tells you why — `paused — battery low (15%)`, `paused — battery critical (4%)`, or `paused — Mac is too warm`. **Turning Keep Awake on from the menu while the battery is already low overrides the battery pause** — an explicit arm is honored rather than silently doing nothing — down to a hard 5% floor, where it releases regardless so an override can't drain the Mac to a power-off. The override lasts for that session only: it isn't saved, and `--keep-awake` doesn't set it, since that flag can be baked into the login item and fires with nobody present to weigh a low battery against the task. A thermal pause is never overridable. The submenu holds two radio groups. The first is **Off** plus five track-line colors (**Dusty Teal**, the default, **Sand**, **Graphite**, **Mauve**, **Sage**): picking a color turns Keep Awake on with that tint, **Off** turns it off. The second is **Duration** — the timed release: **Until turned off** (the default), **30 minutes**, **1 hour**, **2 hours**, **4 hours**, **8 hours**, or **Custom…** (hours + minutes, up to 24 hours). Picking any duration also turns Keep Awake on, so arming a window is one click. **Option-clicking the menu bar item skips the menu entirely:** ⌥-click the creature (or either number slot) to turn Keep Awake on and off in place. On arms it with no window — the same as **Until turned off** — unless a window is already running, in which case ⌥-click releases that too, along with the low-battery override it was granted. A plain click still opens the menu, and so does a right- or Control-click; ⌘-drag still rearranges the item. Everything the menu enforces the gesture enforces: the battery pause, the override rule, and the 5% floor. With a window armed it's a real countdown: the `Keep Awake` row reads `Keep Awake: 29:24` and the submenu shows `29:24 left (until 8:18 PM)` — time remaining at seconds resolution plus the wall-clock moment it ends, ticking every second while the menu is open. **The countdown also runs on the menu bar itself, so the remaining time is a glance rather than a click:** the countdown sits cleanly beside the active element (`29:58` beside the runner GIF or trace chart, or `CPU 45%  29:58` in live value mode) in the Keep Awake tint — the paused tone while a condition has the hold suspended — and collapses back to nothing when the window ends or you turn it off. The slot reserves room for the widest form it can reach, so the ticking digits move nothing around them. An indefinite or process-bound hold shows no countdown, having no clock to show. When it elapses `caffeinate` exits on its own, Keep Awake returns to **Off**, and the Mac is free to sleep — handy for a long unattended task you won't be awake to babysit. The window is a *time* promise, not a *task* promise: it releases whether or not your job finished. An armed window **survives a relaunch or a reboot** — it is saved as the moment it ends, so what comes back is the remainder, not a fresh window, and a window that elapsed while the app was down does not come back at all. Also armable at launch with `--keep-awake` (see below). **The submenu's first row answers "is my Mac being held awake right now?" — by anything, not just by this app.** That is the question the menu used to get wrong: start `caffeinate -di -t 30m` in a terminal, or leave another utility holding sleep, and every Keep Awake surface here read `Off` while your Mac stayed up. Now the row reads `Mac held awake — this app · 29:24` when it's ours, `Mac held awake — caffeinate · until 8:18 PM` when it's someone else's (naming the holder, and its release time when it has one), `Idle sleep held, display is not — the Mac may still sleep` when what's held won't actually keep the Mac up, or `Nothing holding sleep`. The track line and the item tint follow it, so a hold you didn't start is visible without opening the menu — **faded** rather than solid, because only *this app's* hold is one the `Off` row can release. Two things it deliberately does not do: it never ticks a color row on someone else's behalf (that would make `Off` a button that can't turn off what it appears to describe), and it never promises your Mac won't sleep — clamshell, your `pmset` settings and the 5% battery floor are all invisible to it, so it names what is *holding* sleep and stops there.
 
 **The submenu's last section, `Other Assertions`, names what *else* is holding a sleep assertion** — one row per other process as `owner — AssertionType` (e.g. `caffeinate — PreventUserIdleDisplaySleep, PreventUserIdleSystemSleep ×2`, listing every type that process holds), read from IOKit's public power-management API, or `none`. It answers "the app says Off, so why isn't my Mac sleeping?" — the case that used to leave the menu truthful about itself and silent about the machine. It reports the **observation, not a conclusion**: an assertion is not proof the Mac can't sleep (`PreventUserIdleSystemSleep` alone doesn't hold the *display*, and the system follows the display down — which is why this app spawns `-di`), so the rows name the holder and the type and stop there. Cross-check any row with `pmset -g assertions`, which prints the same type strings. This app's own `caffeinate` is never listed — the countdown row above already reports it. Read-only: there is no button here to kill anything.
@@ -593,7 +591,7 @@ Coverage is split into explicit tiers around one question — **does the check b
 | Tier | Sections | Needs a GUI session? | Role |
 |---|---|---|---|
 | `core` | §1 build (warning-clean) · §2 CLI/version · §2a `--once` snapshot · §2b `--status` | No | Primary gate — must pass before a release; headless-safe |
-| `gui` | §3 launch lifecycle · §3a–§3i Keep Awake / persistence / status item geometry / sleep assertions / freeze / battery diagnostics / kernel thermal · §3j `--status` against a live instance · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
+| `gui` | §3 launch lifecycle · §3a–§3i Keep Awake / persistence / status item geometry / sleep assertions / animation driver / battery diagnostics / kernel thermal · §3j `--status` against a live instance · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
 | `launcher` | §6 launcher + singleton (disruptive `pkill`) | — | Manual — run locally before a release |
 | manual | the menu walk + the eyes-only checks — never scripted | — | Hands and eyes; a NOTE in the tiers above is an unanswered case, not a pass |
 

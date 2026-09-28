@@ -10,7 +10,7 @@ import QuartzCore
 // Human-facing app version (semver). Surfaced in --help and the About dialog, and the anchor for
 // CHANGELOG.md releases. Bump this together with a new CHANGELOG entry and git tag.
 private enum AppInfo {
-    static let version = "2.2.0"
+    static let version = "2.2.1"
     static let name = "co-awareness"
     static let tagline = "An animated GIF in the macOS menu bar, its playback speed driven by live system load."
     static let copyright = "© 2026 Bin Le"
@@ -734,10 +734,7 @@ private enum MenuTitle {
     // progress on a known thing rather than an unexplained wait — it can run for a minute.
     static func building(_ tag: String) -> String { "Building \(tag)…" }
 
-    // Parent row for menu-driven preferences (the menu-bar label and the battery release threshold).
-    static let settings = "Settings"
-
-    // Keep Awake's battery release threshold (under Settings ▸). The "never release on charge" value is
+    // Keep Awake's battery release threshold. The "never release on charge" value is
     // spelled **Never** here and `off` on the CLI, deliberately: the Keep Awake submenu already has an
     // Off row that means something else entirely (disarm keep-awake), and a second Off two rows away
     // meaning "disarm the *threshold*" is the kind of collision a user reads wrong once and distrusts
@@ -757,14 +754,8 @@ private enum MenuTitle {
     static let displayGifItem = "Runner GIF"
     static let displayTraceItem = "Trace Chart"
     static let displayValueItem = "Live Value"
-    static let valueWhileFrozen = " (value while frozen)"
 
-    // Settings ▸ Freeze Animation. "Freeze", not "Pause": Keep Awake already uses "(paused)" for a
-    // condition-suspend, and the collision would make one word mean two mechanisms. The second form is
-    // the same row while the OS setting holds — the checkmark keeps showing intent, the title names
-    // the condition.
-    static let freezeAnimation = "Freeze Animation"
-    static let freezeAnimationViaReduceMotion = "Freeze Animation — on via Reduce Motion"
+    static let startAtLogin = "Start at Login"
 
     // Read-only readouts.
     static let widthPrefix = "Width"
@@ -1247,12 +1238,9 @@ private enum KeepAwakeSuspension: Equatable {
     }
 }
 
-// Why the animation is frozen, when it is. A reason rather than a Bool for the same cause as
-// KeepAwakeSuspension: the two triggers have different owners (the OS vs the user), different
-// persistence (a reading is never persisted; intent always is), and the menu reports which one holds.
+// Why the animation is frozen, when it is.
 private enum AnimationFreeze: Equatable {
     case reduceMotion   // NSWorkspace.accessibilityDisplayShouldReduceMotion — the OS speaks for the user
-    case manual         // the Settings ▸ Freeze Animation toggle
 }
 
 private struct Config {
@@ -1664,10 +1652,6 @@ private struct PersistedState: Codable {
         // is distinct from absent; anything out of band is pulled in by Tuning.clampedBatteryThreshold
         // on the way back in, since a state file is one more untrusted entry point.
         var batteryThreshold: Double?
-        // Settings ▸ Freeze Animation — the MANUAL freeze intent only.
-        // Restores unconditionally. The Reduce Motion half is never persisted: it's an OS reading with
-        // its own owner, re-read fresh at every launch.
-        var freezeAnimation: Bool?
     }
     var version: Int
     var keepAwake: KeepAwake?
@@ -4150,18 +4134,15 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // Presets submenu items: Trace Chart, Live Value, and GIF presets.
     private var traceChartPresetItem: NSMenuItem!
     private var liveValuePresetItem: NSMenuItem!
-    // "Battery Threshold" section in Settings: a disabled group-header row carrying the readout
-    // ("Battery Threshold: 20%") followed by indented radio rows over Tuning.batteryThresholdRows plus
-    // Never and Custom… The rows' tags are indices into that array and are read ONLY by
-    // selectBatteryThreshold, so this tag space is disjoint from the two Keep Awake groups' despite
-    // the numeric overlap — the same arrangement their comments describe.
+    // "Battery Threshold ▸" submenu: Keep Awake's battery release threshold.
+    // A standalone root-level menu item with a nested submenu for value selection.
+    // The rows' tags are indices into Tuning.batteryThresholdRows plus Never and Custom…
+    // and are read ONLY by selectBatteryThreshold, so this tag space is disjoint from the
+    // Keep Awake groups' despite the numeric overlap.
     private var batteryThresholdMenuItem: NSMenuItem!
     private var batteryThresholdItems: [NSMenuItem] = []
     private var batteryThresholdCustomItem: NSMenuItem!
     private static let batteryThresholdNeverTag = -1
-    // Settings ▸ Freeze Animation. Checkmark = manualFreeze (intent); the title names the condition
-    // (" — on via Reduce Motion") while systemReduceMotion holds — see refreshFreezeAnimationState.
-    private var freezeAnimationMenuItem: NSMenuItem!
     private var startAtLoginMenuItem: NSMenuItem!
     private var presetMenuItems: [NSMenuItem] = []
     // In-app update check. `latestKnownVersion` is the newest release tag found on origin (nil until a
@@ -4241,19 +4222,13 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // Read statically once on menuWillOpen; cleared on menuDidClose.
     private var batteryDiagnostics: BatteryDiagnostics?
 
-    // Freeze Animation (R17): stop the frame driver, hold the current frame, hand the reading to the
-    // label. Two triggers over one mechanism.
-    // Intent — the Settings ▸ Freeze Animation toggle. Persisted (settings.freezeAnimation), restored
-    // unconditionally by applyLaunchFreezeState(); mutated only by toggleFreezeAnimation.
-    private var manualFreeze = false
+    // Reduce Motion: stop the frame driver, hold the current frame, hand the reading to the
+    // status item as .value.
     // Cached OS reading — event-driven via accessibilityDisplayOptionsDidChangeNotification, like
     // memoryPressureLevel (no polling; re-read on the notification). Never persisted: it's a reading.
     private var systemReduceMotion = false
-    // The one derivation every consumer reads. reduceMotion outranks manual for reporting only —
-    // if both hold, the OS-imposed one is the one worth naming; behavior is identical either way.
     private var animationFreeze: AnimationFreeze? {
         if systemReduceMotion { return .reduceMotion }
-        if manualFreeze { return .manual }
         return nil
     }
     // Lives on NSWorkspace.shared.notificationCenter, NOT NotificationCenter.default — teardown must
@@ -4519,13 +4494,15 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         infoMenu.addItem(widthStatusItem)
 
         infoMenu.addItem(NSMenuItem.separator())
-        infoMenu.addItem(makeSettingsMenuItem())
-
-        infoMenu.addItem(NSMenuItem.separator())
         infoMenu.addItem(makeKeepAwakeMenuItem())
+        infoMenu.addItem(makeBatteryThresholdMenuItem())
 
         infoMenu.addItem(NSMenuItem.separator())
         infoMenu.addItem(makePresetsMenuItem())
+
+        infoMenu.addItem(NSMenuItem.separator())
+        startAtLoginMenuItem = makeSelectionItem(MenuTitle.startAtLogin, action: #selector(toggleStartAtLogin(_:)))
+        infoMenu.addItem(startAtLoginMenuItem)
 
         infoMenu.addItem(NSMenuItem.separator())
         // Update-check items. `updateItem` is a passive "Update available" line, hidden until a probe
@@ -4544,7 +4521,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // Root items only — anything nested in a submenu sets its own target at construction.
         infoMenu.items.forEach { $0.target = self }
         refreshStartAtLoginState()
-        refreshFreezeAnimationState()
         // All three slots present the same dropdown — clicking the number opens the animation's menu —
         // but none of them OWNS it. A permanently attached `NSStatusItem.menu` makes AppKit handle the
         // mouse-down itself and never fire the button's action, which is the only place the modifier
@@ -4606,8 +4582,8 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // which honestly reads "warming up..." until it has two samples — an unsampled assertion list
         // would render `none`, a wrong answer rather than an absent one.
         sampleOtherAssertions(now: ProcessInfo.processInfo.systemUptime)
-        // Through the freeze-aware gate, not startGameLoop() directly: a launch under Reduce Motion or
-        // with a saved manual freeze must never animate a few frames before the first sync.
+        // Through the freeze-aware gate, not startGameLoop() directly: a launch under Reduce Motion
+        // must never animate a few frames before the first sync.
         syncGameLoopRunning()
         refreshMenuMetrics()
         // One shot, and only under the hook: the menu-open read (§ 4.6) is the only other caller, and a
@@ -4716,46 +4692,27 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
 
     // MARK: - Menu construction
 
-    // "Settings ▸" — the home for menu-driven preferences. Its job is to have somewhere to put the
-    // "Settings ▸" submenu. Holds standing preferences (Battery Threshold, Freeze Animation, Start at Login)
-    // to keep the root menu short.
-    private func makeSettingsMenuItem() -> NSMenuItem {
-        let settingsMenuItem = NSMenuItem(title: MenuTitle.settings, action: nil, keyEquivalent: "")
-        let settingsSubmenu = NSMenu(title: MenuTitle.settings)
-
-        // "Battery Threshold" section: a disabled group-header row carrying the live readout
-        // ("Battery Threshold: 20%"), followed by inline indented selection rows. Flattened into
-        // Settings so the entire menu hierarchy stays strictly within two levels.
+    // "Battery Threshold ▸" submenu: Keep Awake's battery release threshold.
+    // A standalone root-level menu item with a nested submenu for value selection.
+    private func makeBatteryThresholdMenuItem() -> NSMenuItem {
         batteryThresholdMenuItem = NSMenuItem(title: MenuTitle.batteryThresholdPrefix, action: nil, keyEquivalent: "")
-        batteryThresholdMenuItem.isEnabled = false
-        settingsSubmenu.addItem(batteryThresholdMenuItem)
+        let submenu = NSMenu(title: MenuTitle.batteryThresholdPrefix)
 
         for (index, fraction) in Tuning.batteryThresholdRows.enumerated() {
             let item = makeSelectionItem(MenuTitle.batteryThresholdValue(fraction), action: #selector(selectBatteryThreshold(_:)), tag: index)
-            item.indentationLevel = 1
-            settingsSubmenu.addItem(item)
+            submenu.addItem(item)
             batteryThresholdItems.append(item)
         }
 
         let neverItem = makeSelectionItem(MenuTitle.batteryThresholdNever, action: #selector(selectBatteryThreshold(_:)), tag: Self.batteryThresholdNeverTag)
-        neverItem.indentationLevel = 1
-        settingsSubmenu.addItem(neverItem)
+        submenu.addItem(neverItem)
         batteryThresholdItems.append(neverItem)
 
         batteryThresholdCustomItem = makeSelectionItem(MenuTitle.batteryThresholdCustom, action: #selector(promptCustomBatteryThreshold))
-        batteryThresholdCustomItem.indentationLevel = 1
-        settingsSubmenu.addItem(batteryThresholdCustomItem)
+        submenu.addItem(batteryThresholdCustomItem)
 
-        settingsSubmenu.addItem(NSMenuItem.separator())
-        // Plain toggles below the radio-group section. Freeze Animation is a standing preference like
-        // Start at Login (persists, outlives a relaunch), hence Settings and not the root — see R17.
-        freezeAnimationMenuItem = makeSelectionItem(MenuTitle.freezeAnimation, action: #selector(toggleFreezeAnimation(_:)))
-        settingsSubmenu.addItem(freezeAnimationMenuItem)
-        startAtLoginMenuItem = makeSelectionItem("Start at Login", action: #selector(toggleStartAtLogin(_:)))
-        settingsSubmenu.addItem(startAtLoginMenuItem)
-
-        settingsMenuItem.submenu = settingsSubmenu
-        return settingsMenuItem
+        batteryThresholdMenuItem.submenu = submenu
+        return batteryThresholdMenuItem
     }
 
     // "Keep Awake ▸" submenu: one radio group merging the on/off state and the track-line tint.
@@ -4782,7 +4739,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // `pmset -g assertions`. Until v1.19.1 this sat at the BOTTOM, below the controls, which split
         // the machine's story across the submenu with this app's radio groups wedged in between; that
         // sandwich is what made a ticked `Off` under a "Mac held awake" row read as a contradiction.
-        // Still not the root menu — that is the scarce surface (Settings ▸ and Presets ▸ exist to keep it
+        // Still not the root menu — that is the scarce surface (submenus exist to keep it
         // short) and someone wondering about sleep opens this submenu. Kept strictly within two levels —
         // every item is inline in this submenu so tests/menu-dump.applescript covers it completely.
         let assertionsHeaderItem = NSMenuItem(title: MenuTitle.otherAssertions, action: nil, keyEquivalent: "")
@@ -5523,7 +5480,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         refreshKeepAwakeSelectionState()
         refreshUpdateStatus()
         refreshStartAtLoginState()
-        refreshFreezeAnimationState()
         syncKeepAwakeCountdownTicker()
     }
 
@@ -6196,7 +6152,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         let freeze: String
         switch animationFreeze {
         case .reduceMotion: freeze = "reduceMotion"
-        case .manual:       freeze = "manual"
         case nil:           freeze = "none"
         }
         let running = (displayLink != nil || fallbackTimer != nil) ? 1 : 0
@@ -6222,7 +6177,9 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // display-only contract assertable: forcing the level must annotate the usage row while leaving
         // this hidden, since loadReductionReasons reads ProcessInfo.thermalState and never this type.
         let appRow = throttleStatusItem.isHidden ? "hidden" : throttleStatusItem.title
-        let activeRowTitle = sourceMenuItems[activeLoadSource]?.title ?? ""
+        let activeRowTitle = telemetry.hasSample(activeLoadSource)
+            ? usageLineText(for: activeLoadSource)
+            : (sourceMenuItems[activeLoadSource]?.title ?? "")
         fputs("THERMAL pressure=\(pressure.rawValue) throttling=\(pressure.isThrottling) "
               + "source=\(activeLoadSource.key) row=\"\(activeRowTitle)\" app=\"\(appRow)\"\n", stderr)
     }
@@ -6970,19 +6927,16 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
                 settings: PersistedState.Settings(
                     displayMode: displayMode.rawValue,
                     labelMode: nil,
-                    batteryThreshold: keepAwakeBatteryThreshold,
-                    freezeAnimation: manualFreeze
+                    batteryThreshold: keepAwakeBatteryThreshold
                 )
             )
         )
     }
 
-    // Launch-time freeze.
-    // Restores unconditionally from the settings block — no flag exists to defer to. The OS reading is taken
-    // here too, so a launch under Reduce Motion (or with a saved manual freeze) never animates before the
+    // Launch-time reduce motion.
+    // The OS reading is taken here, so a launch under Reduce Motion never animates before the
     // first sync.
     private func applyLaunchFreezeState() {
-        manualFreeze = StateStore.load()?.settings?.freezeAnimation ?? false
         systemReduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
@@ -7166,32 +7120,13 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         persistState()
     }
 
-    // Everything that must react when the effective freeze changes, from either trigger — the
+    // Everything that must react when the effective reduce motion state changes — the
     // conditionsDidChange() shape. Persisting is NOT here: the observer path is a reading, not intent,
     // and persistState() stays gesture-only.
     private func freezeDidChange() {
         syncGameLoopRunning()
         updateDisplaySlot()                  // engage/release the label handoff (resizes the slot)
-        refreshFreezeAnimationState()
         refreshSourceListState()
-    }
-
-    // Checkmark is INTENT (manualFreeze only); the title names the CONDITION while Reduce Motion
-    // holds. The row stays enabled under system RM — intent must stay editable while a condition
-    // holds (the Keep Awake isEnabled-vs-suspension split), or a stale manual freeze gets trapped
-    // behind an OS setting.
-    private func refreshFreezeAnimationState() {
-        freezeAnimationMenuItem?.state = manualFreeze ? .on : .off
-        freezeAnimationMenuItem?.title = systemReduceMotion
-            ? MenuTitle.freezeAnimationViaReduceMotion
-            : MenuTitle.freezeAnimation
-    }
-
-    // The one mutating gesture, and the only persistState() call site this feature adds.
-    @objc private func toggleFreezeAnimation(_ sender: NSMenuItem) {
-        manualFreeze.toggle()
-        freezeDidChange()
-        persistState()
     }
 
     private func isLoginItemEnabled() -> Bool {
