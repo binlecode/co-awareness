@@ -452,7 +452,7 @@ under image-featureprint, saliency, and body-pose inference.
 per call and is effectively the entire per-tick cost (the delta and the single-row scan measure 0.001 ms
 each), which no filtering on this side reduces. Measured on the real binary over a 20-sample window:
 0.40% of a core with `--load-source ane` against 0.12% for `cpu`/`fan` and 0.18% for `temperature`. It is
-paid only when ANE is the active source or the Other Sources list is expanded — active-only sampling is
+paid only when ANE is the active source or during open-menu / `--show-all-sources` sampling — active-only sampling is
 unchanged — and it buys the one signal nothing else in the app can report.
 
 ### 4.6 Battery Telemetry & Static Diagnostics (`BatteryDiagnosticsReader`)
@@ -682,76 +682,90 @@ It also closes a gap: `throttleStatusItem` is set only in the `isAutoSpeed` bran
 - **System Accessibility:** Listens for `NSWorkspace.accessibilityDisplayOptionsDidChangeNotification` to observe `NSWorkspace.shared.accessibilityDisplayShouldReduceMotion`.
 - **Manual Toggle:** `Settings ▸ Freeze Animation` (persisted in `state.json`).
 - **Unified Decider (`syncGameLoopRunning()`):** If either system reduce motion or manual freeze is active, the game loop stops, holding the current frame.
-- **Label Handoff:** While frozen, if the menu bar label is configured to `off`, it automatically switches to `.value` mode temporarily so the user still receives live telemetry.
+- **Label Handoff:** While frozen, if the display mode is `.gif`, it automatically switches to `.value` mode temporarily so the user still receives live telemetry.
 
 ---
 
-## 6. Status Bar Layout & Dual-Slot Label Model
+## 6. Status Bar Layout & Minimalist Single-Item Architecture
 
-To prevent lateral jitter and enable flexible placement, the application implements a dual status-item architecture.
+To align with minimalist design and eliminate dual-slot scattering and lateral jitter, co-awareness uses a unified single status-item architecture.
 
 ```
-                           macOS Menu Bar Item Creation Order
-                   (Oldest Created = Rightmost Placement on Screen)
-                   
-          +---------------------+---------------------+---------------------+
-          |   labelItemRight    |     statusItem      |    labelItemLeft    |
-          |   (Status Item 1)   |   (Status Item 2)   |   (Status Item 3)   |
-          |   Created First     |   Created Second    |   Created Third     |
-          +----------+----------+----------+----------+----------+----------+
-                     |                     |                     |
-                     v                     v                     v
-          [Right Slot (Active)]    [Animated GIF Art]   [Left Slot (Hidden)]
-              length = 87 pt         length = 47 pt         length = 0 pt
+                           macOS Menu Bar Item
+                                    |
+                                    v
+                     +-----------------------------+
+                     |         statusItem          |
+                     |  Single Status Bar Element  |
+                     +-----------------------------+
+                                    |
+            +-----------------------+-----------------------+
+            v                       v                       v
+     [.gif (Default)]        [.trace (Chart)]        [.value (Reading)]
+    Runner GIF Art (Layer)   12-Bar Sparkline (Img)  Live Monospaced Text
+      slotLength() pt          45 pt (+ 4 pt pad)     reserved template pt
 ```
 
-### 6.1 Fixed-Width Reservation & Jitter Elimination
+### 6.1 Mutually Exclusive Display Modes (`DisplayMode`)
 
-Auto-sizing status items causes neighboring items to jitter on every telemetry update. co-awareness guarantees $0\text{ pt}$ jitter:
-1. **Monospaced Digits:** Uses `NSFont.monospacedDigitSystemFont(ofSize:weight:)`.
-2. **Figure Space Padding (U+2007):** Padded with U+2007 (whose glyph width exactly matches numeric digits):
-   ```swift
-   func labelField(_ value: Double, ceiling: Double, decimals: Int) -> String
-   ```
-3. **Reserved Template Width (`labelSlotWidth`):** Computes maximum string dimension based on worst-case template bounds + `Tuning.labelSlotPadding` (4 pt). Slot length is fixed to this reservation.
+Only ONE representation is active at any time:
+- `.gif` (Default): Shows the animated runner GIF. The CADisplayLink game loop runs.
+- `.trace`: Shows the compact 12-slot desaturated mineral sparkline chart (Sage/Sand/Terracotta). The game loop is stopped (0% CPU).
+- `.value`: Shows the live monospaced telemetry reading (e.g. `CPU 45%`). The game loop is stopped (0% CPU).
+- **Freeze Handoff:** While frozen with mode set to `.gif`, the item temporarily hands off to `.value` mode so the user receives live telemetry.
 
-### 6.2 Left/Right Placement Architecture & Menu Bar Congestion
+### 6.2 Zero-Jitter Reservation Guarantee
 
-macOS orders status items right-to-left based on creation time with no reordering API. To allow dynamic side switching at runtime without rebuilding the animation layer:
-- Two label items are allocated at launch: `labelItemRight` (before animation item) and `labelItemLeft` (after animation item).
-- The active side gets the computed reservation length; the inactive side is collapsed to `length = 0`.
-- **Full Bar Adjacency Boundary (Scatter):** macOS owns status-item placement and provides no reorder or relative group-pinning API. Creation order decides *intent*; the WindowServer decides actual screen placement. On crowded menu bars (notably notched built-in displays with high item density), status items may scatter with foreign menu items interleaved between label and icon. The $0\text{ pt}$ jitter guarantee (§ 6.1) remains unaffected; `tests/qa.sh` §3c geometrically detects scatter and emits a `NOTE` rather than a spurious failure, as adjacency cannot be verified on a saturated bar.
+1. **Fixed Template Width:** Each mode holds a constant reserved width. Mode `.value` uses `compactLabelText(..., ceiling: true)` and monospaced digits with U+2007 figure-space padding. Mode `.trace` uses fixed 45 pt plot width (`Tuning.labelChartWidth`). Mode `.gif` uses preset aspect ratio width (`slotLength()`).
+2. **Keep Awake Countdown Integration:** When a windowed Keep Awake is armed (e.g., `29:58`), the countdown timer is displayed beside the active element (e.g., `[GIF]  29:58`, `[Trace]  29:58`, or `CPU 45%  29:58`). The reservation accounts for the template (`88:88` or `88:88:88`), ensuring second-by-second decrements introduce $0\text{ pt}$ lateral shift.
+3. **1-Second Countdown Ticker:** A unified 1-second timer drives live countdown updates while a windowed hold is active, stopping when disarmed or expired.
+4. **Occlusion Gate:** The bar branch of that ticker reads the same `statusItemOccluded` verdict the frame driver does (§5), so a hidden item costs 0 measure/relayout passes per second.
 
-### 6.3 Keep Awake Window Countdown Display
+### 6.3 Click Dispatch & Modifier Routing
 
-When Keep Awake is armed with a windowed duration (`keepAwakeDeadline != nil`):
-- **Menu Bar Presentation:** The countdown timer (`MM:SS` or `HH:MM:SS`) is rendered in the active status bar slot (`activeLabelItem`).
-  - When `labelMode == .off`: The slot dynamically reveals the countdown (e.g., `29:58`), collapsing back to length 0 upon timer expiry or disarming.
-  - When `labelMode == .value`, `.chart`, or `.custom`: Both telemetry/chart/custom text and the countdown are displayed together (e.g., `CPU 45%  29:58` or `[Chart]  29:58` when placed left of the icon, or `29:58  CPU 45%` / `29:58  [Chart]` when placed right), positioning the countdown immediately adjacent to the runner icon.
-- **Zero-Jitter Template Reservation:** `labelSlotWidth` accounts for the countdown template (`88:88` or `88:88:88`), ensuring that second-by-second decrements introduce $0\text{ pt}$ lateral shift.
-- **1-Second Countdown Ticker:** A unified 1-second timer (`syncKeepAwakeCountdownTicker()`) drives live updates while a windowed countdown is active on the bar, stopping when disarmed or expired to preserve the self-throttling footprint.
-- **Occlusion Gate:** The bar branch of that ticker reads the same `statusItemOccluded` verdict the frame driver does (§5), so a hidden item (notch, overflow, another Space, display off) costs 0 measure/relayout passes per second rather than 1 — a countdown exists to be looked at, and an 8-hour window is the case that makes the difference material. The *menu* branch is deliberately ungated: an open menu is its own window, visible whatever the status item is doing. On resume `updateAnimationForOcclusion()` redraws through `refreshKeepAwakeCountdown()` before restarting the timer, so the slot never shows the second it went dark on for up to a tick.
-
-### 6.4 Click Dispatch & Modifier Routing
-
-All three slots present the same `infoMenu`, but none of them owns it. A permanently attached
+The status item presents `infoMenu`, but does not permanently own it. A permanently attached
 `NSStatusItem.menu` makes AppKit handle the mouse-down itself and never fires the button's action —
 which is the only place a modifier can be read — so the menu is attached only for the duration of a
-plain click and each slot carries `handleStatusItemClick(_:)` the rest of the time.
+plain click and the slot carries `handleStatusItemClick(_:)` the rest of the time.
 
 ```
-                [ Click on any of the three status item slots ]
-                                      |
-                                      v
-                       handleStatusItemClick(_:) reads
-                          NSApp.currentEvent modifiers
-                                      |
-                  +-------------------+-------------------+
-                  |                                       |
-        [ leftMouseUp + exactly Option ]        [ anything else ]
-                  |                                       |
-                  v                                       v
-        toggleKeepAwakeQuick()                   presentInfoMenu(from:)
+                 [ Click on status item slot ]
+                               |
+                               v
+                handleStatusItemClick(_:) reads
+                   NSApp.currentEvent modifiers
+                               |
+            +------------------+------------------+
+            |                                     |
+  [ leftMouseUp + exactly Option ]         [ anything else ]
+            |                                     |
+            v                                     v
+  toggleKeepAwakeQuick()                 presentInfoMenu(from:)
+```
+        (no menu is ever shown)                  item.menu = infoMenu
+                  |                              button.performClick(nil)   <- modal
+                  v                              item.menu = nil            <- on close
+        arm/disarm via the submenu's                       |
+        own two functions (§ 7.6)                          v
+                                                 menuWillOpen / menuDidClose
+                                                 fire unchanged (delegate is
+                                                 on the menu, not the item)
+```
+
+- **Why not `popUpMenu(_:)`:** it does the same job without the attach/detach, but has been deprecated
+  since macOS 11 and this build is gated warning-clean (`tests/qa.sh` § 1).
+- **No re-entrancy:** `NSStatusItem` intercepts `performClick` below target/action, so the popup does not
+  re-invoke `handleStatusItemClick`. The button's target/action also survives attaching and detaching
+  `menu`, so there is nothing to re-wire — both verified against the real AppKit on macOS 26, not assumed
+  (the delegate is on the `NSMenu`, not the `NSStatusItem`).
+
+### 6.4 Negative Space & Boundary Contracts
+
+| Design / Feature | Decision | Why Not (Physical / Kernel / WindowServer Reality) | Protected Invariant | Re-Proposal Condition |
+|---|---|---|---|---|
+| **Dual-Slot Menu Bar Item (`labelItemLeft`/`Right`)** | DECLINED | WindowServer owns status-item screen placement and offers no relative group-pinning API. On saturated/notched menu bars, macOS scatters adjacent items, interleaving foreign menu items between icon and label. Furthermore, an idle length-0 item still consumes ~16 pt of system margin. | Zero scatter; zero lateral jitter; single-item minimal status bar footprint. | macOS provides an official, non-deprecated API to atomically pin and group multiple status items together. |
+| **Custom Text Labels (`--label <text>`)** | DECLINED | Arbitrary user string labels introduce non-telemetry visual noise into a dedicated load-monitoring utility, requiring modal prompt dialogs, character length clamps, and complex string sanitization. | Zero non-telemetry noise; single-purpose load visualization. | An explicit multi-instance identification use case that cannot be addressed via preset choice or standard OS notifications. |
+| **Left / Right Slot Position Selection** | DECLINED | Position selection was an artifact of the dual-slot model. With a single unified status item, there is no neighbor to order against. | Interface minimalism; zero redundant configuration knobs. | Multi-slot architecture is reintroduced under a verified grouping API. |
         (no menu is ever shown)                  item.menu = infoMenu
                   |                              button.performClick(nil)   <- modal
                   v                              item.menu = nil            <- on close
@@ -973,8 +987,7 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
     "deadline": 780000000.0
   },
   "settings": {
-    "labelMode": "value",
-    "labelSide": "left",
+    "displayMode": "gif",
     "batteryThreshold": 0.20,
     "freezeAnimation": false
   }
@@ -1160,6 +1173,8 @@ Comprehensive reference of values defined in `Tuning`:
 | `labelSlotPadding` | `4.0` | Points | Slack padding added to reserved status item label widths |
 | `labelChartWidth` | `45.0` | Points | Fixed plot width for the menu bar trace chart (sparkline) |
 | `labelChartHeight` | `14.0` | Points | Plot height for the menu bar trace chart |
+| `labelChartBarCount` | `12` | Count | Number of visible bar slots in status bar trace chart |
+| `labelChartBarWidth` | `2.6` | Points | Width of individual rounded pill bars in status bar trace chart |
 
 ### 11.2 Command-Line Interface (CLI) Parameters
 
@@ -1170,8 +1185,8 @@ Parameters accepted by `co-awareness` and `CoAwareness`:
 | `[preset\|path]` | `horse-white` | Built-in key or `.gif` path | Selects the active runner animation preset or local GIF asset | CLI positional |
 | `--speed-multiplier <x>` | auto-speed | Float (e.g. `0.5`, `1.0`, `2.0`) | Overrides dynamic load scaling with a fixed animation playback speed | binary & launcher |
 | `--load-source <src>` | `cpu` | `cpu` · `memory` · `gpu` · `network` · `disk` · `fan` · `battery` · `temperature` · `ane` · `bandwidth` | Telemetry monitor driving animation rate (§ 4) | binary & launcher |
-| `--show-all-sources` | off | Flag | Expands "Other Sources" dropdown on start, actively sampling all available readers | binary & launcher |
-| `--label <mode>` | `off` | `off` · `value` · `chart` · `<text>` (<= 24 chars) | Configures adjacent menu bar label slot; `value` shows active reading, `chart` shows trace chart, text shows string | binary & launcher |
+| `--show-all-sources` | off | Flag | Continuously samples all available readers even when the menu is closed | binary & launcher |
+| `--display <mode>` | `gif` | `gif` · `trace` · `value` | Selects status-bar representation: animated GIF, trace chart, or live reading | binary & launcher |
 | `--keep-awake <dur>` | `off` | `off` · `on` · `<dur>` (`30m`, `2h`, `1h30m`) | Arms sleep prevention until turned off or until window expires (§ 7.1) | binary & launcher |
 | `--keep-awake-pid <pid>`| off | Positive integer PID | Binds sleep prevention to lifetime of target process; terminates on exit (§ 7.4) | binary & launcher |
 | `--battery-threshold <x>`| `20` | Whole % (`6`–`100`) or `off`/`0` | Charge level where Keep Awake suspends on battery (§ 7.2; floor at 5% is hard) | binary & launcher |
@@ -1192,7 +1207,7 @@ Parameters accepted by `co-awareness` and `CoAwareness`:
 |---|---|---|---|
 | `CO_AWARENESS_PATH` | Path string | unset | Overrides default GIF asset path |
 | `CO_AWARENESS_LOAD_SOURCE` | Source enum | `cpu` | Sets active telemetry monitor driving animation |
-| `CO_AWARENESS_LABEL` | Mode / string | `off` | Sets default menu bar label mode |
+| `CO_AWARENESS_DISPLAY` | Mode | `gif` | Sets default status bar display mode |
 | `CO_AWARENESS_KEEP_AWAKE` | Duration string | `off` | Sets startup Keep Awake hold duration |
 | `CO_AWARENESS_KEEP_AWAKE_PID` | Integer PID | unset | Sets process-bound Keep Awake hold |
 | `CO_AWARENESS_BATTERY_THRESHOLD`| Percentage string | `20` | Sets battery release threshold |

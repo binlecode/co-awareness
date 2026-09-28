@@ -136,8 +136,8 @@ Continuous menu bar animation can consume significant resources under load. Menu
 2. **System pressure capping:** Automatically halves its speed ceiling during thermal pressure, Low Power Mode, or memory constraints.
 3. **Accessibility compliance:** Honors the system **Reduce Motion** setting (freezing on the current frame) and supports manual freeze with automatic telemetry handoff to the label slot. Details: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §3, §5.
 
-### 4.4 Status-Bar Ergonomics: Dedicated Coordinated Slots vs. Baked Overlays
-While peers bake text into rasterized icons or crowd single status items, MenuBar Load Runner utilizes a dual-slot model with coordinated `NSStatusItem` instances. Telemetry labels (`--label value`) and Keep Awake countdowns render in native system typography using reserved template widths and figure spaces (U+2007) to eliminate horizontal jitter. When animation is frozen, the live reading seamlessly transfers to the adjacent label slot. Details: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §6.
+### 4.4 Status-Bar Ergonomics: Dedicated Display Modes vs. Baked Overlays
+While peers bake text into rasterized icons or crowd single status items, co-awareness utilizes mutually exclusive status-bar display modes (GIF, Trace Chart, Live Value) via `--display`. Telemetry values (`--display value`) and Keep Awake countdowns render in native system typography using reserved template widths and figure spaces (U+2007) to eliminate horizontal jitter. When animation is frozen, the live reading seamlessly transfers to the status item. Details: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) §6.
 
 ### 4.5 Integrated Power Supervision: Process-Bound Watch & Assertion Visibility
 Rather than requiring separate sleep inhibitor tools (KeepingYouAwake, adrafinil), sleep supervision is built directly into the telemetry runtime:

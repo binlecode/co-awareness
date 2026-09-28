@@ -706,35 +706,28 @@
     </div>
     <div class="readout-grid">
       <div class="readout-copy">
-        <p>The animation gives you the <b>feel</b>; an optional <b>second menu-bar slot</b> gives you the
-          <b>figure</b>. Set <span class="mono">--label&nbsp;value</span> and it prints the active source’s
-          live reading — <span class="mono">CPU&nbsp;47%</span>, <span class="mono">NET&nbsp;↓3.4&nbsp;↑0.1</span> —
-          refreshed on the same tick as the icon. <span class="mono">--label&nbsp;chart</span> puts the last 60&nbsp;seconds
-          there instead — the dropdown’s sparkline, shrunk to menu-bar size. Set <span class="mono">--label&nbsp;&lt;text&gt;</span> for a
-          fixed tag (handy for telling two instances apart). It’s a real status item in the native menu-bar
-          font — never text baked onto the tiny icon.</p>
-        <p>Its slot is a <b>fixed width</b>, sized for the widest reading it could ever show, with the digits
-          right-aligned in monospaced figures. So the number changes and <b>nothing moves</b> — no creature
-          twitching sideways twice a second. Sits left of the icon by default; <span class="mono">Position</span>
-          puts it on the right if you’d rather have it next to the clock.</p>
-        <p>And it doubles as a second Keep Awake indicator: while the Mac is being held awake the label
-          <b>wears the same tint as the track line</b> under the icon —
-          <a href="#mark">one mark in two places</a>.</p>
-        <div class="seg" role="group" aria-label="Menu Bar Label mode">
-          <button type="button" data-mode="off" aria-pressed="false">Off</button>
-          <button type="button" data-mode="value" aria-pressed="true">Live Value</button>
-          <button type="button" data-mode="chart" aria-pressed="false">Trace Chart</button>
-          <button type="button" data-mode="custom" aria-pressed="false">Custom Text</button>
+        <p>Choose your visual focus: <span class="mono">--display&nbsp;gif</span> shows the animated creature;
+          <span class="mono">--display&nbsp;trace</span> shows a compact post-modern mineral sparkline;
+          <span class="mono">--display&nbsp;value</span> prints the active source’s live reading —
+          <span class="mono">CPU&nbsp;47%</span>, <span class="mono">NET&nbsp;↓3.4&nbsp;↑0.1</span>.
+          Single status item architecture: exactly one representation is active, eliminating clutter and lateral jitter.</p>
+        <p>Its slot maintains a <b>fixed width</b> with zero jitter. When Keep Awake is armed, the countdown timer
+          appears seamlessly beside the active element.</p>
+        <p>And it doubles as a Keep Awake indicator: while the Mac is being held awake the element
+          <b>wears the same tint as the track line</b>.</p>
+        <div class="seg" role="group" aria-label="Display mode">
+          <button type="button" data-mode="gif" aria-pressed="true">Runner GIF</button>
+          <button type="button" data-mode="trace" aria-pressed="false">Trace Chart</button>
+          <button type="button" data-mode="value" aria-pressed="false">Live Value</button>
         </div>
         <p class="readout-note">…and the dropdown is a live dashboard: a 60-second sparkline, per-source
           readouts, and load averages — <code>Other Sources</code> switches what drives it.</p>
       </div>
       <div class="readout-stage">
-        <div class="barmock" role="img" aria-label="A macOS menu bar with a live CPU reading beside the running creature">
+        <div class="barmock" role="img" aria-label="A macOS menu bar with a live status item">
           <span class="apple"></span>
           <span class="mtitle">Terminal</span>
           <span class="spacer"></span>
-          <span class="label-slot on" id="labelSlot">CPU 47%</span>
           <span class="runner-slot"><img src="../gifs/running-horse-white.gif" alt=""></span>
           <span class="clock">Wed 9:41</span>
         </div>
@@ -744,10 +737,10 @@
           <div class="drow"><span class="k">Load avg 1 / 5 / 15m</span><span class="v">2.14 / 1.98 / 1.60</span></div>
           <div class="drow"><span class="k">Speed multiplier (auto)</span><span class="v">1.38×</span></div>
         </div>
-        <span class="caption" id="labelCaption">flip the modes — the slot appears beside the icon</span>
+        <span class="caption" id="labelCaption">flip the display modes — runner GIF, trace chart, or live value</span>
       </div>
     </div>
-    <p class="heroBar cap">Off by default; switchable live from the <span class="mono">Settings&nbsp;▸&nbsp;Menu&nbsp;Bar&nbsp;Label</span> submenu — mode and side, both remembered — or at launch via <span class="mono">--label</span> / <span class="mono">CO_AWARENESS_LABEL</span>.</p>
+    <p class="heroBar cap">Default is runner GIF; switchable live from the <span class="mono">Presets</span> submenu, or at launch via <span class="mono">--display</span> / <span class="mono">CO_AWARENESS_DISPLAY</span>.</p>
   </section>
 
   <section id="cast">
@@ -1048,7 +1041,7 @@
         <div class="fact"><h4>The one reading it refuses to poll</h4><p>Open the menu on a Mac with a battery and it reports <b>health, cycle count and capacity</b> — <span class="mono">100% health · 113 cycles</span>, <span class="mono">Normal · 8478/8579 mAh</span>, with the full breakdown on hover. Read straight from <b><span class="mono">AppleSmartBattery</span></b> in the IORegistry, <b>no privileges, no helper</b>. And unlike every other figure here it is <b>never sampled on a timer</b>: health moves over months, so it's read the moment you open the menu and dropped when you close it. A desktop Mac with no battery sees the menu exactly as it was.</p></div>
         <div class="fact"><h4>Two answers for things without eyes</h4><p>The same ten readers serve a second exit. <span class="mono">--once</span> prints every reading this Mac answers for as <b>one line of JSON in physical units</b> and exits — no menu bar, no state file, no compile, safe beside a running instance and in parallel with itself; a source this machine can't read is an <b>absent key</b>, never a <span class="mono">0</span> standing in for "no reading". <span class="mono">--status</span> answers the question a snapshot structurally can't — <b>is an instance already up, and is it holding the Mac awake</b> — reading the process table and the saved intent, writing neither. Enough for a status line, a shell prompt, or an agent deciding whether to start a 40-minute build.</p></div>
         <div class="fact"><h4>Data-driven presets</h4><p>Keyword, menu title, and speed range all live in <b><span class="mono">presets.json</span></b> (width comes from the GIF's own aspect ratio). Add a preset by editing data — zero Swift changes.</p></div>
-        <div class="fact"><h4>Checks for its own updates</h4><p>On launch it reads your checkout's origin release tags — <b>the only network call the app ever makes</b>. A newer tag shows an <span class="mono">Update available</span> menu item; applying it is a deliberate <b>two-click</b> action (<span class="mono">git pull --ff-only</span>), never automatic. It then <b>compiles the new version while still running</b> — the menu reads <span class="mono">Building v2.1.0…</span> — so the <span class="mono">Restart</span> that follows takes about a second instead of leaving an empty menu bar waiting on a build. Settings and the preset you picked carry over.</p></div>
+        <div class="fact"><h4>Checks for its own updates</h4><p>On launch it reads your checkout's origin release tags — <b>the only network call the app ever makes</b>. A newer tag shows an <span class="mono">Update available</span> menu item; applying it is a deliberate <b>two-click</b> action (<span class="mono">git pull --ff-only</span>), never automatic. It then <b>compiles the new version while still running</b> — the menu reads <span class="mono">Building v2.2.0…</span> — so the <span class="mono">Restart</span> that follows takes about a second instead of leaving an empty menu bar waiting on a build. Settings and the preset you picked carry over.</p></div>
         <div class="fact"><h4>One line in, one line out</h4><p>Install with a single <span class="mono">curl … | bash</span> — it clones, compiles, and symlinks onto your <span class="mono">PATH</span>; <span class="mono">uninstall.sh</span> reverses exactly what it created. <b>Open source (MIT)</b>, no signing or Homebrew.</p></div>
       </div>
     </div>
@@ -1058,7 +1051,7 @@
     <div class="foot">
       <div class="badges">
         <a class="badge badge-link" href="https://github.com/binlecode/co-awareness">github.com/binlecode/co-awareness&nbsp;↗</a>
-        <span class="badge">v2.1.0</span>
+        <span class="badge">v2.2.0</span>
         <span class="badge">MIT · open source</span>
         <span class="badge">Swift · AppKit</span>
         <span class="badge">macOS 14+ · display link</span>

@@ -96,7 +96,7 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 # 启动与运行
 ./co-awareness                       # 默认预设 (horse-white)，后台脱离终端运行
 ./co-awareness --foreground           # 前台运行（查看 stderr / print 输出）
-./co-awareness dog-black --label value   # 指定预设 + 状态栏数值标签
+./co-awareness dog-black --display value   # 指定预设 + 状态栏数值读数
 ./co-awareness --load-source bandwidth    # 以 DRAM 总线带宽 (GB/s) 驱动动画
 ./co-awareness --once                 # 单行 JSON 快照（九路读数，物理单位），随即退出；无 GUI / 无 state.json / 无编译
 ./co-awareness --help
@@ -108,7 +108,7 @@ swiftc -O -strict-concurrency=complete CoAwareness.swift -o tmp/coaware-check  #
 # 自动化测试与调试钩子（均无需 TCC / 辅助功能权限）
 CO_AWARENESS_EXIT_AFTER=5 ./tmp/coaware-check --load-source memory           # 运行 5s 自行退出 (exit 0)
 CO_AWARENESS_FORCE_BATTERY=15:battery ./tmp/coaware-check --keep-awake 30m   # 模拟低电量 / 电池状态
-CO_AWARENESS_LOG_SLOTS=1 ./tmp/coaware-check --label value 2>&1 | grep SLOTS # 打印状态栏槽位屏幕几何与宽度
+CO_AWARENESS_LOG_SLOTS=1 ./tmp/coaware-check --display value 2>&1 | grep SLOTS # 打印状态栏槽位屏幕几何与宽度
 CO_AWARENESS_LOG_ASSERTIONS=1 ./tmp/coaware-check 2>&1 | grep ASSERTIONS     # 打印过滤与防抖后的外部睡眠断言
 CO_AWARENESS_LOG_AWAKE=1 ./tmp/coaware-check 2>&1 | grep AWAKE               # 打印睡眠阻止综合判定与菜单行文本
 CO_AWARENESS_LOG_ANIMATION=1 ./tmp/coaware-check 2>&1 | grep ANIM           # 打印动画冻结状态与游标
@@ -138,7 +138,7 @@ pkill -f 'CoAwareness'                 # 停止当前用户正在运行的实例
 - **ThroughputScaler 速率归一化** (`docs/ARCHITECTURE.md` §4.2)：无界速率（网速/磁盘/swap/电池电流）经自适应滑动窗口归一化到 0..1，双向非对称裕量 + 迟滞计数器防抖；有界百分比与绝对温度映射不走 Scaler。
 - **CADisplayLink 与自限流** (`docs/ARCHITECTURE.md` §3, §5)：屏幕刷新率同步的 vsync 游戏循环；全遮挡（刘海/隐藏/灭屏）时完全暂停渲染（0% CPU）；高热/低电量/内存压力下自动减半自身帧率；尊重系统 Reduce Motion 与手动 Freeze（冻结时读数自动交接给标签栏）。
 - **Keep Awake 睡眠阻止与外部断言嗅探** (`docs/ARCHITECTURE.md` §7)：通过 `SleepPreventer` 启动 `caffeinate -di -w <pid>` 绑定进程生命周期；支持预设/自定义定时窗口（跨重启恢复）；底线 5% 电池保护；通过 `IOPMCopyAssertionsByProcess` 嗅探系统其他进程断言，两段式归因排布（This Mac vs This App）。
-- **双槽位状态栏标签模型** (`docs/ARCHITECTURE.md` §6)：标签采用独立状态栏项而非在 GIF 上烘焙文字；预建左右两个槽位（`labelItemLeft`, `labelItemRight`）以克服 macOS 状态栏槽位不可重排限制，严格采用花样空格（U+2007）预占位防抖。
+- **单状态栏项极简显示架构** (`docs/ARCHITECTURE.md` §6)：状态栏在 Runner GIF (`gif`)、Trace Chart (`trace`) 与实时数值 (`value`) 间严格互斥三选一，彻底消除双槽位散射与视觉杂讯，通过预留宽度与花样空格（U+2007）严格防抖。
 - **状态持久化单点守恒** (`docs/ARCHITECTURE.md` §8.2)：`~/Library/Application Support/co-awareness/state.json` 由 `persistState()` 统一全量写盘，持久化意图（Intent）而非易失运行状态。
 - **预设注册表与自更新** (`docs/ARCHITECTURE.md` §9)：动图配置完全由 `gifs/presets.json` 驱动；自更新先 `git pull --ff-only` 再执行 `--precompile` 原子编译，最后在弹窗提示后由 detached 脚本完成重启。
 

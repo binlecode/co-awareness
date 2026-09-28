@@ -34,6 +34,23 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.2.0] - 2026-09-27
+
+### Added
+
+- **Unified telemetry source list**: The top metrics section and the collapsible "Other Sources" list
+  are merged into a single flat source list at the top of the menu (`CPU`, `Memory`, `DRAM Bandwidth`,
+  `GPU`, `Network`, `Disk`, `Fan`, `Battery`, `Temperature`, `ANE`). Each available source displays its
+  live readout directly. Clicking any row immediately switches the active telemetry monitor driving the
+  status bar item.
+- **Trace Chart and Live Value at the top of Presets**: The `Presets ▸` submenu now features
+  `Trace Chart` and `Live Value` at the top above the GIF presets. Selecting `Trace Chart` or `Live Value`
+  switches the status bar representation directly, while selecting any GIF switches to that animated runner.
+  Mutually exclusive selection checkmarks indicate the active representation.
+- **Single status bar display architecture (`--display`)**: The status bar representation is configured
+  via `--display <gif|trace|value|chart>` or `CO_AWARENESS_DISPLAY`, unifying all visual forms into one
+  slot with zero jitter.
+
 ## [2.1.0] - 2026-09-26
 
 ### Added

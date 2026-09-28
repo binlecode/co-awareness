@@ -7,7 +7,7 @@
 Small macOS menu bar app that renders an animated GIF in the status bar.
 Animation speed automatically adapts to a system load source (CPU by default; also memory, DRAM bus bandwidth, GPU, network, disk, fan, battery, die temperature, or Neural Engine power — see Load source below).
 
-Current version: **2.1.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
+Current version: **2.2.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
 **Cover page:** [co-awareness.pages.dev](https://co-awareness.pages.dev)
 
@@ -229,38 +229,28 @@ gets a narrow item. The current width is shown read-only in the menu (see below)
 ## Menu-bar label (adjacent value / text slot)
 
 ```bash
-./co-awareness --label value      # live reading of the active source, e.g. "CPU 15%"
-./co-awareness dog-black --label BUILD   # a fixed label in its own slot
+./co-awareness --display gif        # animated runner GIF (default)
+./co-awareness --display trace      # compact post-modern load chart
+./co-awareness --display value      # live reading of the active source, e.g. "CPU 15%"
 ```
 
-`--label` adds an optional **second menu-bar slot** next to the animation:
+`--display` chooses the single status-bar representation:
 
-- `--label value` shows the active source's live reading, refreshed on the 2s tick — `CPU 15%`,
+- `--display gif` (the default) shows the animated creature.
+- `--display trace` shows the active source's compact 12-slot post-modern trace chart (sparkline).
+- `--display value` shows the active source's live reading, refreshed on the 2s tick — `CPU 15%`,
   `MEM 63%`, `NET ↓3.4 ↑0.1`, `DSK R12 W4`, `GPU 30%`, `FAN 45%`, `BAT 88%` (MB/s implied for the rate
   sources). The full, fully-labeled figures still live in the dropdown; this is the at-a-glance number.
-- `--label chart` shows the active source's trace chart (sparkline) of recent load history, matching the top row of the menu dropdown.
-- `--label <text>` shows a fixed label (up to 24 chars) — handy for telling apart multiple instances
-  (e.g. one on `--load-source cpu` labeled `CPU`, another on `net` labeled `NET`).
-- `--label off` (the default) shows nothing and claims no extra menu-bar space.
 
-Also settable via `CO_AWARENESS_LABEL`, and switchable at runtime from the menu's **Menu Bar
-Label** submenu (Off / Live Value / Trace Chart / Custom Text…). It renders in the native menu-bar
-font in its own slot rather than being drawn onto the tiny animated icon, so it stays legible.
+**Single representation, zero clutter.** Exactly one visual form appears in the menu bar at a time,
+aligning with the minimalist philosophy and eliminating dual-slot scattering and lateral jitter.
+Also settable via `CO_AWARENESS_DISPLAY`, and switchable at runtime from the menu's **Display Mode**
+submenu (Runner GIF / Trace Chart / Live Value).
 
-**The slot doesn't move.** Its width is fixed for the shape on show — sized once for the widest reading
+**The item doesn't jitter.** Its width is fixed for the mode and shape on show — sized once for the widest reading
 that shape can produce (`CPU 100%`, `NET ↓999.9 ↑999.9`), with the number right-aligned in monospaced
-digits. Nothing resizes as the value changes, so the animation next to it never shifts. (Before this,
-the slot auto-sized: `CPU 9%` → `CPU 100%` widened it, and macOS shifts everything to the *left* of an
-item that resizes, so the creature twitched sideways twice a second.) A rate past its ceiling — over
-999.9 MB/s of network — widens the slot for that tick rather than truncating the number; the figures in
-the dropdown are always exact.
-
-**Position** is yours to choose, in the same submenu: `Left of Icon` (the default) or `Right of Icon`.
-Left keeps the animation where it has always been and grows the label away from it; right puts the
-reading nearer the clock, where the eye already looks for status. Either way it's jitter-free. The
-choice is remembered across relaunches. One asymmetry worth knowing: when the menu bar runs out of room
-macOS hides the leftmost items first, so on a crowded bar the left position risks the *number* being
-clipped and the right position risks the *icon*.
+digits. When windowed Keep Awake is armed (e.g. `29:58`), the countdown timer appears cleanly beside the
+element without lateral shift.
 
 Whenever the track line under the icon is tinted, the label takes the same tint, so the two read as one
 indicator: solid when this app is holding the Mac awake, faded when something else is (a `caffeinate` you
@@ -273,14 +263,9 @@ its `Off` row can release.
 Clicking the status-bar creature opens a menu that doubles as a live readout of the active load
 source, refreshed while it's open:
 
-- **Trace chart** at the top — a small bar chart of the last ~60s of the source's 0–1 driving
-  fraction (the same value that maps to animation speed). Bars are colored by the same Low/Medium/High
-  thresholds as the state line below, so the chart and text agree. The **Battery** source is the
-  exception: it's a charge-level fuel gauge with an inverted ramp — a low battery reads red (≤20%),
-  amber near ~40%, green when healthy — since for battery *low* is the alert, not high. Switching
-  source resets it.
-- **Numeric readouts** below — current usage, state, speed multiplier, and system load average.
-- A read-only **Width** readout, an **Other Sources** collapsible list (the load-source switcher), a **Settings** submenu (currently the **Menu Bar Label**: Off / Live Value / Custom Text), and a **Presets** submenu.
+- **Source list** — unified list of every available telemetry monitor (`CPU`, `Memory`, `GPU`, `Network`, `Disk`, `Fan`, `Battery`, `Temperature`, `ANE`, `Memory Bandwidth`), each displaying its live readout. Hovering or clicking any source opens its submenu offering three display representations: **Runner GIF**, **Trace Chart**, or **Live Value**.
+- **Animation & Width status** below — speed multiplier, self-throttling reason (when active), and status item width.
+- A **Settings** submenu (**Battery Threshold**, **Freeze Animation**, **Start at Login**), a **Keep Awake** submenu, and a **Presets** submenu.
 
 ### Battery health, cycles, and capacity
 
@@ -310,8 +295,7 @@ CO_AWARENESS_LOAD_SOURCE=network ./co-awareness
 `--load-source` (or the `CO_AWARENESS_LOAD_SOURCE` env var) selects which system reader
 drives the animation speed: `cpu` (default), `memory`, `bandwidth`, `gpu`, `network`, `disk`, `fan`, `battery`, `temperature`, or `ane`. Unknown values —
 or a source with no readable hardware on this machine — fall back to `cpu` (unavailable sources are
-disabled in the menu). It can also be switched live by expanding the **Other Sources** list in the menu
-and clicking a reader (see below). All readers are
+hidden in the menu). It can also be switched live by selecting any source and its display option in the menu. All readers are
 unprivileged (no `sudo`); the app only ever *reads* load.
 
 - **cpu** (default): CPU usage across all cores. The menu row also splits it by cluster — `P 12% · E 78%` — because four saturated efficiency cores and four saturated performance cores both read 35%, and they are not the same machine state.
@@ -329,18 +313,15 @@ Without `--speed-multiplier`, animation speed adapts to the selected load source
 ranges are defined in `gifs/presets.json`; edit that file to change a range or add a preset (the app
 loads it at startup). Switching source changes *which* load value is mapped, not the preset's range.
 
-### Other sources (the switcher + multi-metric view)
+### Telemetry sources & display options
 
-The active source is shown on top with the sparkline. Every *other* source lives under the
-**Other Sources** disclosure row in the menu: click the row (▸ / ▾) to expand or collapse an inline
-list of the remaining available readers, each showing its live readout. Clicking a reader's row
-switches the driving source to it — it moves up top and drops out of the list.
+The menu provides a unified list of every available reader. Each row shows that reader's live readout and expands into a submenu with three representations:
 
-By default only the active source is sampled (so the indicator doesn't add to the load it visualizes),
-and the list starts collapsed. Expanding it samples *every* available reader each tick, turning the
-menu into a compact multi-metric monitor; collapsing restores active-only sampling. Launch with the
-list already expanded via `--show-all-sources` (or `CO_AWARENESS_SHOW_ALL=1`). The active source
-still drives the animation; the history sparkline still tracks the active source only.
+- **Runner GIF**: the animated creature whose speed dynamically scales with this source's load.
+- **Trace Chart**: a compact 12-slot sparkline chart rendered in the menu bar.
+- **Live Value**: the monospaced live numeric reading rendered in the menu bar.
+
+Picking any option instantly switches both the active telemetry driver and the status bar representation. By default, inactive readers are only sampled while the menu is open (so the indicator adds zero extra load when closed). Passing `--show-all-sources` (or `CO_AWARENESS_SHOW_ALL=1`) keeps all readers polled continuously.
 
 > How each source is measured, in brief: the percentage-style sources (CPU, GPU, fan) are
 > direct unprivileged reads (CPU smoothed by a short moving average); memory combines the used
@@ -543,21 +524,21 @@ If a detached instance won't stop or a launch silently fails, check `/tmp/co-awa
 
 ## Menu actions
 
-Click the menu bar item — the creature or either number slot — to open:
+Click the menu bar item — the creature, trace chart, or value slot — to open:
 
-- The active source's metric + state line: `CPU Usage (smoothed)` (plus the `P` / `E` cluster split) / `CPU State`; or `Memory` (used-% + swap capacity + swap MB/s when paging) / `Memory Pressure`; or `Memory Bandwidth` (GB/s) / `Memory Bandwidth State`; or `GPU` (plus the `Renderer` / `Tiler` split) / `GPU State`; or `Network` (MB/s) / `Network State`; or `Disk` (MB/s) / `Disk State`; or `Fan` (RPM + %) / `Fan State`; or `Battery` (charge % + discharge A, or `AC` — plus **health % and cycle count** on a Mac with a battery) / `Battery State` (the battery's condition and the capacity behind it, `Normal · 8478/8579 mAh`, in place of the drain band while the menu is open; hover either row for the full breakdown — see [Battery health](#battery-health-cycles-and-capacity)); or `Temperature` (hottest sensor °C + the spread across sensors — or **`Thermal Throttling`** in place of the sensor count once macOS reports serious or critical thermal pressure) / `Temperature State`
-- `Load Avg (1/5/15m)`
+- **Unified Source List** (`CPU`, `Memory`, `GPU`, `Network`, `Disk`, `Fan`, `Battery`, `Temperature`, `ANE`, `Memory Bandwidth`): each available reader displays its live metrics (e.g. `CPU Usage: 14.2% · P 18% · E 6%`, `Memory: 64.0% (10.2 GB)`, `Battery: 85% · AC · 100% health · 113 cycles`). Expanding any source reveals its submenu:
+  - `Runner GIF` / `Trace Chart` / `Live Value` — click any mode to switch the driving source and menu-bar display in one click.
+  - Source-specific diagnostics below a divider: CPU Load Average and state, Memory pressure, Battery diagnostics, etc.
 - `Speed Multiplier` (shows the active load source and mode; a separate `Slowing animation — <cause>` line appears only when a self-throttle condition is active, naming the cause: thermal throttling, Low Power Mode, or memory pressure)
-- `▸ Other Sources` (disclosure row) — click to expand/collapse an inline list of every *other* available reader (`CPU` / `Memory` / `GPU` / `Network` / `Disk` / `Fan` / `Battery` / `Temperature`, minus the active one; sources with no readable hardware are omitted). Each row shows that reader's live readout; clicking it switches the driving source to it (takes effect immediately). Expanding samples every reader each tick; collapsed (the default) samples only the active source. The active source still drives the animation. Launch expanded with `--show-all-sources` / `CO_AWARENESS_SHOW_ALL=1`
-- `Width` (read-only: shows the GIF-derived item width in points and the GIF aspect ratio; not configurable)
+- `Width` (read-only: shows the item width in points and the aspect ratio; not configurable)
 - `Settings` (submenu) — where preferences live, so they don't crowd the top level
-  - `Menu Bar Label` -> `Off` / `Live Value` (the active source's compact live reading in its own slot) / `Trace Chart` (the active source's 60s load history sparkline) / `Custom Text…` (a fixed label, up to 24 chars). Off by default; the parent title shows the current state. **Your choice is remembered across relaunches.** Also settable at launch via `--label` / `CO_AWARENESS_LABEL`, which wins over the saved value for that run — including `--label off`, which starts with no label even if one was saved. Below those, a second group — `Position` -> `Left of Icon` (default) / `Right of Icon` — puts the slot on either side of the animation; it applies immediately, stays set while the label is off, and is remembered across relaunches. Menu-only (no flag), like the Keep Awake tint. The slot's width is fixed either way, so neither side jitters — see [Menu-bar label](#menu-bar-label-adjacent-value--text-slot)
   - `Battery Threshold` -> `10%` / `15%` / `20%` / `30%` / `Never` / `Custom…` (any whole percent from 6 to 100). The charge at which Keep Awake stops holding the Mac awake on battery; 20% by default, and the parent title shows the current setting. `Never` means it never releases on charge alone — **below 5% the Mac still sleeps regardless**, so that is not a way to run the battery flat. A change takes effect immediately, including on a window that is already armed. **Remembered across relaunches**, and settable at launch via [`--battery-threshold`](#the-battery-release-point---battery-threshold) / `CO_AWARENESS_BATTERY_THRESHOLD`, which wins over the saved value for that run
-  - `Freeze Animation` — stops the animation entirely and holds the current frame (zero redraws, less than even the slowest animation costs). So the indicator never goes silent, while it's frozen with the menu-bar label `Off` the label slot temporarily shows the live value instead — a custom label is left alone, and your saved label choice is untouched. Also engages automatically while the macOS accessibility setting **Reduce Motion** (System Settings → Accessibility → Display) is on: the row then reads `Freeze Animation — on via Reduce Motion`, and its checkmark keeps showing your own toggle, which stays editable underneath. **Remembered across relaunches.** Menu-only (no flag), like the label position
+  - `Freeze Animation` — stops the animation entirely and holds the current frame (zero redraws, less than even the slowest animation costs). So the indicator never goes silent, while it's frozen with the menu-bar label `Off` the label slot temporarily shows the live value instead — a custom label is left alone, and your saved label choice is untouched. Also engages automatically while the macOS accessibility setting **Reduce Motion** (System Settings → Accessibility → Display) is on: the row then reads `Freeze Animation — on via Reduce Motion`, and its checkmark keeps showing your own toggle, which stays editable underneath. **Remembered across relaunches.**
+  - `Start at Login` — toggles launchd user LaunchAgent.
 - `Keep Awake` (submenu) — keeps the Mac awake while the app runs by spawning `caffeinate -di -w <pid>` (prevents both display and idle system sleep — an idle-only assertion is unreliable on modern macOS, where the system follows the display into sleep). Bound to the app's PID, so it's reaped automatically on crash/quit. Auto-disengages on low battery (≤20% on battery by default — movable with [`--battery-threshold`](#the-battery-release-point---battery-threshold)) or serious/critical thermal state, and re-engages when the condition clears. A thin track line along the icon's bottom edge shows while it's actively keeping the Mac awake, and the adjacent [menu-bar label](#menu-bar-label-adjacent-value--text-slot), if you have one on, wears the same tint for as long as it runs. **When it's paused, it says so without you opening anything:** the line stays, dimmed further — armed but not currently holding — so a window that released itself overnight doesn't look like one you never switched on. In the menu the `Keep Awake` row reads `(paused)` and the submenu tells you why — `paused — battery low (15%)`, `paused — battery critical (4%)`, or `paused — Mac is too warm`. **Turning Keep Awake on from the menu while the battery is already low overrides the battery pause** — an explicit arm is honored rather than silently doing nothing — down to a hard 5% floor, where it releases regardless so an override can't drain the Mac to a power-off. The override lasts for that session only: it isn't saved, and `--keep-awake` doesn't set it, since that flag can be baked into the login item and fires with nobody present to weigh a low battery against the task. A thermal pause is never overridable. The submenu holds two radio groups. The first is **Off** plus five track-line colors (**Dusty Teal**, the default, **Sand**, **Graphite**, **Mauve**, **Sage**): picking a color turns Keep Awake on with that tint, **Off** turns it off. The second is **Duration** — the timed release: **Until turned off** (the default), **30 minutes**, **1 hour**, **2 hours**, **4 hours**, **8 hours**, or **Custom…** (hours + minutes, up to 24 hours). Picking any duration also turns Keep Awake on, so arming a window is one click. **Option-clicking the menu bar item skips the menu entirely:** ⌥-click the creature (or either number slot) to turn Keep Awake on and off in place. On arms it with no window — the same as **Until turned off** — unless a window is already running, in which case ⌥-click releases that too, along with the low-battery override it was granted. A plain click still opens the menu, and so does a right- or Control-click; ⌘-drag still rearranges the item. Everything the menu enforces the gesture enforces: the battery pause, the override rule, and the 5% floor. With a window armed it's a real countdown: the `Keep Awake` row reads `Keep Awake: 29:24` and the submenu shows `29:24 left (until 8:18 PM)` — time remaining at seconds resolution plus the wall-clock moment it ends, ticking every second while the menu is open. **The countdown also runs on the menu bar itself, so the remaining time is a glance rather than a click:** with the label off the adjacent slot reveals it (`29:58`) in the Keep Awake tint — the paused tone while a condition has the hold suspended — and collapses back to nothing when the window ends or you turn it off; with a label on, it sits beside the reading (`CPU 45%  29:58`) on the side nearest the icon. The slot reserves room for the widest form it can reach, so the ticking digits move nothing around them. An indefinite or process-bound hold shows no countdown, having no clock to show. When it elapses `caffeinate` exits on its own, Keep Awake returns to **Off**, and the Mac is free to sleep — handy for a long unattended task you won't be awake to babysit. The window is a *time* promise, not a *task* promise: it releases whether or not your job finished. An armed window **survives a relaunch or a reboot** — it is saved as the moment it ends, so what comes back is the remainder, not a fresh window, and a window that elapsed while the app was down does not come back at all. Also armable at launch with `--keep-awake` (see below). **The submenu's first row answers "is my Mac being held awake right now?" — by anything, not just by this app.** That is the question the menu used to get wrong: start `caffeinate -di -t 30m` in a terminal, or leave another utility holding sleep, and every Keep Awake surface here read `Off` while your Mac stayed up. Now the row reads `Mac held awake — this app · 29:24` when it's ours, `Mac held awake — caffeinate · until 8:18 PM` when it's someone else's (naming the holder, and its release time when it has one), `Idle sleep held, display is not — the Mac may still sleep` when what's held won't actually keep the Mac up, or `Nothing holding sleep`. The track line and the label tint follow it, so a hold you didn't start is visible without opening the menu — **faded** rather than solid, because only *this app's* hold is one the `Off` row can release. Two things it deliberately does not do: it never ticks a color row on someone else's behalf (that would make `Off` a button that can't turn off what it appears to describe), and it never promises your Mac won't sleep — clamshell, your `pmset` settings and the 5% battery floor are all invisible to it, so it names what is *holding* sleep and stops there.
 
 **The submenu's last section, `Other Assertions`, names what *else* is holding a sleep assertion** — one row per other process as `owner — AssertionType` (e.g. `caffeinate — PreventUserIdleDisplaySleep, PreventUserIdleSystemSleep ×2`, listing every type that process holds), read from IOKit's public power-management API, or `none`. It answers "the app says Off, so why isn't my Mac sleeping?" — the case that used to leave the menu truthful about itself and silent about the machine. It reports the **observation, not a conclusion**: an assertion is not proof the Mac can't sleep (`PreventUserIdleSystemSleep` alone doesn't hold the *display*, and the system follows the display down — which is why this app spawns `-di`), so the rows name the holder and the type and stop there. Cross-check any row with `pmset -g assertions`, which prints the same type strings. This app's own `caffeinate` is never listed — the countdown row above already reports it. Read-only: there is no button here to kill anything.
-- `Presets` (submenu) -> `Dog (White)` / `Dog (Black)` / `Horse (Black)` / `Horse (White)` / `Chihiro (Walking)` / `Chihiro (Walking, White)` / `Chihiro (Walking, Black)` / `Totoro` / `Totoro (Group, White)` / `Totoro (Group, Black)` / `Totoro (White)` / `Totoro (Black)`
+- `Presets` (submenu) -> `Trace Chart` / `Live Value` (at the top above GIFs), followed by the animated GIFs: `Dog (White)` / `Dog (Black)` / `Horse (Black)` / `Horse (White)` / `Chihiro (Walking)` / `Chihiro (Walking, White)` / `Chihiro (Walking, Black)` / `Totoro` / `Totoro (Group, White)` / `Totoro (Group, Black)` / `Totoro (White)` / `Totoro (Black)`
 - `Update available: vX.Y.Z ->` (only shown when a newer release exists) and `Check for Updates...` — see [Updates](#updates)
 - `About`
 - `Exit`
@@ -583,8 +564,8 @@ never automatic:
    `Building vX.Y.Z…` while it works, which can take up to a minute.
 3. On success it offers a **Restart** button, which quits and relaunches you onto the new version.
    Because the compile already happened, the icon comes back in about a second. Your Keep Awake
-   window, label, battery threshold, and Keep Awake tint carry over (they're saved to disk), and a
-   restart also carries the preset, load source, fixed speed, and Other Sources disclosure you picked
+   window, display mode, battery threshold, and Keep Awake tint carry over (they're saved to disk), and a
+   restart also carries the preset, load source, and fixed speed you picked
    from the menu, which are not saved between ordinary launches.
    - The button appears only when the app knows how to bring itself back: a normal (detached) launcher
      run, or a start-at-login LaunchAgent. A `--foreground` run belongs to the shell that started it,

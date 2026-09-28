@@ -77,7 +77,10 @@ chk(){ [ "$2" = "$3" ] && { echo "  PASS [$1] rc=$3"; pass=$((pass+1)); } || { e
 $BIN --help >/dev/null 2>&1;                        chk "--help" 0 $?
 $BIN --width 2 >/dev/null 2>&1;                     chk "unknown flag rejected" 1 $?
 $BIN --speed-multiplier 0 >/dev/null 2>&1;          chk "--speed-multiplier non-positive" 1 $?
-$BIN --label >/dev/null 2>&1;                       chk "--label no value" 1 $?
+$BIN --display >/dev/null 2>&1;                     chk "--display no value" 1 $?
+$BIN --display bogus >/dev/null 2>&1;               chk "--display bad value" 1 $?
+$BIN --display value --label value >/dev/null 2>&1; chk "--display and --label collision" 1 $?
+$BIN --label BUILD >/dev/null 2>&1;                 chk "--label custom text rejected" 1 $?
 $BIN --load-source >/dev/null 2>&1;                 chk "--load-source no value" 1 $?
 # A *bad* --keep-awake value is deliberately non-fatal (it warns and launches with keep-awake off),
 # so that case lives in §3f where the absence of a caffeinate child can be observed.
@@ -88,7 +91,7 @@ $BIN --keep-awake-pid >/dev/null 2>&1;              chk "--keep-awake-pid no val
 # this can be baked into a login item), so which value each form resolves to is asserted by behavior
 # in §3a. A bare "rc=0, flag accepted" check here would restate that without observing anything.
 $BIN --battery-threshold >/dev/null 2>&1;           chk "--battery-threshold no value" 1 $?
-for f in --speed-multiplier --label --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --once --status; do
+for f in --speed-multiplier --display --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --once --status; do
   $BIN --help 2>&1 | grep -q -- "$f" && { echo "  PASS --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL --help missing $f"; fail=$((fail+1)); }
 done
 # The launcher's OWN flags, against the launcher's own help — the app binary never sees these and its
@@ -141,7 +144,7 @@ ok "under 500 ms wall (${real}s)" "$(awk -v r="$real" 'BEGIN{print (r>0 && r<0.5
 
 # Exclusive: every other flag configures a GUI this path never builds. Stdout must stay EMPTY — a
 # consumer pipes this straight into a parser, so a usage block on stdout is worse than no output.
-$BIN --once --label value >"$J" 2>"$E"; rc=$?
+$BIN --once --display value >"$J" 2>"$E"; rc=$?
 ok "--once with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
 ok "…says why, on stderr, with stdout empty" \
    "$([ ! -s "$J" ] && [ -s "$E" ] && echo 1 || echo 0)" "stdout=$(cat "$J") stderr=$(cat "$E")"
@@ -217,7 +220,7 @@ ok "…and stdout is exactly {\"running\":false}" \
 
 # Exclusive, like --once, and stdout stays EMPTY for the same reason: a consumer pipes this into a
 # parser, so a usage block on stdout is worse than no output.
-$BIN --status --label value >"$J" 2>"$E"; rc=$?
+$BIN --status --display value >"$J" 2>"$E"; rc=$?
 ok "--status with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
 ok "…says why, on stderr, with stdout empty" \
    "$([ ! -s "$J" ] && [ -s "$E" ] && echo 1 || echo 0)" "stdout=$(cat "$J") stderr=$(cat "$E")"
@@ -276,8 +279,8 @@ run "show-all-sources (env)"   "" env CO_AWARENESS_SHOW_ALL=1 $BIN --load-source
 # No row for --label or --no-update-check: §5 launches every source with --label value and reads the
 # result back off the bar, §3b launches a custom one and asserts what it persisted, and every §3f arm
 # carries --no-update-check. A clean-launch row for them would only restate those.
-run "wide preset + label"      "" $BIN totoro-group-white --label NET --load-source network
-run "trace chart label"          "" $BIN --label chart
+run "display value"             "" $BIN --display value
+run "display trace"             "" $BIN --display trace
 run "custom path + memory"     "" $BIN "$GIF" --load-source memory
 run "env LOAD_SOURCE"          "" env CO_AWARENESS_LOAD_SOURCE=network $BIN
 run "env PATH=<gif>"           "" env CO_AWARENESS_PATH="$GIF" $BIN --load-source disk
@@ -303,93 +306,58 @@ echo "  lifecycle: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 # real: on a machine that always scatters, adjacency goes UNVERIFIED here, so re-run where the items
 # land contiguously (a roomy external bar, or CI) before trusting it. A genuine ordering regression is
 # still caught, since a contiguous-but-wrong order fails the check rather than skipping it.
-section "§3c label slot geometry [gui — needs WindowServer]"
+section "§3c status item geometry & stability [gui — needs WindowServer]"
 pass=0; fail=0
 SG="$PWD/tmp/qa-slots-state.json"
 gk(){ [ "$2" = 1 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAIL [$1] $3"; fail=$((fail+1)); }; }
-slots(){ # $1 = side; prints the SLOTS lines from a short run with the label on
-  printf '{"version":1,"settings":{"labelMode":"value","labelSide":"%s"}}' "$1" > "$SG"
+slots(){
+  printf '{"version":1,"settings":{"displayMode":"value"}}' > "$SG"
   CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_STATE_FILE="$SG" \
     CO_AWARENESS_EXIT_AFTER=7 $BIN --load-source cpu 2>&1 | grep '^SLOTS'
 }
-# awk over the captured lines: field 1 = icon x/w, then left, then right. Skips the pre-placement tick
-# (every x = 0 before the window is positioned) and reports the distinct values it saw.
-geom(){ awk -v want="$1" '
-  { n=split($0, f, /[][]/); icon=f[2]; left=f[4]; right=f[6];
-    split(icon, i, /[ =]/); split(left, l, /[ =]/); split(right, r, /[ =]/);
-    ix=i[2]+0; iw=i[4]+0; lx=l[2]+0; lw=l[4]+0; rx=r[2]+0; rw=r[4]+0;
-    if (ix == 0) next;                      # window not placed yet
+geom(){ awk '
+  { n=split($0, f, /[][]/); icon=f[2];
+    split(icon, i, /[ =]/);
+    ix=i[2]+0; iw=i[4]+0;
+    if (ix == 0) next;
     ticks++;
-    adj = (want == "left") ? (lx + lw == ix) : (ix + iw == rx);
-    live = (want == "left") ? lw : rw;
-    if (!adj) bad_adj++;
-    # Did the bar keep our three items as ONE run? Span from the leftmost edge of the group to its
-    # rightmost must equal the sum of the three widths; wider means foreign items sit inside the group,
-    # so this bar never gave adjacency a chance. Independent of which side is live.
-    lo = ix; if (lx < lo) lo = lx; if (rx < lo) lo = rx;
-    hi = ix + iw; if (lx + lw > hi) hi = lx + lw; if (rx + rw > hi) hi = rx + rw;
-    if (hi - lo != iw + lw + rw) { noncontig++; ng_icon = ix; ng_live = (want == "left") ? lx : rx }
-    if (widths != "" && widths != live) bad_width++;
-    widths = live;
-    if (icon_off != "" && icon_off != ix - lx) bad_icon++;   # icon moved relative to the left slot
-    icon_off = ix - lx;
+    if (widths != "" && widths != iw) bad_width++;
+    widths = iw;
     if (index($0, "label=\"") > 0) { t=$0; sub(/.*label="/, "", t); sub(/".*/, "", t); seen[t]=1 }
   }
   END { texts=0; for (t in seen) texts++;
-        # $1 is the ADJACENCY verdict alone now — width and icon-shift have their own fields and their
-        # own assertions, and folding them in here made one failure read as three.
-        print (ticks >= 2 && !bad_adj) ? 1 : 0, ticks, texts,
-              bad_adj+0, bad_width+0, bad_icon+0, widths, noncontig+0, ng_icon+0, ng_live+0 }' ; }
-for want in left right; do
-  out=$(slots "$want" | geom "$want")
-  set -- $out
-  if [ "${8:-0}" -gt 0 ]; then
-    # Not a pass and not a fail: the bar scattered the items, so adjacency is unanswerable here.
-    echo "  NOTE [adjacency unverifiable, $want of the icon: this bar placed the items non-contiguously" \
-         "(icon=${9:-?} slot=${10:-?}, foreign items between) — re-run on a bar with room]"
-  else
-    gk "label slot is adjacent, $want of the icon (${2:-0} ticks, slot ${7:-?}pt)" "$1" "adj_fails=$4 raw=$out"
-  fi
-  # ≥2 distinct readings, not ≥1: "constant while the value changes" is unanswered by a run where the
-  # value never changed, and a slot that tracked its text would pass it.
-  gk "slot width constant while the value changes ($want, ${3:-0} distinct readings)" \
-     "$([ "${5:-1}" = 0 ] && [ "${3:-0}" -ge 2 ] && echo 1 || echo 0)" "width_changes=$5 raw=$out"
-  gk "icon does not move relative to the slot ($want)" \
-     "$([ "${6:-1}" = 0 ] && echo 1 || echo 0)" "icon_shifts=$6 raw=$out"
-done
+        print (ticks >= 2) ? 1 : 0, ticks, texts, bad_width+0, widths }' ; }
+out=$(slots | geom)
+set -- $out
+gk "slot width constant while the value changes (${3:-0} distinct readings, slot ${5:-?}pt)" \
+   "$([ "${4:-1}" = 0 ] && [ "${3:-0}" -ge 2 ] && echo 1 || echo 0)" "width_changes=${4:-0} raw=$out"
+
+out_trace=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_EXIT_AFTER=5 $BIN --display trace 2>&1 | grep '^SLOTS' | geom)
+set -- $out_trace
+gk "trace slot width constant across ticks (slot ${5:-?}pt)" \
+   "$([ "${4:-1}" = 0 ] && [ "${2:-0}" -ge 2 ] && echo 1 || echo 0)" "width_changes=${4:-0} raw=$out_trace"
 
 # Countdown display on the bar when windowed Keep Awake is armed
-printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
-out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_STATE_FILE="$SG" \
-      CO_AWARENESS_EXIT_AFTER=3 $BIN --keep-awake 30m 2>&1 | grep '^SLOTS' | tail -1)
+out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_EXIT_AFTER=3 $BIN --keep-awake 30m 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "countdown displayed on the bar when keep-awake is windowed" \
-   "$([ -n "$lbl" ] && echo "$lbl" | grep -qE '^(29|30):[0-9]{2}$' && echo 1 || echo 0)" "got: $lbl"
+   "$([ -n "$lbl" ] && echo "$lbl" | grep -qE '(29|30):[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
 
-out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_STATE_FILE="$SG" \
-      CO_AWARENESS_EXIT_AFTER=3 $BIN --keep-awake 30m --label value 2>&1 | grep '^SLOTS' | tail -1)
+out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_EXIT_AFTER=3 $BIN --keep-awake 30m --display value 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
-gk "countdown displayed beside telemetry when label=value" \
+gk "countdown displayed beside telemetry when display=value" \
    "$([ -n "$lbl" ] && echo "$lbl" | grep -qE 'CPU .* (29|30):[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
 
-printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
-out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_STATE_FILE="$SG" \
-      CO_AWARENESS_EXIT_AFTER=2 $BIN --keep-awake on 2>&1 | grep '^SLOTS' | tail -1)
+out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_EXIT_AFTER=2 $BIN --keep-awake on 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "indefinite keep-awake shows no countdown on the bar" \
-   "$([ -z "$lbl" ] && echo 1 || echo 0)" "got: $lbl"
+   "$([ -n "$lbl" ] && ! echo "$lbl" | grep -qE '[0-9]{2}:[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
 
-# A window that elapses while the hold is condition-suspended must still collapse the slot. The
-# countdown reads the deadline directly for this reason: the seconds-remaining value the caffeinate
-# respawn uses is floored at 1s, and reusing it here pinned the bar at 00:01 forever (and with it the
-# 1Hz ticker). FORCE_BATTERY holds it suspended so the window elapses with no child to expire.
-printf '{"version":1,"settings":{"labelMode":"off","labelSide":"left"}}' > "$SG"
-out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_STATE_FILE="$SG" \
-      CO_AWARENESS_FORCE_BATTERY=15:battery \
+out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_FORCE_BATTERY=15:battery \
       CO_AWARENESS_EXIT_AFTER=5 $BIN --keep-awake 3s 2>&1 | grep '^SLOTS' | tail -1)
 lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "elapsed-while-suspended window collapses the countdown slot" \
-   "$([ -z "$lbl" ] && echo 1 || echo 0)" "got: $lbl"
+   "$([ -n "$lbl" ] && ! echo "$lbl" | grep -qE '[0-9]{2}:[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
 
 rm -f "$SG"
 echo "  slot geometry: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
@@ -583,56 +551,43 @@ rm -f "$ST" "$ERR"
 echo "  keep-awake arming: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
 # --- §3b Settings persistence [gui] ----------------------------------------
-# The label mode is the first value in state.json's `settings` block, so these cover the whole contract:
+# The display mode is the first value in state.json's `settings` block, so these cover the whole contract:
 # a mode survives a relaunch, an explicit flag still wins, and a bad block degrades to defaults instead
-# of breaking startup. Each case asserts the mode the app REWRITES on termination — a failed restore
-# shows up as "off" being written back, which is observable, whereas the absence of the menu-bar slot is
-# not (a menu is the manual tier's subject).
+# of breaking startup. Each case asserts the mode the app REWRITES on termination.
 section "§3b settings persistence [gui — needs WindowServer]"
 pass=0; fail=0
 SF="$PWD/tmp/qa-settings-state.json"
 sp(){ desc="$1"; expect="$2"; shift 2
   CO_AWARENESS_STATE_FILE="$SF" CO_AWARENESS_EXIT_AFTER=0.4 "$@" >/dev/null 2>&1; rc=$?
-  got=$(sed -n 's/.*"labelMode" *: *"\([a-z]*\)".*/\1/p' "$SF" 2>/dev/null)
+  got=$(sed -n 's/.*"displayMode" *: *"\([a-z]*\)".*/\1/p' "$SF" 2>/dev/null)
   if [ "$rc" = 0 ] && [ "$got" = "$expect" ]; then echo "  PASS [$desc]"; pass=$((pass+1))
   else echo "  FAIL [$desc] rc=$rc expect=$expect got=${got:-<none>}"; fail=$((fail+1)); fi; }
 rm -f "$SF"
-sp "explicit --label value persists"  value  $BIN --label value
-sp "restored on relaunch, no flag"    value  $BIN
-sp "explicit chart persists"          chart  $BIN --label chart
-sp "chart restored"                   chart  $BIN
-sp "explicit off suppresses saved"    off    $BIN --label off
-sp "custom text persists"             custom $BIN --label "build box"
-sp "custom text restored"             custom $BIN
-grep -q '"labelCustomText" : "build box"' "$SF" \
-  && { echo "  PASS [custom payload round-trips verbatim]"; pass=$((pass+1)); } \
-  || { echo "  FAIL [custom payload round-trips verbatim]"; fail=$((fail+1)); }
-# Empty env is ABSENT, not an explicit off — it must not clobber a saved mode.
-sp "empty env != explicit off"        custom env CO_AWARENESS_LABEL= $BIN
-# A hand-edited mode nobody recognizes restores nothing (→ launch default), and the keep-awake block
-# must survive the settings write that follows: one writer composes both blocks from live state, and a
-# regression there would silently drop whichever block its caller didn't own.
-printf '{"version":1,"settings":{"labelMode":"vaule"},"keepAwake":{"tint":3,"enabled":false}}' > "$SF"
-sp "unknown mode -> launch default"   off    $BIN
+sp "explicit --display value persists"  value  $BIN --display value
+sp "restored on relaunch, no flag"     value  $BIN
+sp "explicit trace persists"           trace  $BIN --display trace
+sp "trace restored"                    trace  $BIN
+sp "explicit gif persists"             gif    $BIN --display gif
+# Empty env is ABSENT, not an explicit gif — it must not clobber a saved mode.
+sp "empty env != explicit gif"         gif    env CO_AWARENESS_DISPLAY= $BIN
+# A hand-edited mode nobody recognizes restores nothing (→ launch default gif), and the keep-awake block
+# must survive the settings write that follows.
+printf '{"version":1,"settings":{"displayMode":"unknown"},"keepAwake":{"tint":3,"enabled":false}}' > "$SF"
+sp "unknown mode -> launch default"    gif    $BIN
 grep -q '"tint" : 3' "$SF" \
   && { echo "  PASS [keepAwake block survives a settings write]"; pass=$((pass+1)); } \
   || { echo "  FAIL [keepAwake block survives a settings write]"; fail=$((fail+1)); }
-# The label's SIDE is the first setting with no flag at all (menu-only, like the Keep Awake tint), so
-# "an explicit flag wins" has no analogue — what has to hold instead is that a launch cannot quietly
-# reset it. A run with no arguments must write back the side it read, and an unrecognized one must
-# degrade to the left default rather than to an empty/absent field.
-side(){ desc="$1"; expect="$2"; shift 2
-  CO_AWARENESS_STATE_FILE="$SF" CO_AWARENESS_EXIT_AFTER=0.4 "$@" >/dev/null 2>&1; rc=$?
-  got=$(sed -n 's/.*"labelSide" *: *"\([a-z]*\)".*/\1/p' "$SF" 2>/dev/null)
-  if [ "$rc" = 0 ] && [ "$got" = "$expect" ]; then echo "  PASS [$desc]"; pass=$((pass+1))
-  else echo "  FAIL [$desc] rc=$rc expect=$expect got=${got:-<none>}"; fail=$((fail+1)); fi; }
-rm -f "$SF"
-side "side defaults to left"          left  $BIN
-printf '{"version":1,"settings":{"labelMode":"value","labelSide":"right"}}' > "$SF"
-side "saved side survives a relaunch" right $BIN
-side "not reset by a --label"         right $BIN --label off
-printf '{"version":1,"settings":{"labelSide":"middle"}}' > "$SF"
-side "unknown side -> left default"   left  $BIN
+# Legacy labelMode migration:
+printf '{"version":1,"settings":{"labelMode":"value"}}' > "$SF"
+sp "legacy labelMode value migrated"   value  $BIN
+printf '{"version":1,"settings":{"labelMode":"chart"}}' > "$SF"
+sp "legacy labelMode chart migrated"   trace  $BIN
+sp "deprecated --label value persists as value" value $BIN --label value
+# Invalid env var warns and falls back to gif
+env_err=$(CO_AWARENESS_STATE_FILE="$SF" CO_AWARENESS_EXIT_AFTER=0.4 env CO_AWARENESS_DISPLAY=bogus $BIN 2>&1 >/dev/null)
+echo "$env_err" | grep -q 'Unknown display mode' \
+  && { echo "  PASS [bad CO_AWARENESS_DISPLAY warns and falls back to gif]"; pass=$((pass+1)); } \
+  || { echo "  FAIL [bad CO_AWARENESS_DISPLAY should warn on stderr]"; fail=$((fail+1)); }
 # The battery release threshold is the second settings value, and the first whose unit differs between
 # surfaces: the CLI takes whole percents, the file stores the charge fraction. Same three-part contract
 # as the label — survives a relaunch, an explicit flag still wins, a bad value degrades — asserted on
@@ -904,18 +859,28 @@ fk "the frame cursor holds one value across all ticks" \
 fk "every tick reports the label handoff engaged" \
    "$([ -n "$anim" ] && ! echo "$anim" | grep -vq 'labelHandoff=1' && echo 1 || echo 0)" "raw:\n$anim"
 lbl=$(echo "$out" | grep '^SLOTS' | tail -1 | sed -n 's/.*label="\(.*\)".*/\1/p')
-fk "the slot carries a live reading with no --label flag" \
+fk "the slot carries a live reading with no --display flag" \
    "$([ -n "$lbl" ] && echo 1 || echo 0)" "slot label empty"
 
-# 3. An explicit label mode is respected, never overridden: same freeze, --label "hi" → no handoff.
+# 3. An explicit non-gif display mode is respected, never overridden: same freeze, --display trace → no handoff.
 out=$(CO_AWARENESS_STATE_FILE="$FZ" CO_AWARENESS_LOG_ANIMATION=1 \
-      CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_EXIT_AFTER=5 $BIN --label "hi" 2>&1)
-fk "custom label is respected while frozen (no handoff)" \
+      CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_EXIT_AFTER=5 $BIN --display trace 2>&1)
+fk "explicit trace display is respected while frozen (no handoff)" \
    "$(echo "$out" | grep '^ANIM' | tail -1 | grep -q 'labelHandoff=0' \
-      && echo "$out" | grep '^SLOTS' | tail -1 | grep -q 'label="hi"' && echo 1 || echo 0)" \
+      && echo "$out" | grep '^SLOTS' | tail -1 | grep -q 'display=trace' && echo 1 || echo 0)" \
    "got: $(echo "$out" | grep -E '^(ANIM|SLOTS)' | tail -2)"
 
-# 4. Running baseline — gated on the machine's own Reduce Motion, which inverts it BY DESIGN: that
+# 4. Display modes trace and value stop the animation driver entirely (0% GPU/CPU)
+anim_trace=$(CO_AWARENESS_LOG_ANIMATION=1 CO_AWARENESS_EXIT_AFTER=3 $BIN --display trace 2>&1 | grep '^ANIM')
+fk "game loop stops in trace mode" \
+   "$([ -n "$anim_trace" ] && ! echo "$anim_trace" | grep -vq 'running=0' && echo 1 || echo 0)" \
+   "raw:\n$anim_trace"
+anim_val=$(CO_AWARENESS_LOG_ANIMATION=1 CO_AWARENESS_EXIT_AFTER=3 $BIN --display value 2>&1 | grep '^ANIM')
+fk "game loop stops in value mode" \
+   "$([ -n "$anim_val" ] && ! echo "$anim_val" | grep -vq 'running=0' && echo 1 || echo 0)" \
+   "raw:\n$anim_val"
+
+# 5. Running baseline — gated on the machine's own Reduce Motion, which inverts it BY DESIGN: that
 # setting is the user's, not the test's to control (the §3c/§3e shape — NOTE, never a false FAIL).
 rm -f "$FZ"
 if [ "$(defaults read com.apple.universalaccess reduceMotion 2>/dev/null || echo 0)" = 1 ]; then
@@ -1121,7 +1086,7 @@ rk(){ [ "$2" = 1 ] && { echo "  PASS [$1]"; pass=$((pass+1)); } || { echo "  FAI
 for spec in "cpu:CPU:%" "memory:MEM:%" "gpu:GPU:%" "network:NET:rate" "disk:DSK:rate" "fan:FAN:%" "battery:BAT:%" "temperature:TMP:deg" "ane:ANE:watt" "bandwidth:BW:gbps"; do
   src=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; shape=${rest##*:}
   out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_STATE_FILE="$RO" \
-        CO_AWARENESS_EXIT_AFTER=4.5 $BIN --label value --load-source "$src" 2>&1 | grep '^SLOTS')
+        CO_AWARENESS_EXIT_AFTER=4.5 $BIN --display value --load-source "$src" 2>&1 | grep '^SLOTS')
   rm -f "$RO"
   # A source this machine lacks falls back to CPU and says so on stderr — not a failure (§3 covers it).
   if [ -z "$out" ] || ! echo "$out" | grep -q "label=\"$tag"; then

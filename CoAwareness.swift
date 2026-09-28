@@ -10,7 +10,7 @@ import QuartzCore
 // Human-facing app version (semver). Surfaced in --help and the About dialog, and the anchor for
 // CHANGELOG.md releases. Bump this together with a new CHANGELOG entry and git tag.
 private enum AppInfo {
-    static let version = "2.1.0"
+    static let version = "2.2.0"
     static let name = "co-awareness"
     static let tagline = "An animated GIF in the macOS menu bar, its playback speed driven by live system load."
     static let copyright = "© 2026 Bin Le"
@@ -277,7 +277,7 @@ private enum Restarter {
     }
 
     // The argv that reproduces the configuration RUNNING NOW, not the one originally typed: preset,
-    // driving source, label, battery threshold and the Other Sources disclosure are all menu-mutable,
+    // driving source, display mode, and battery threshold are all menu-mutable,
     // and a Restart that reverted them would read as the app forgetting what you just set. Keep Awake
     // is the exception — its intent is in the state file and the new process restores it, so only an
     // *indefinite* window needs a flag, because that restore deliberately refuses to resume one (a
@@ -286,7 +286,7 @@ private enum Restarter {
     static func appArguments(
         presetOrPath: String,
         loadSourceKey: String,
-        labelArgument: String,
+        displayArgument: String,
         batteryThresholdPercent: Int,
         speedMultiplierOverride: Double?,
         showAllSources: Bool,
@@ -296,7 +296,7 @@ private enum Restarter {
         var args: [String] = []
         if !presetOrPath.isEmpty { args.append(presetOrPath) }
         args += ["--load-source", loadSourceKey]
-        args += ["--label", labelArgument]
+        args += ["--display", displayArgument]
         args += ["--battery-threshold", batteryThresholdPercent <= 0 ? "off" : String(batteryThresholdPercent)]
         if let speedMultiplierOverride {
             args += ["--speed-multiplier", String(speedMultiplierOverride)]
@@ -387,9 +387,8 @@ private enum Tuning {
     static let constrainedSpeedCeilingFraction: Double = 0.5
     static let cpuStateLowThreshold: Double = 0.30
     static let cpuStateMediumThreshold: Double = 0.70
-    // How many 0…1 load samples the menu's trace chart retains (one per loadSampleInterval tick).
-    // 30 × 2s ≈ 60s of visible history.
-    static let loadHistoryCapacity: Int = 30
+    // How many 0…1 load samples the trace chart retains (one per loadSampleInterval tick).
+    static let loadHistoryCapacity: Int = 12
     // Per-preset speed ranges now live in gifs/presets.json (see PresetManifest), not here — the
     // manifest is the single source of truth for preset profiles. Width is not a preset constant;
     // it's derived at runtime from each GIF's real aspect ratio (see currentGifAspect/slotLength).
@@ -483,9 +482,6 @@ private enum Tuning {
     static let loadAverage15mIndex = 2
     static let minAlphaPixelComponents = 4
     static let alphaVisibleThreshold: UInt8 = 3
-    // Max length of a custom menu-bar label (the adjacent text slot). This bounds how much menu-bar
-    // width one instance may claim; live-value readouts are always short and unaffected.
-    static let labelMaxChars = 24
 
     // Adjacent-label slot sizing. The slot's width is RESERVED from the widest reading each shape can
     // produce and then held fixed, never auto-sized to the live text — auto-sizing is what made a value
@@ -494,7 +490,7 @@ private enum Tuning {
     // Each numeric field is sized for a ceiling (below) and padded out to it, so every value of a field
     // measures the same. Percentages use Tuning.percentScale, which is an exact ceiling. The two rate
     // shapes have no true maximum, so these are realistic ones in MB/s: a burst past them widens the slot
-    // for that tick rather than clipping the number (see labelSlotWidth) — a rare nudge beats an
+    // for that tick rather than clipping the number (see updateDisplaySlot) — a rare nudge beats an
     // unreadable value. Raise them if you routinely saturate faster hardware; the cost is a wider slot
     // at all times.
     static let labelRateCeiling = 999.9    // network, one decimal
@@ -511,12 +507,14 @@ private enum Tuning {
     // font; too little would truncate the text to an ellipsis, which is the failure to avoid.
     static let labelSlotPadding: CGFloat = 4
 
-    // Dimensions for the status-bar trace chart (sparkline) mode (--label chart).
+    // Dimensions for the status-bar trace chart (sparkline) mode (--display trace).
     static let labelChartWidth: CGFloat = 45
     static let labelChartHeight: CGFloat = 14
     static let labelChartImageHeight: CGFloat = 16
-    static let labelChartBarGap: CGFloat = 0.5
+    static let labelChartBarCount: Int = 12
+    static let labelChartBarWidth: CGFloat = 2.6
     static let labelChartCountdownGap: CGFloat = 6.0
+    static let countdownLabelHeight: CGFloat = 16
 
     // Keep Awake auto-disengage: on battery power at or below this charge fraction we kill
     // `caffeinate` so an unattended Mac doesn't drain to death mid-task. See SleepPreventer.
@@ -652,6 +650,15 @@ private enum Tuning {
     static let keepAwakeBarSageLight = NSColor(srgbRed: 0.392, green: 0.522, blue: 0.353, alpha: 1) // #64855A
     static let keepAwakeBarThickness: CGFloat = 2
 
+    // Post-modern minimal telemetry palette: Sage (low/cool), Sand (medium/warm), Terracotta (high/hot).
+    // Desaturated, two-tone (lighter on dark appearance, deeper on light appearance).
+    static let traceChartSageDark = NSColor(srgbRed: 0.54, green: 0.70, blue: 0.58, alpha: 1.0)       // #8AB394
+    static let traceChartSageLight = NSColor(srgbRed: 0.34, green: 0.50, blue: 0.38, alpha: 1.0)      // #578061
+    static let traceChartSandDark = NSColor(srgbRed: 0.83, green: 0.72, blue: 0.52, alpha: 1.0)       // #D4B885
+    static let traceChartSandLight = NSColor(srgbRed: 0.65, green: 0.52, blue: 0.32, alpha: 1.0)      // #A68552
+    static let traceChartTerracottaDark = NSColor(srgbRed: 0.80, green: 0.46, blue: 0.40, alpha: 1.0) // #CC7566
+    static let traceChartTerracottaLight = NSColor(srgbRed: 0.64, green: 0.32, blue: 0.26, alpha: 1.0) // #A35242
+
     // Opacity of the track line (and the label's tint) when the Mac is held awake by SOMEONE ELSE —
     // a bare `caffeinate`, another utility, another user's session. Deliberately not the same solid line
     // as our own hold: the glance has to answer "held awake?" AND "mine to turn off?", because Off can
@@ -712,12 +719,8 @@ private enum Tuning {
 // centralization, not a wording change, so titles render byte-for-byte identical.
 private enum MenuTitle {
     // Group 1 — static, single-site labels (moved for inventory completeness).
-    static let loadHistory = "Load History"
     static let keepAwake = "Keep Awake"
     static let keepAwakeOff = "Off"
-    // The disclosure header row uses a view (DisclosureMenuItemView) that draws its own ▸/▾ glyph, so
-    // only the bare label lives here.
-    static let otherSources = "Other Sources"
     static let presets = "Presets"
     static let about = "About"
     static let exit = "Exit"
@@ -750,15 +753,11 @@ private enum MenuTitle {
             : "\(Int((fraction * Tuning.percentScale).rounded()))%"
     }
 
-    // Menu-bar label (the adjacent value/text slot).
-    static let labelPrefix = "Menu Bar Label"
-    static func label(_ suffix: String) -> String { "\(labelPrefix): \(suffix)" }
-    static let labelOff = "off"
-    static let labelOffItem = "Off"
-    static let labelValueItem = "Live Value"
-    static let labelChartItem = "Trace Chart"
-    static func labelCustomItem(max: Int) -> String { "Custom Text… (max \(max))" }
-    static let labelPositionHeader = "Position"
+    // Menu-bar display modes.
+    static let displayGifItem = "Runner GIF"
+    static let displayTraceItem = "Trace Chart"
+    static let displayValueItem = "Live Value"
+    static let valueWhileFrozen = " (value while frozen)"
 
     // Settings ▸ Freeze Animation. "Freeze", not "Pause": Keep Awake already uses "(paused)" for a
     // condition-suspend, and the collision would make one word mean two mechanisms. The second form is
@@ -772,7 +771,9 @@ private enum MenuTitle {
     static let placeholderValue = "--"
     static let warmingUp = "warming up..."
     static let loadAvgPrefix = "Load Avg (1/5/15m)"
-    static let loadAvgUnavailable = "unavailable"
+    static let loadAvgUnavailable = "-- / -- / --"
+    static let batteryState = "Battery State"
+    static let powerSource = "Power Source"
 
     // Generic "<Prefix>: <value>" formatter — the shape every readout line shares, so the prefix is
     // stored once and both the placeholder and the refresh format through this.
@@ -966,104 +967,43 @@ private enum LoadSource: Int, CaseIterable {
     }
 }
 
-// The optional second menu-bar slot's content. `.off` claims no slot; `.value` shows the active
-// source's live reading (refreshed on the 2s tick); `.chart` shows the active source's trace chart;
-// `.custom` shows a fixed user string (handy for labeling multiple instances). Replaces the old baked-on
-// overlay, which was illegible atop a 22pt animated icon — an adjacent slot renders in the native menu-bar
-// font instead. Parsed from `--label <off|value|chart|text>` / CO_AWARENESS_LABEL; `off`, `value`, and `chart`
-// are reserved keywords, so a literal custom label of "off"/"value"/"chart" isn't expressible (documented;
-// a non-issue in practice).
-private enum MenuBarLabel: Equatable {
-    case off
+// The single menu-bar item's display mode. Mutually exclusive by design: `.gif` shows the animated
+// creature; `.trace` shows the compact post-modern sparkline chart; `.value` shows the live telemetry
+// reading (e.g. "CPU 45%"). Only ONE representation is ever displayed at a time, eliminating dual-slot
+// jitter and foreign item scatter. Parsed from `--display <gif|trace|value>` / CO_AWARENESS_DISPLAY.
+private enum DisplayMode: String, CaseIterable {
+    case gif
+    case trace
     case value
-    case chart
-    case custom(String)
-
-    // Parse a raw `--label` / env value. nil/empty → .off. "off"/"value"/"chart" are keywords; anything else
-    // is trimmed and truncated to Tuning.labelMaxChars as custom text (empty after trim → .off).
-    static func parse(_ raw: String?) -> MenuBarLabel {
-        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return .off }
-        switch raw.lowercased() {
-        case "off": return .off
-        case "value": return .value
-        case "chart": return .chart
-        default: return .custom(String(raw.prefix(Tuning.labelMaxChars)))
-        }
-    }
-
-    // Persisted form: a mode keyword plus the `.custom` payload as a SEPARATE field, mirroring how
-    // PersistedState.KeepAwake splits `enabled` from `deadline`. Splitting them keeps the mode a small
-    // closed set, so a hand-edited file with a typo'd mode degrades to "nothing saved" instead of
-    // silently becoming a literal custom label reading "vaule".
-    var persistedMode: String {
-        switch self {
-        case .off: return "off"
-        case .value: return "value"
-        case .chart: return "chart"
-        case .custom: return "custom"
-        }
-    }
-
-    var persistedCustomText: String? {
-        if case .custom(let text) = self { return text }
-        return nil
-    }
-
-    // The `--label` value that reproduces this mode, for the restart re-exec. Round-trips through
-    // `parse` for every mode; a custom label reading literally "off" or "value" collapses to that
-    // mode, which is the same thing typing it on the command line has always done.
-    var launchArgument: String {
-        switch self {
-        case .off: return "off"
-        case .value: return "value"
-        case .chart: return "chart"
-        case .custom(let text): return text
-        }
-    }
-
-    // nil means "nothing usable saved" — an absent block, an unrecognized mode, or `custom` with no
-    // text. Deliberately not `.off` for those: a corrupt entry should fall through to the launch
-    // default, not pin the label off in a way the user never chose.
-    static func fromPersisted(mode: String?, customText: String?) -> MenuBarLabel? {
-        switch mode {
-        case "off": return .off
-        case "value": return .value
-        case "chart": return .chart
-        case "custom":
-            guard let text = customText?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty else { return nil }
-            return .custom(String(text.prefix(Tuning.labelMaxChars)))
-        default: return nil
-        }
-    }
-}
-
-// Which side of the animation the label slot sits on. A registry like KeepAwakeColor — the menu rows,
-// the radio-selection check, and the persisted keyword all derive from these cases, so adding one needs
-// no menu edit. Menu-only and persisted, also like the tint: it is cosmetic, so it doesn't earn a CLI
-// flag (a new flag is public API forever), and the restart-after-update path picks it up off disk.
-//
-// Why the side is a choice at all: it changes which neighbour absorbs the label's presence. Left (the
-// default) keeps the animation pinned where it has always been, with the label growing away from it into
-// the row of app icons; right puts the reading next to the system icons — nearer the clock, where the
-// eye already goes for status — at the cost of shifting the creature by the width of the slot. Neither
-// jitters, because the slot's width is reserved rather than auto-sized (see labelSlotWidth).
-private enum MenuBarLabelSide: String, CaseIterable {
-    case left
-    case right
 
     var menuTitle: String {
         switch self {
-        case .left: return "Left of Icon"
-        case .right: return "Right of Icon"
+        case .gif: return MenuTitle.displayGifItem
+        case .trace: return MenuTitle.displayTraceItem
+        case .value: return MenuTitle.displayValueItem
         }
     }
 
-    // nil means "nothing usable saved" (absent or unrecognized), so the caller falls through to the
-    // launch default rather than pinning a side the user never chose — same rule as MenuBarLabel.
-    static func fromPersisted(_ raw: String?) -> MenuBarLabelSide? {
-        guard let raw else { return nil }
-        return MenuBarLabelSide(rawValue: raw)
+    static func parse(_ raw: String?) -> DisplayMode? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        switch raw.lowercased() {
+        case "trace", "chart": return .trace
+        case "value": return .value
+        case "gif": return .gif
+        default: return nil
+        }
+    }
+
+    static func fromSavedState(display: String?, legacyLabel: String?) -> DisplayMode? {
+        if let mode = display.flatMap(DisplayMode.parse) { return mode }
+        if let legacy = legacyLabel?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
+            switch legacy {
+            case "value": return .value
+            case "chart", "trace": return .trace
+            default: return .gif
+            }
+        }
+        return nil
     }
 }
 
@@ -1148,7 +1088,8 @@ private enum ProcessProbe {
         var best: (pid: pid_t, name: String, started: timeval)?
         for entry in entries.prefix(size / stride) {
             let pid = entry.kp_proc.p_pid
-            guard pid > 0, pid != own else { continue }
+            // Skip dead/zombie processes (SZOMB = 5 in Darwin bsd/sys/proc.h)
+            guard pid > 0, pid != own, entry.kp_proc.p_stat != 5, isAlive(pid) else { continue }
             var comm = entry.kp_proc.p_comm
             let short = withUnsafePointer(to: &comm) {
                 String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self))
@@ -1332,11 +1273,8 @@ private struct Config {
     // so the shell launcher forwards this arg unchanged.
     let presetOrPath: String
     let speedMultiplierOverride: Double?
-    // Content of the optional adjacent menu-bar label slot. Resolved from --label / env here.
-    // nil = neither flag nor env given, which is distinct from `.off`: absent lets the mode saved by
-    // the previous run be restored, while an explicit `off` suppresses it. Same distinction, and the
-    // same reason, as KeepAwakeLaunchOption's nil-vs-.off.
-    let label: MenuBarLabel?
+    // Which representation appears in the menu bar: .gif (default), .trace (chart), or .value (reading).
+    let displayMode: DisplayMode?
     // Which reader drives the animation. Resolved from --load-source / env here (unknown →
     // .cpu, never a launch failure), so the app receives a concrete source, not a raw string.
     let loadSource: LoadSource
@@ -1411,7 +1349,9 @@ private struct Config {
 
         var presetOrPath: String?
         var speedMultiplierOverride: Double?
-        var labelArg: String?
+        var displayArg: String?
+        var displayFlagGiven = false
+        var labelFlagGiven = false
         var loadSourceArg: String?
         var keepAwakeArg: String?
         var keepAwakePIDArg: String?
@@ -1432,13 +1372,43 @@ private struct Config {
                     return nil
                 }
                 speedMultiplierOverride = parsed
-            case "--label":
+            case "--display":
+                if labelFlagGiven {
+                    fputs("Cannot pass both --display and --label.\n", stderr)
+                    return nil
+                }
+                displayFlagGiven = true
                 guard let value = iterator.next() else {
-                    fputs("Invalid value for --label. Expected off, value, chart, or custom text.\n", stderr)
+                    fputs("Invalid value for --display. Expected gif, trace, or value.\n", stderr)
                     printUsage()
                     return nil
                 }
-                labelArg = value
+                guard let parsed = DisplayMode.parse(value) else {
+                    fputs("Invalid value for --display \"\(value)\". Expected gif, trace, or value.\n", stderr)
+                    printUsage()
+                    return nil
+                }
+                displayArg = parsed.rawValue
+            case "--label":
+                if displayFlagGiven {
+                    fputs("Cannot pass both --display and --label.\n", stderr)
+                    return nil
+                }
+                labelFlagGiven = true
+                guard let value = iterator.next() else {
+                    fputs("Invalid value for --label. Expected off, value, or chart.\n", stderr)
+                    printUsage()
+                    return nil
+                }
+                fputs("Warning: --label is deprecated; use --display <gif|trace|value> instead.\n", stderr)
+                switch value.lowercased() {
+                case "value": displayArg = DisplayMode.value.rawValue
+                case "chart", "trace": displayArg = DisplayMode.trace.rawValue
+                case "off": displayArg = DisplayMode.gif.rawValue
+                default:
+                    fputs("Invalid value for --label \"\(value)\". Custom text labels have been removed; expected off, value, or chart.\n", stderr)
+                    return nil
+                }
             case "--load-source":
                 guard let value = iterator.next() else {
                     fputs("Invalid value for --load-source. Expected one of: \(LoadSource.allCases.map(\.key).joined(separator: ", ")).\n", stderr)
@@ -1493,13 +1463,26 @@ private struct Config {
             loadSourceArg = ProcessInfo.processInfo.environment["CO_AWARENESS_LOAD_SOURCE"]
         }
 
-        if labelArg == nil {
-            labelArg = ProcessInfo.processInfo.environment["CO_AWARENESS_LABEL"]
+        if displayArg == nil {
+            displayArg = ProcessInfo.processInfo.environment["CO_AWARENESS_DISPLAY"]
         }
-        // An empty env value counts as absent (matching how the positional and --load-source treat
-        // empty), so `CO_AWARENESS_LABEL=` doesn't read as an explicit off and clobber a saved
-        // mode. Only a non-empty flag/env produces a non-nil launch request.
-        let label = (labelArg?.isEmpty == false) ? MenuBarLabel.parse(labelArg) : nil
+        if displayArg == nil, let legacy = ProcessInfo.processInfo.environment["CO_AWARENESS_LABEL"], !legacy.isEmpty {
+            fputs("Warning: CO_AWARENESS_LABEL is deprecated; use CO_AWARENESS_DISPLAY instead.\n", stderr)
+            switch legacy.lowercased() {
+            case "value": displayArg = DisplayMode.value.rawValue
+            case "chart", "trace": displayArg = DisplayMode.trace.rawValue
+            default: displayArg = DisplayMode.gif.rawValue
+            }
+        }
+        var displayMode: DisplayMode?
+        if let raw = displayArg, !raw.isEmpty {
+            if let parsed = DisplayMode.parse(raw) {
+                displayMode = parsed
+            } else {
+                fputs("Unknown display mode \"\(raw)\"; falling back to gif. Known: \(DisplayMode.allCases.map(\.rawValue).joined(separator: ", ")).\n", stderr)
+                displayMode = .gif
+            }
+        }
         // Unknown/absent → .cpu (today's behavior). Never a launch failure, per spec.
         var loadSource = LoadSource.from(key: loadSourceArg) ?? .cpu
         if let requested = loadSourceArg, LoadSource.from(key: requested) == nil, !requested.isEmpty {
@@ -1612,7 +1595,7 @@ private struct Config {
             Config(
                 presetOrPath: NSString(string: positional).expandingTildeInPath,
                 speedMultiplierOverride: speedMultiplierOverride,
-                label: label,
+                displayMode: displayMode,
                 loadSource: loadSource,
                 exitAfterSeconds: exitAfterSeconds,
                 updateCheckEnabled: updateCheckEnabled,
@@ -1627,11 +1610,11 @@ private struct Config {
         let envBin = ProcessInfo.processInfo.environment["CO_AWARENESS_BIN_NAME"]
         let bin = (envBin?.isEmpty == false) ? envBin! : URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
         print("co-awareness \(AppInfo.version)")
-        print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--label <off|value|chart|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
-        print("   or: CO_AWARENESS_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--label <off|value|chart|text>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
+        print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--display <gif|trace|value>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
+        print("   or: CO_AWARENESS_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--display <gif|trace|value>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
         print("Load source: which reader drives animation speed (default cpu). Also via CO_AWARENESS_LOAD_SOURCE; unknown values fall back to cpu.")
-        print("Label: an optional second menu-bar slot. --label value shows the active source's live reading; --label chart shows the active source's trace chart; --label <text> (up to \(Tuning.labelMaxChars) chars) shows a fixed label; --label off (default) shows nothing. Also via CO_AWARENESS_LABEL; switchable from the menu.")
-        print("Show all sources: --show-all-sources (or CO_AWARENESS_SHOW_ALL=1) starts with the menu's \"Other Sources\" list expanded, sampling every available reader and showing each as a live row; click a row to switch the driving source. Collapsed by default (active source only). Toggle from the menu's disclosure header.")
+        print("Display: which representation appears in the menu bar: gif (default, animated creature), trace (compact post-modern load chart), or value (compact live telemetry reading). Also via CO_AWARENESS_DISPLAY; switchable from the menu.")
+        print("Show all sources: --show-all-sources (or CO_AWARENESS_SHOW_ALL=1) continuously samples every available reader each tick even when the menu is closed; by default, inactive readers are only sampled while the menu is open.")
         print("Keep awake: --keep-awake <off|on|30m|2h|1h30m> arms sleep prevention at launch (a unit is required; up to \(Tuning.keepAwakeMaxHours)h). Also via CO_AWARENESS_KEEP_AWAKE. Off by default; switchable from the menu. An armed window is saved and resumed on the next launch — passing this flag (even as off) overrides what was saved.")
         print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via CO_AWARENESS_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
         print("Battery threshold: --battery-threshold <pct|off> sets the charge at or below which Keep Awake releases on battery (default \(Int(Tuning.batteryLowThresholdDefault * Tuning.percentScale))%; off never releases on charge alone). Whole percents only — 20 or 20%, not 0.20. Also via CO_AWARENESS_BATTERY_THRESHOLD. Out-of-range values are clamped to \(Int(Tuning.batteryThresholdMin * Tuning.percentScale))–\(Int(Tuning.batteryThresholdMax * Tuning.percentScale))%, and below \(Int(Tuning.batteryCriticalThreshold * Tuning.percentScale))% on battery the Mac sleeps regardless — that floor is not configurable.")
@@ -1671,20 +1654,18 @@ private struct PersistedState: Codable {
     // so the file reads as two independent concerns, and so a future reader can tell a settings write
     // from a keep-awake write at a glance.
     struct Settings: Codable {
-        // MenuBarLabel.persistedMode, with the `.custom` payload in the sibling field.
+        // DisplayMode.rawValue ("gif", "trace", "value")
+        var displayMode: String?
+        // Legacy migration: decode saved labelMode if displayMode is absent
         var labelMode: String?
-        var labelCustomText: String?
-        // MenuBarLabelSide.rawValue — which side of the animation the label slot sits on. Cosmetic and
-        // menu-only (no flag can override it), so it restores unconditionally, like the Keep Awake tint.
-        var labelSide: String?
         // The Keep Awake battery release point, as a charge FRACTION (0.20 = 20%) — the same unit the
         // live property holds, not the whole percent the CLI takes, so the value round-trips exactly
         // and every reader stays in one unit. `0` is a real value (never release on charge alone) and
         // is distinct from absent; anything out of band is pulled in by Tuning.clampedBatteryThreshold
         // on the way back in, since a state file is one more untrusted entry point.
         var batteryThreshold: Double?
-        // Settings ▸ Freeze Animation — the MANUAL freeze intent only. Menu-only like labelSide, so it
-        // restores unconditionally. The Reduce Motion half is never persisted: it's an OS reading with
+        // Settings ▸ Freeze Animation — the MANUAL freeze intent only.
+        // Restores unconditionally. The Reduce Motion half is never persisted: it's an OS reading with
         // its own owner, re-read fresh at every launch.
         var freezeAnimation: Bool?
     }
@@ -3637,178 +3618,7 @@ private final class TelemetryCore {
 }
 
 
-private enum ColorPolarity { case highIsHot, lowIsHot }
 
-// A compact bar-chart trace of the active load source's recent 0…1 fraction, shown as the top item
-// of the status menu (a live counterpart to the numeric readout lines below it). Newest sample sits
-// at the right edge; the buffer fills leftward until full, then scrolls. For every source except
-// battery the plotted value is the driving fraction, colored by the same Low/Medium/High thresholds
-// as the CPU/GPU State line (high = red) so the chart and text agree. Battery is a fuel gauge: it
-// plots charge level with an inverted ("low is hot") ramp, so a low battery reads red — the caller
-// sets `colorPolarity`/thresholds per source. Non-interactive (hosted in a disabled NSMenuItem); it
-// only ever draws.
-@MainActor
-private final class LoadHistoryView: NSView {
-    // Most-recent-last, 0…1, at most `capacity` entries.
-    var samples: [Double] = [] { didSet { needsDisplay = true } }
-    // Shown in the caption, e.g. "CPU". Set alongside samples on each refresh.
-    var sourceLabel: String = "" { didSet { needsDisplay = true } }
-    // True before the active source has produced a usable sample (empty chart → "measuring…").
-    var warmingUp: Bool = true { didSet { needsDisplay = true } }
-    // Coloring config, set per active source by the caller. Defaults reproduce the utilization
-    // behavior (high = red at the CPU State thresholds); battery overrides to an inverted fuel gauge.
-    var colorPolarity: ColorPolarity = .highIsHot { didSet { needsDisplay = true } }
-    var lowThreshold: Double = Tuning.cpuStateLowThreshold { didSet { needsDisplay = true } }
-    var mediumThreshold: Double = Tuning.cpuStateMediumThreshold { didSet { needsDisplay = true } }
-
-    private let capacity: Int
-
-    init(capacity: Int) {
-        self.capacity = capacity
-        super.init(frame: NSRect(x: 0, y: 0, width: 224, height: 46))
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    override var intrinsicContentSize: NSSize { NSSize(width: 224, height: 46) }
-
-    // Menu-item left gutter (checkmark column) + trailing padding, so bars line up under the text rows.
-    private let insetLeft: CGFloat = 21
-    private let insetRight: CGFloat = 14
-    private let insetTop: CGFloat = 5
-    private let insetBottom: CGFloat = 7
-    private let captionHeight: CGFloat = 13
-    private let barGap: CGFloat = 1.5
-
-    private func color(for value: Double) -> NSColor {
-        switch colorPolarity {
-        case .highIsHot:
-            if value < lowThreshold { return .systemGreen }
-            if value < mediumThreshold { return .systemYellow }
-            return .systemRed
-        case .lowIsHot:
-            if value < lowThreshold { return .systemRed }
-            if value < mediumThreshold { return .systemYellow }
-            return .systemGreen
-        }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let content = NSRect(
-            x: insetLeft,
-            y: insetBottom,
-            width: bounds.width - insetLeft - insetRight,
-            height: bounds.height - insetTop - insetBottom
-        )
-        guard content.width > 4, content.height > captionHeight else { return }
-
-        let windowSeconds = Int((Double(capacity) * Tuning.loadSampleInterval).rounded())
-        let caption: String
-        if warmingUp || samples.isEmpty {
-            caption = sourceLabel.isEmpty ? "measuring…" : "\(sourceLabel) · measuring…"
-        } else {
-            caption = "\(sourceLabel) · last \(windowSeconds)s"
-        }
-        let captionAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: NSColor.secondaryLabelColor,
-        ]
-        let captionSize = (caption as NSString).size(withAttributes: captionAttrs)
-        (caption as NSString).draw(
-            at: NSPoint(x: content.minX, y: content.maxY - captionSize.height),
-            withAttributes: captionAttrs
-        )
-
-        // Bars occupy everything under the caption.
-        let plot = NSRect(
-            x: content.minX,
-            y: content.minY,
-            width: content.width,
-            height: content.height - captionHeight
-        )
-        guard plot.height > 2 else { return }
-
-        // Faint baseline track so an empty/idle chart still reads as a chart.
-        NSColor.quaternaryLabelColor.setFill()
-        NSBezierPath(rect: NSRect(x: plot.minX, y: plot.minY, width: plot.width, height: 1)).fill()
-
-        guard !samples.isEmpty else { return }
-
-        let slotWidth = plot.width / CGFloat(capacity)
-        let barWidth = max(1, slotWidth - barGap)
-        let count = min(samples.count, capacity)
-        let trailing = samples.suffix(count)
-        for (offset, value) in trailing.enumerated() {
-            let clamped = min(max(value, 0), 1)
-            // Right-align: oldest of the visible window starts at (capacity - count).
-            let slot = capacity - count + offset
-            let x = plot.minX + CGFloat(slot) * slotWidth
-            let h = max(1, CGFloat(clamped) * plot.height)
-            let rect = NSRect(x: x, y: plot.minY, width: barWidth, height: h)
-            color(for: clamped).withAlphaComponent(0.9).setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 0.75, yRadius: 0.75).fill()
-        }
-    }
-}
-
-// View-based menu item used as the "Other Sources" disclosure header. A plain NSMenuItem with an
-// action dismisses the whole menu the instant it's clicked; a *view-based* item does not — the view
-// handles the click itself and the menu stays open. That's what lets this section expand/collapse in
-// place (the toggle flips the sibling rows' `isHidden`, which an open NSMenu re-lays-out live) instead
-// of forcing a close-and-reopen. Draws a native-looking row: a leading disclosure triangle (▸/▾) +
-// title, with an accent highlight while hovered (view-based items must draw their own selection —
-// AppKit doesn't). Title x-inset matches LoadHistoryView's gutter so it lines up with the rows around
-// it.
-@MainActor
-private final class DisclosureMenuItemView: NSView {
-    var title: String = "" { didSet { needsDisplay = true } }
-    var isExpanded: Bool = false { didSet { needsDisplay = true } }
-
-    private let onToggle: () -> Void
-    private var isHighlighted = false { didSet { needsDisplay = true } }
-    private var trackingArea: NSTrackingArea?
-
-    private let insetLeft: CGFloat = 21   // checkmark-gutter column, matching LoadHistoryView
-    private let height: CGFloat = 22
-
-    init(onToggle: @escaping () -> Void) {
-        self.onToggle = onToggle
-        super.init(frame: NSRect(x: 0, y: 0, width: 224, height: height))
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: height) }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: self)
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHighlighted = true }
-    override func mouseExited(with event: NSEvent) { isHighlighted = false }
-    // Toggle on click without letting the click bubble up as a menu selection (which would dismiss).
-    override func mouseUp(with event: NSEvent) { onToggle() }
-
-    override func draw(_ dirtyRect: NSRect) {
-        if isHighlighted {
-            NSColor.selectedContentBackgroundColor.setFill()
-            bounds.fill()
-        }
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.menuFont(ofSize: 0),
-            .foregroundColor: isHighlighted ? NSColor.selectedMenuItemTextColor : NSColor.labelColor,
-        ]
-        let text = "\(isExpanded ? "▾" : "▸")  \(title)" as NSString
-        let size = text.size(withAttributes: attrs)
-        text.draw(at: NSPoint(x: insetLeft, y: (bounds.height - size.height) / 2), withAttributes: attrs)
-    }
-}
 
 // The READ side of sleep, paired with SleepPreventer below (the write side): which OTHER processes
 // currently hold a sleep assertion, and of which type. Exists because the menu used to be truthful about
@@ -3819,7 +3629,7 @@ private final class DisclosureMenuItemView: NSView {
 // load reader in this file. NEVER parse `pmset -g assertions` prose.
 //
 // Deliberately NOT a `LoadSource`: it drives no animation and has no 0…1 fraction, so it must stay out of
-// LoadSource.allCases and out of Other Sources. What it reports is an OBSERVATION, never a conclusion —
+// LoadSource.allCases and out of the source list. What it reports is an OBSERVATION, never a conclusion —
 // see Tuning.assertionSleepTypes for why "something is holding your Mac awake" would be a claim this data
 // cannot support.
 @MainActor
@@ -4327,65 +4137,23 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // refresh functions, @objc actions) — never before launch. The `!` reflects that
     // single-init lifecycle; they are guaranteed non-nil for the app's lifetime.
     private var statusItem: NSStatusItem!
-    // The adjacent label (live value / custom text) — TWO status items, of which at most one is ever
-    // wider than zero. Both exist because macOS assigns a status item its slot when it becomes visible,
-    // orders slots by that moment (oldest = rightmost), and offers no API to reorder or re-place a
-    // visible item. So "which side of the animation is the label on?" is decided entirely by creation
-    // order, and a runtime switch is impossible for a single item: it would mean destroying and
-    // rebuilding one of the two, and the one that would have to go is the *animation* (its button, layer,
-    // keep-awake bar, display link and occlusion observer) whenever the label moved right.
-    //
-    // Creating both up front — right slot, animation, left slot — makes the switch free: pick which one
-    // carries the text and zero the other.
-    //
-    // Both stay permanently visible because a slot is only adjacent to the animation if it was created
-    // back-to-back with it: reveal an item later and it lands leftmost of *every* status item on the bar
-    // (newest wins), with other apps' icons between it and ours. That rules out hiding the idle one, and
-    // rules out creating either lazily. So `.off` and "not the active side" are both expressed as
-    // length = 0; on, the active side gets the RESERVED width from labelSlotWidth (never variableLength —
-    // see there). applyLabelMode()/updateValueLabel() are the only writers.
-    //
-    // **A length-0 item is not free: it still claims ~16pt of menu bar.** Measured with
-    // CO_AWARENESS_LOG_SLOTS on macOS 26 — hiding the idle item moves its neighbour 16pt over,
-    // reproducibly (an earlier comment here claimed "zero footprint, no clickable gap"; the width half of
-    // that is simply false). So the pair costs 16pt more bar than a single item would, permanently. It is
-    // still the right trade: the only way to switch sides without it is to destroy and rebuild the
-    // ANIMATION item — its button, layer, keep-awake bar, display link and occlusion observer — on every
-    // switch to the right, which is a lot of moving parts to break for 16pt. If that 16pt ever matters
-    // more than an instant switch, the cheap retreat is to create only the persisted side's item at
-    // launch and make the menu row take effect on the next launch.
-    private var labelItemLeft: NSStatusItem!
-    private var labelItemRight: NSStatusItem!
     private var infoMenu: NSMenu!
-    // Trace chart of the active source's recent driving fractions, and its ring buffer. The buffer
-    // holds only the active source's samples (cleared on a source switch, since a mixed-source
-    // history would be meaningless); recorded each tick in sampleSystemLoad, pushed to the view in
-    // refreshMenuMetrics (so it updates both on the 2s tick and on menuWillOpen).
-    private var historyMenuItem: NSMenuItem!
-    private var loadHistoryView: LoadHistoryView!
+    // Ring buffer of the active source's recent driving fractions, for the status bar trace chart.
     private var loadHistory: [Double] = []
-    // Source-conditional: holds the active load source's primary metric (CPU% / Memory%) and
-    // its state qualifier (CPU State Low/Med/High / Memory Pressure Normal/Warning/Critical).
-    private var usageItem: NSMenuItem!
+    // Unified source list: each row represents a telemetry monitor with live readout.
+    private var sourceMenuItems: [LoadSource: NSMenuItem] = [:]
     private var loadAverageItem: NSMenuItem!
-    private var stateItem: NSMenuItem!
     private var speedMultiplierItem: NSMenuItem!
     private var throttleStatusItem: NSMenuItem!
     private var widthStatusItem: NSMenuItem!
-    // "Menu Bar Label" submenu: a radio group (Off / Live Value / Custom Text…). The parent title
-    // doubles as the current-state readout, like the load-source rows.
-    private var labelMenuItem: NSMenuItem!
-    private var labelOffItem: NSMenuItem!
-    private var labelValueItem: NSMenuItem!
-    private var labelChartItem: NSMenuItem!
-    private var labelCustomItem: NSMenuItem!
-    // Second radio group in the same submenu: the slot's side. Rows carry indices into
-    // MenuBarLabelSide.allCases, read only by selectLabelSide.
-    private var labelSideItems: [NSMenuItem] = []
-    // "Battery Threshold" submenu, the second Settings row: a radio group over
-    // Tuning.batteryThresholdRows plus Never and Custom…, with the parent title carrying the readout
-    // exactly as the label group's does. The rows' tags are indices into that array and are read ONLY
-    // by selectBatteryThreshold, so this tag space is disjoint from the two Keep Awake groups' despite
+    private var countdownLabel: NSTextField!
+    // Presets submenu items: Trace Chart, Live Value, and GIF presets.
+    private var traceChartPresetItem: NSMenuItem!
+    private var liveValuePresetItem: NSMenuItem!
+    // "Battery Threshold" section in Settings: a disabled group-header row carrying the readout
+    // ("Battery Threshold: 20%") followed by indented radio rows over Tuning.batteryThresholdRows plus
+    // Never and Custom… The rows' tags are indices into that array and are read ONLY by
+    // selectBatteryThreshold, so this tag space is disjoint from the two Keep Awake groups' despite
     // the numeric overlap — the same arrangement their comments describe.
     private var batteryThresholdMenuItem: NSMenuItem!
     private var batteryThresholdItems: [NSMenuItem] = []
@@ -4432,34 +4200,18 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // Every hardware reading the app has, behind one owner (see TelemetryCore).
     private let telemetry = TelemetryCore()
     private var activeLoadSource: LoadSource
-    // Multi-source dashboard mode / other-sources disclosure state: when on (expanded), every
-    // AVAILABLE reader is sampled each tick (not just the active one) and its live readout is surfaced
-    // as an inline row under the "Other Sources" disclosure header, while the active source alone still
-    // drives the animation. Off by default (collapsed → active-only sampling, the self-throttle ethos);
-    // opt-in via the disclosure header or --show-all-sources / CO_AWARENESS_SHOW_ALL.
+    // Polling mode: when true, every available reader is sampled each tick even when the menu is closed;
+    // when false, inactive readers are only sampled while the menu is open (preserving the self-throttle ethos).
+    // Configured via --show-all-sources / CO_AWARENESS_SHOW_ALL.
     private var showAllSources: Bool
-    // Disclosure header row for the collapsible other-sources section, and the inline per-source
-    // rows nested under it. The rows double as the source switcher (clicking one drives the animation
-    // from that reader), replacing the former Load Source submenu.
-    private var otherSourcesHeaderItem: NSMenuItem!
-    private var otherSourcesHeaderView: DisclosureMenuItemView!
-    private var otherSourceRowItems: [NSMenuItem] = []
     // Last memory-pressure level seen from the dispatch source. Cached because — unlike
     // thermalState/isLowPowerModeEnabled — there is NO synchronous getter for memory pressure;
     // it is event-only, so isUnderPowerPressure reads this stored value.
     private var memoryPressureLevel: DispatchSource.MemoryPressureEvent = .normal
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var speedMultiplier: Double = Tuning.initialSpeedMultiplier
-    // Content of the adjacent label slot (see MenuBarLabel). Initialized from config; mutated by the
-    // "Menu Bar Label" menu. applyLabelMode() reconciles the two slot items' widths with it.
-    private var labelMode: MenuBarLabel = .off
-    // Which of the two label items is the live one (see labelItemLeft/labelItemRight). Menu-only, and
-    // restored from the state file by applyLaunchLabelState(); mutated only by setLabelSide.
-    private var labelSide: MenuBarLabelSide = .left
-    // The slot on the chosen side. nil only before applicationDidFinishLaunching creates both.
-    private var activeLabelItem: NSStatusItem? {
-        labelSide == .left ? labelItemLeft : labelItemRight
-    }
+    // Mutually exclusive display mode on the single status item.
+    private var displayMode: DisplayMode = .gif
     // Live countdown string for the active Keep Awake window, if one is armed and running.
     // nil when indefinite, bound to a process, expired, or disabled.
     private var activeKeepAwakeCountdownText: String? {
@@ -4591,9 +4343,9 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
 
     init(config: Config) {
         self.config = config
-        // nil (no flag/env) starts off and is reconciled against the saved mode in
-        // applyLaunchLabelState(), which runs before the first applyLabelMode().
-        self.labelMode = config.label ?? .off
+        // nil (no flag/env) starts as .gif and is reconciled against the saved mode in
+        // applyLaunchDisplayState(), which runs before the first updateDisplaySlot().
+        self.displayMode = config.displayMode ?? .gif
         self.activeLoadSource = config.loadSource
         self.showAllSources = config.showAllSources
 
@@ -4688,62 +4440,67 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             return
         }
 
-        // Slot order is creation order, and it is fixed for the lifetime of a visible item (see the
-        // labelItemLeft/labelItemRight doc comment), so all three items are created here, in the order
-        // they appear on screen from RIGHT to left: the right-hand label slot, the animation, then the
-        // left-hand label slot. applyLabelMode() decides which label slot is the live one; the other
-        // stays at length 0 and is invisible in every sense that matters.
-        labelItemRight = makeLabelItem()
-
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        // Single status item architecture: only one item is displayed in the menu bar at a time
+        // (.gif, .trace, or .value). Zero slot scatter, zero lateral jitter.
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem.button else {
             showStartupErrorAndQuit("Unable to create NSStatusItem button.")
             return
         }
 
         button.imagePosition = .imageOnly
-        // Animation is driven through a dedicated layer-backed subview, not button.image:
-        // setting a status button's image on every GIF frame makes AppKit re-run _adjustLength
-        // and a full Auto Layout constraint solve per frame. Swapping a CALayer's `contents`
-        // instead is a GPU-side pointer swap with no layout/draw cycle. The view fills the
-        // button and tracks its size via autoresizing (the button resizes on preset switch).
         let animationView = NSView(frame: button.bounds)
         animationView.wantsLayer = true
         animationView.autoresizingMask = [.width, .height]
         if let layer = animationView.layer {
-            layer.contentsGravity = .resizeAspect  // matches the former .scaleProportionallyUpOrDown
+            layer.contentsGravity = .resizeAspect
             layer.masksToBounds = true
             installKeepAwakeBar(on: layer)
         }
         button.addSubview(animationView)
         self.animationView = animationView
-        button.toolTip = activeGifPath
-        // Base label for VoiceOver; refreshMenuMetrics() enriches it with live CPU load.
-        button.setAccessibilityLabel("co-awareness")
 
-        // The left-hand label slot — newest item, so it lands left of the animation.
-        labelItemLeft = makeLabelItem()
+        let countdownLabel = NSTextField(labelWithString: "")
+        countdownLabel.font = Self.labelFont
+        countdownLabel.isEditable = false
+        countdownLabel.isSelectable = false
+        countdownLabel.isBezeled = false
+        countdownLabel.drawsBackground = false
+        countdownLabel.alignment = .left
+        countdownLabel.isHidden = true
+        button.addSubview(countdownLabel)
+        self.countdownLabel = countdownLabel
+
+        button.toolTip = activeGifPath
+        button.setAccessibilityLabel("co-awareness")
 
         infoMenu = NSMenu()
         infoMenu.delegate = self
 
-        loadHistoryView = LoadHistoryView(capacity: Tuning.loadHistoryCapacity)
-        historyMenuItem = NSMenuItem(title: MenuTitle.loadHistory, action: nil, keyEquivalent: "")
-        historyMenuItem.isEnabled = false
-        historyMenuItem.view = loadHistoryView
-        infoMenu.addItem(historyMenuItem)
+        // Availability fallback: if the requested source (--load-source / env) can't produce a value on
+        // this hardware — realistically only GPU — degrade to CPU rather than driving off a dead reader.
+        // An absent source never fails launch (design principle 4); its row stays hidden.
+        if !telemetry.isSourceAvailable(activeLoadSource) {
+            fputs("Load source \"\(activeLoadSource.key)\" is unavailable on this machine; falling back to cpu.\n", stderr)
+            activeLoadSource = .cpu
+        }
 
-        usageItem = NSMenuItem(title: MenuTitle.line(MenuTitle.cpuUsagePrefix, MenuTitle.placeholderValue), action: nil, keyEquivalent: "")
-        usageItem.isEnabled = false
-        infoMenu.addItem(usageItem)
+        // Unified source list: each row represents a telemetry monitor with live readout.
+        // Clicking a row switches the active driving source. No submenus.
+        for source in LoadSource.allCases {
+            let item = NSMenuItem(title: source.menuTitle, action: #selector(selectLoadSource(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = source.rawValue
+            item.isHidden = !telemetry.isSourceAvailable(source)
+            infoMenu.addItem(item)
+            sourceMenuItems[source] = item
+        }
 
-        loadAverageItem = NSMenuItem(title: MenuTitle.line(MenuTitle.loadAvgPrefix, "-- / -- / --"), action: nil, keyEquivalent: "")
+        infoMenu.addItem(NSMenuItem.separator())
+
+        loadAverageItem = NSMenuItem(title: MenuTitle.line(MenuTitle.loadAvgPrefix, MenuTitle.loadAvgUnavailable), action: nil, keyEquivalent: "")
         loadAverageItem.isEnabled = false
         infoMenu.addItem(loadAverageItem)
-
-        stateItem = NSMenuItem(title: MenuTitle.line(MenuTitle.statePrefix(for: .cpu), MenuTitle.placeholderValue), action: nil, keyEquivalent: "")
-        stateItem.isEnabled = false
-        infoMenu.addItem(stateItem)
 
         speedMultiplierItem = NSMenuItem(title: MenuTitle.line(MenuTitle.speedMultiplierPrefix, MenuTitle.placeholderValue), action: nil, keyEquivalent: "")
         speedMultiplierItem.isEnabled = false
@@ -4760,41 +4517,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         widthStatusItem = NSMenuItem(title: MenuTitle.line(MenuTitle.widthPrefix, MenuTitle.placeholderValue), action: nil, keyEquivalent: "")
         widthStatusItem.isEnabled = false
         infoMenu.addItem(widthStatusItem)
-
-        infoMenu.addItem(NSMenuItem.separator())
-
-        // Availability fallback: if the requested source (--load-source / env) can't produce a value on
-        // this hardware — realistically only GPU — degrade to CPU rather than driving off a dead reader.
-        // An absent source never fails launch (design principle 4); its row stays hidden.
-        if !telemetry.isSourceAvailable(activeLoadSource) {
-            fputs("Load source \"\(activeLoadSource.key)\" is unavailable on this machine; falling back to cpu.\n", stderr)
-            activeLoadSource = .cpu
-        }
-
-        // Unified other-sources section (replaces the old Load Source submenu + Show All Sources
-        // checkbox + All Sources submenu). A disclosure header expands an inline list of every *other*
-        // available reader; each row shows that reader's live readout and, when clicked, switches the
-        // animation's driving source to it. The active source is never listed — it's shown on top with
-        // the sparkline. Collapsing hides the rows AND restores active-only sampling (nothing else is
-        // polled), so the indicator keeps to its self-throttle ethos unless the user opts in. The
-        // `showAllSources` flag is both the expanded state and the sample-everything switch.
-        // View-based so clicking it toggles the section in place instead of dismissing the menu.
-        otherSourcesHeaderItem = NSMenuItem(title: MenuTitle.otherSources, action: nil, keyEquivalent: "")
-        otherSourcesHeaderView = DisclosureMenuItemView(onToggle: { [weak self] in self?.toggleShowAllSources() })
-        otherSourcesHeaderView.title = MenuTitle.otherSources
-        otherSourcesHeaderView.isExpanded = showAllSources
-        otherSourcesHeaderItem.view = otherSourcesHeaderView
-        infoMenu.addItem(otherSourcesHeaderItem)
-
-        for source in LoadSource.allCases {
-            let item = NSMenuItem(title: source.menuTitle, action: #selector(selectLoadSource(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = source.rawValue
-            item.indentationLevel = 1   // nest visually under the disclosure header
-            item.isHidden = true        // revealed only while expanded (refreshShowAllSourcesState)
-            infoMenu.addItem(item)
-            otherSourceRowItems.append(item)
-        }
 
         infoMenu.addItem(NSMenuItem.separator())
         infoMenu.addItem(makeSettingsMenuItem())
@@ -4833,11 +4555,10 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         clickDispatchItems.forEach(wireClickDispatch(on:))
         refreshPresetSelectionState()
         refreshWidthInfo()
-        applyLaunchFreezeState()   // before the label pass below: a frozen launch sizes the handoff slot with it
-        applyLaunchLabelState()   // resolve --label vs. the saved mode/side BEFORE sizing the slots
-        refreshLabelSelectionState()
-        applyLabelMode()   // size the live slot now if launched with --label value / custom text
-        refreshShowAllSourcesState()
+        applyLaunchFreezeState()   // before the display pass below: a frozen launch sizes the handoff slot with it
+        applyLaunchDisplayState()   // resolve --display vs. the saved mode
+        updateDisplaySlot()        // configure the status item for the initial display mode
+        refreshSourceListState()
         // caffeinate exited on its own → an armed window elapsed. Drop the window and let the UI fall
         // back to Off; the Mac is free to sleep from here. This is the whole timed release.
         sleepPreventer.onWindowExpired = { [weak self] in
@@ -4996,79 +4717,37 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // MARK: - Menu construction
 
     // "Settings ▸" — the home for menu-driven preferences. Its job is to have somewhere to put the
-    // next setting: the root menu is the scarce surface (it also carries the metrics block, the
-    // sources section, and Presets), and every new toggle used to land there by default.
-    //
-    // Menu Bar Label is reparented WHOLE, not flattened into this submenu. Its parent row's title
-    // IS the readout — refreshLabelSelectionState writes "Menu Bar Label: value" into it — and
-    // flattened, that string would have nowhere to live but this submenu's own title, which cannot
-    // say "Label: value" once a second setting exists. One extra level is the cheaper trade.
+    // "Settings ▸" submenu. Holds standing preferences (Battery Threshold, Freeze Animation, Start at Login)
+    // to keep the root menu short.
     private func makeSettingsMenuItem() -> NSMenuItem {
         let settingsMenuItem = NSMenuItem(title: MenuTitle.settings, action: nil, keyEquivalent: "")
         let settingsSubmenu = NSMenu(title: MenuTitle.settings)
 
-        // "Menu Bar Label" radio group. The parent title carries the current state (off / value /
-        // the custom text), so no separate read-only line is needed — mirrors the old overlay item.
-        labelMenuItem = NSMenuItem(title: MenuTitle.labelPrefix, action: nil, keyEquivalent: "")
-        let labelSubmenu = NSMenu(title: MenuTitle.labelPrefix)
-
-        labelOffItem = makeSelectionItem(MenuTitle.labelOffItem, action: #selector(selectLabelOff))
-        labelSubmenu.addItem(labelOffItem)
-
-        labelValueItem = makeSelectionItem(MenuTitle.labelValueItem, action: #selector(selectLabelValue))
-        labelSubmenu.addItem(labelValueItem)
-
-        labelChartItem = makeSelectionItem(MenuTitle.labelChartItem, action: #selector(selectLabelChart))
-        labelSubmenu.addItem(labelChartItem)
-
-        labelCustomItem = makeSelectionItem(MenuTitle.labelCustomItem(max: Tuning.labelMaxChars), action: #selector(promptCustomLabel))
-        labelSubmenu.addItem(labelCustomItem)
-
-        // Second, independent radio group in the same submenu — which side of the animation the slot sits
-        // on. Same shape as the Keep Awake submenu's tint + duration pair. These rows carry indices into
-        // MenuBarLabelSide.allCases and are read ONLY by selectLabelSide, so they share no tag space with
-        // anything else (the three mode rows above are distinguished by selector, and carry no tags).
-        labelSubmenu.addItem(NSMenuItem.separator())
-        let labelPositionHeaderItem = NSMenuItem(title: MenuTitle.labelPositionHeader, action: nil, keyEquivalent: "")
-        labelPositionHeaderItem.isEnabled = false
-        labelSubmenu.addItem(labelPositionHeaderItem)
-        for (index, side) in MenuBarLabelSide.allCases.enumerated() {
-            let item = makeSelectionItem(side.menuTitle, action: #selector(selectLabelSide(_:)), tag: index)
-            labelSubmenu.addItem(item)
-            labelSideItems.append(item)
-        }
-
-        labelMenuItem.submenu = labelSubmenu
-        settingsSubmenu.addItem(labelMenuItem)
-
-        // "Battery Threshold" radio group — the charge at which Keep Awake releases on battery. Same
-        // shape as the label group, and here for the same reason: the parent title is the readout
-        // ("Battery Threshold: 20%"), which flattening into Settings would leave nowhere to live.
-        //
-        // It belongs under Settings rather than in the Keep Awake submenu even though it governs Keep
-        // Awake: that submenu is one merged on/off+tint radio group plus the duration group, i.e. all
-        // actions, and this is a standing preference that outlives any single arm.
+        // "Battery Threshold" section: a disabled group-header row carrying the live readout
+        // ("Battery Threshold: 20%"), followed by inline indented selection rows. Flattened into
+        // Settings so the entire menu hierarchy stays strictly within two levels.
         batteryThresholdMenuItem = NSMenuItem(title: MenuTitle.batteryThresholdPrefix, action: nil, keyEquivalent: "")
-        let batteryThresholdSubmenu = NSMenu(title: MenuTitle.batteryThresholdPrefix)
+        batteryThresholdMenuItem.isEnabled = false
+        settingsSubmenu.addItem(batteryThresholdMenuItem)
 
         for (index, fraction) in Tuning.batteryThresholdRows.enumerated() {
             let item = makeSelectionItem(MenuTitle.batteryThresholdValue(fraction), action: #selector(selectBatteryThreshold(_:)), tag: index)
-            batteryThresholdSubmenu.addItem(item)
+            item.indentationLevel = 1
+            settingsSubmenu.addItem(item)
             batteryThresholdItems.append(item)
         }
 
         let neverItem = makeSelectionItem(MenuTitle.batteryThresholdNever, action: #selector(selectBatteryThreshold(_:)), tag: Self.batteryThresholdNeverTag)
-        batteryThresholdSubmenu.addItem(neverItem)
+        neverItem.indentationLevel = 1
+        settingsSubmenu.addItem(neverItem)
         batteryThresholdItems.append(neverItem)
 
         batteryThresholdCustomItem = makeSelectionItem(MenuTitle.batteryThresholdCustom, action: #selector(promptCustomBatteryThreshold))
-        batteryThresholdSubmenu.addItem(batteryThresholdCustomItem)
-
-        batteryThresholdMenuItem.submenu = batteryThresholdSubmenu
-        settingsSubmenu.addItem(batteryThresholdMenuItem)
+        batteryThresholdCustomItem.indentationLevel = 1
+        settingsSubmenu.addItem(batteryThresholdCustomItem)
 
         settingsSubmenu.addItem(NSMenuItem.separator())
-        // Plain toggles below the radio-group submenus. Freeze Animation is a standing preference like
+        // Plain toggles below the radio-group section. Freeze Animation is a standing preference like
         // Start at Login (persists, outlives a relaunch), hence Settings and not the root — see R17.
         freezeAnimationMenuItem = makeSelectionItem(MenuTitle.freezeAnimation, action: #selector(toggleFreezeAnimation(_:)))
         settingsSubmenu.addItem(freezeAnimationMenuItem)
@@ -5104,9 +4783,8 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // the machine's story across the submenu with this app's radio groups wedged in between; that
         // sandwich is what made a ticked `Off` under a "Mac held awake" row read as a contradiction.
         // Still not the root menu — that is the scarce surface (Settings ▸ and Presets ▸ exist to keep it
-        // short) and someone wondering about sleep opens this submenu. Still not a nested submenu — that
-        // would be two deep, and tests/menu-dump.applescript descends one level, the same verification
-        // gap already recorded against the Battery Threshold rows.
+        // short) and someone wondering about sleep opens this submenu. Kept strictly within two levels —
+        // every item is inline in this submenu so tests/menu-dump.applescript covers it completely.
         let assertionsHeaderItem = NSMenuItem(title: MenuTitle.otherAssertions, action: nil, keyEquivalent: "")
         assertionsHeaderItem.isEnabled = false
         keepAwakeSubmenu.addItem(assertionsHeaderItem)
@@ -5190,6 +4868,15 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         let presetsMenuItem = NSMenuItem(title: MenuTitle.presets, action: nil, keyEquivalent: "")
         let presetsSubmenu = NSMenu(title: MenuTitle.presets)
 
+        // Top two rows above GIFs: Trace Chart and Live Value
+        traceChartPresetItem = makeSelectionItem(MenuTitle.displayTraceItem, action: #selector(selectTraceChartPreset))
+        presetsSubmenu.addItem(traceChartPresetItem)
+
+        liveValuePresetItem = makeSelectionItem(MenuTitle.displayValueItem, action: #selector(selectLiveValuePreset))
+        presetsSubmenu.addItem(liveValuePresetItem)
+
+        presetsSubmenu.addItem(NSMenuItem.separator())
+
         for (index, preset) in allPresets.enumerated() {
             let item = makeSelectionItem(preset.menuTitle, action: #selector(selectPreset(_:)), tag: index)
             presetsSubmenu.addItem(item)
@@ -5244,9 +4931,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             alert.icon = icon
         }
         let speedMode = isAutoSpeed
-            // Names the Other Sources section, NOT a "Load Source menu" — that submenu was replaced by
-            // the inline disclosure list and this string kept pointing at it.
-            ? "Speed adapts to \(activeLoadSource.menuTitle) load (change it under \(MenuTitle.otherSources))."
+            ? "Speed adapts to \(activeLoadSource.menuTitle) load (change it from the menu)."
             : "Fixed speed: \(String(format: "%.2f", speedMultiplier))×."
         alert.informativeText = [
             AppInfo.tagline,
@@ -5468,7 +5153,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         let arguments = Restarter.appArguments(
             presetOrPath: activePreset?.key ?? activeGifPath,
             loadSourceKey: activeLoadSource.key,
-            labelArgument: labelMode.launchArgument,
+            displayArgument: displayMode.rawValue,
             batteryThresholdPercent: Int((keepAwakeBatteryThreshold * Tuning.percentScale).rounded()),
             speedMultiplierOverride: config.speedMultiplierOverride,
             showAllSources: showAllSources,
@@ -5709,11 +5394,11 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             }
         }
 
-        // Show-all mode: also refresh the inactive available readers so the other-sources rows aren't
-        // stale. They share this tick's `elapsed` (correct for counter-delta sources, whose baselines
+        // Sample inactive available readers if showAllSources or the menu is open, so all rows are live.
+        // They share this tick's `elapsed` (correct for counter-delta sources, whose baselines
         // are kept fresh by priming on engage). Return values are ignored — only the active source
-        // drives speed. Skipped when off, preserving active-only sampling by default.
-        if showAllSources {
+        // drives speed.
+        if showAllSources || isMenuOpen {
             for source in LoadSource.allCases where source != activeLoadSource && telemetry.isSourceAvailable(source) {
                 _ = telemetry.sampleSource(source, elapsed: elapsed)
             }
@@ -5778,7 +5463,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // Every slot that presents the dropdown, and so every slot the click dispatch has to cover. Nil
     // only before applicationDidFinishLaunching has built them.
     private var clickDispatchItems: [NSStatusItem] {
-        [statusItem, labelItemLeft, labelItemRight].compactMap { $0 }
+        [statusItem].compactMap { $0 }
     }
 
     // MARK: - Click & menu presentation
@@ -5827,12 +5512,14 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
         refreshBatteryDiagnostics()
+        if !showAllSources {
+            primeInactiveSources()
+        }
+        refreshSourceListState()
         refreshMenuMetrics()
         refreshPresetSelectionState()
         refreshWidthInfo()
-        refreshLabelSelectionState()
         refreshBatteryThresholdSelectionState()
-        refreshShowAllSourcesState()
         refreshKeepAwakeSelectionState()
         refreshUpdateStatus()
         refreshStartAtLoginState()
@@ -5886,11 +5573,11 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             refreshKeepAwakeSelectionState()
         }
         if activeKeepAwakeCountdownText != nil {
-            updateValueLabel()
+            updateDisplaySlot()
         } else {
             // Countdown elapsed while the menu was closed (or while hidden): collapse or restore the
             // slot and stop the ticker.
-            applyLabelMode()
+            updateDisplaySlot()
             syncKeepAwakeCountdownTicker()
         }
     }
@@ -5903,49 +5590,16 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // MARK: - Menu readouts
 
     private func refreshMenuMetrics() {
-        // Trace chart mirrors the active source's recent driving fractions (0…1), the same values
-        // that map to the speed multiplier. Pushed here so it refreshes both on the 2s tick (menu
-        // open or not) and on menuWillOpen.
-        loadHistoryView.sourceLabel = activeLoadSource.menuTitle
-        loadHistoryView.warmingUp = !activeSourceHasSample
-        loadHistoryView.samples = loadHistory
-        // Battery is a fuel gauge (charge level, low = alert); everyone else plots the driving
-        // fraction (high = alert) at the CPU State thresholds. See chartSample(forDriver:).
-        if activeLoadSource == .battery {
-            loadHistoryView.colorPolarity = .lowIsHot
-            loadHistoryView.lowThreshold = Tuning.batteryChartLowThreshold
-            loadHistoryView.mediumThreshold = Tuning.batteryChargeMediumThreshold
-        } else {
-            loadHistoryView.colorPolarity = .highIsHot
-            loadHistoryView.lowThreshold = Tuning.cpuStateLowThreshold
-            loadHistoryView.mediumThreshold = Tuning.cpuStateMediumThreshold
+        if isMenuOpen {
+            refreshSourceListState()
         }
 
-        // Source-conditional: usageItem/stateItem show the ACTIVE source's metric + state. The
-        // inactive source isn't sampled (see sampleSystemLoad), so showing its stale line would
-        // mislead — instead only the driver's figures appear. Load Avg stays (system-wide).
-        usageItem.toolTip = (activeLoadSource == .battery) ? batteryTooltipText() : nil
         let source = activeLoadSource
-        // Memory's state line is the pressure level, not a load band: it comes from the cached
-        // dispatch-source level and is valid before the first used-fraction sample, so it is shown
-        // unconditionally and never replaced by the warming-up text.
-        if source == .memory {
-            stateItem.title = MenuTitle.line(MenuTitle.memoryPressurePrefix, memoryPressureText())
-        }
         if telemetry.hasSample(source) {
-            usageItem.title = usageLineText(for: source)
             let state = stateText(for: source)
-            if source != .memory {
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: source), state)
-            }
             let spokenState = source == .memory ? "pressure \(state)" : state
             statusItem.button?.setAccessibilityLabel("co-awareness — \(spokenReading(for: source)), \(spokenState)")
         } else {
-            let usageTitle = source == .cpu ? MenuTitle.cpuUsageQualified : source.menuTitle
-            usageItem.title = MenuTitle.line(usageTitle, MenuTitle.warmingUp)
-            if source != .memory {
-                stateItem.title = MenuTitle.line(MenuTitle.statePrefix(for: source), MenuTitle.warmingUp)
-            }
             statusItem.button?.setAccessibilityLabel("co-awareness — measuring \(spokenName(for: source))")
         }
 
@@ -5969,20 +5623,13 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             throttleStatusItem.isHidden = true
         }
 
-        if let (avg1, avg5, avg15) = cachedLoadAverages {
-            loadAverageItem.title = MenuTitle.line(MenuTitle.loadAvgPrefix, String(format: "%.2f / %.2f / %.2f", avg1, avg5, avg15))
-        } else {
-            loadAverageItem.title = MenuTitle.line(MenuTitle.loadAvgPrefix, MenuTitle.loadAvgUnavailable)
-        }
-
-        // Refresh the adjacent live-value slot on the same cadence (2s tick + menuWillOpen). Cheap
-        // when the label is off or custom — updateValueLabel() only rebuilds text in .value mode.
-        updateValueLabel()
+        // Refresh the single status item on the same cadence (2s tick + menuWillOpen).
+        updateDisplaySlot()
         logSlotGeometry()   // no-op unless CO_AWARENESS_LOG_SLOTS=1
         logThermalIfRequested()   // no-op unless CO_AWARENESS_LOG_THERMAL=1
     }
 
-    // The fully-labeled dropdown readout for a source — the active row and the Other Sources rows alike.
+    // The fully-labeled dropdown readout for a source.
     private func usageLineText(for source: LoadSource) -> String {
         switch source {
         case .cpu: return cpuUsageLineText()
@@ -6246,10 +5893,14 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // MARK: - Selection state
 
     private func refreshPresetSelectionState() {
+        let isTrace = (displayMode == .trace)
+        let isValue = (displayMode == .value)
+        traceChartPresetItem?.state = isTrace ? .on : .off
+        liveValuePresetItem?.state = isValue ? .on : .off
         let fileManager = FileManager.default
         for (item, preset) in zip(presetMenuItems, allPresets) {
             item.isEnabled = fileManager.fileExists(atPath: preset.path)
-            item.state = (activePreset?.key == preset.key) ? .on : .off
+            item.state = (displayMode == .gif && activePreset?.key == preset.key) ? .on : .off
         }
     }
 
@@ -6549,7 +6200,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         case nil:           freeze = "none"
         }
         let running = (displayLink != nil || fallbackTimer != nil) ? 1 : 0
-        let handoff = (effectiveLabelMode != labelMode) ? 1 : 0
+        let handoff = (effectiveDisplayMode != displayMode) ? 1 : 0
         fputs("ANIM running=\(running) freeze=\(freeze) frame=\(frameIndex) "
               + String(format: "speed=%.2f", speedMultiplier) + " labelHandoff=\(handoff)\n", stderr)
     }
@@ -6571,8 +6222,9 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // display-only contract assertable: forcing the level must annotate the usage row while leaving
         // this hidden, since loadReductionReasons reads ProcessInfo.thermalState and never this type.
         let appRow = throttleStatusItem.isHidden ? "hidden" : throttleStatusItem.title
+        let activeRowTitle = sourceMenuItems[activeLoadSource]?.title ?? ""
         fputs("THERMAL pressure=\(pressure.rawValue) throttling=\(pressure.isThrottling) "
-              + "source=\(activeLoadSource.key) row=\"\(usageItem.title)\" app=\"\(appRow)\"\n", stderr)
+              + "source=\(activeLoadSource.key) row=\"\(activeRowTitle)\" app=\"\(appRow)\"\n", stderr)
     }
 
     // Debug/test hook: CO_AWARENESS_LOG_BATTERY_DIAGNOSTICS=1, sibling to LOG_SLOTS/LOG_ASSERTIONS/
@@ -6620,15 +6272,19 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             return String(format: "x=%.1f w=%.1f", f.minX, f.width)
         }
         let text: String = {
-            if effectiveLabelMode == .chart {
+            switch effectiveDisplayMode {
+            case .gif:
                 let cd = activeKeepAwakeCountdownText
-                return cd.map { "chart \($0)" } ?? "chart"
+                return cd.map { "gif \($0)" } ?? "gif"
+            case .trace:
+                let cd = activeKeepAwakeCountdownText
+                return cd.map { "trace \($0)" } ?? "trace"
+            case .value:
+                return statusItem.button?.title ?? ""
             }
-            return activeLabelItem?.button?.title ?? ""
         }()
         fputs(
-            "SLOTS icon[\(frame(statusItem))] left[\(frame(labelItemLeft))]"
-                + " right[\(frame(labelItemRight))] side=\(labelSide.rawValue) label=\"\(text)\"\n",
+            "SLOTS icon[\(frame(statusItem))] display=\(displayMode.rawValue) label=\"\(text)\"\n",
             stderr
         )
     }
@@ -6644,34 +6300,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             MenuTitle.widthPrefix,
             String(format: "%.0f pt (GIF aspect %.2f×)", slotLength(), currentGifAspect())
         )
-    }
-
-    // Reflect the current label mode in the submenu: parent title shows the state, and the radio
-    // checks mark the active choice. Called on menuWillOpen and after any mode change.
-    private func refreshLabelSelectionState() {
-        switch labelMode {
-        case .off:
-            // An invisible handoff override would violate the never-silent ethos; one suffix keeps the
-            // menu honest about why the slot shows a value while the user's choice is off.
-            let suffix = (effectiveLabelMode == .value) ? " (value while frozen)" : ""
-            labelMenuItem.title = MenuTitle.label(MenuTitle.labelOff + suffix)
-        case .value:
-            labelMenuItem.title = MenuTitle.label(MenuTitle.labelValueItem.lowercased())
-        case .chart:
-            labelMenuItem.title = MenuTitle.label(MenuTitle.labelChartItem.lowercased())
-        case .custom(let text):
-            labelMenuItem.title = MenuTitle.label("\"\(text)\"")
-        }
-        labelOffItem.state = (labelMode == .off) ? .on : .off
-        labelValueItem.state = (labelMode == .value) ? .on : .off
-        labelChartItem.state = (labelMode == .chart) ? .on : .off
-        if case .custom = labelMode { labelCustomItem.state = .on } else { labelCustomItem.state = .off }
-        // Position group. The rows stay live while the label is off — picking a side then is a
-        // preference for the next time it's on, not a no-op the user has to redo.
-        let sides = MenuBarLabelSide.allCases
-        for (index, item) in labelSideItems.enumerated() where sides.indices.contains(index) {
-            item.state = (sides[index] == labelSide) ? .on : .off
-        }
     }
 
     // Parent title carries the readout ("Battery Threshold: 20%" / ": Never") and the rows mark the
@@ -6700,61 +6328,17 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         batteryThresholdCustomItem.state = matchedARow ? .off : .on
     }
 
-    // MARK: - Label slots
+    // MARK: - Status Bar Display & Sizing
 
-    // One of the two label slots. Both are built identically and differ only in when they were created,
-    // which is what fixes them either side of the animation (see labelItemLeft/labelItemRight). Created
-    // at variableLength but never left there: applyLabelMode gives the live one a reserved width and
-    // zeroes the other. Menu is wired later, once infoMenu exists.
-    private func makeLabelItem() -> NSStatusItem {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.font = Self.labelFont
-        item.button?.imagePosition = .noImage
-        item.isVisible = true
-        item.length = 0
-        return item
+    // What the status item renders, as opposed to what the user chose (displayMode, which the menu marks
+    // and persistState read). Differs only while frozen with the mode set to .gif: a frozen icon carries no
+    // reading, so the slot borrows .value rather than letting the indicator go silent.
+    private var effectiveDisplayMode: DisplayMode {
+        (animationFreeze != nil && displayMode == .gif) ? .value : displayMode
     }
 
-    // Reconcile both label slots with labelMode and labelSide: the slot on the chosen side carries the
-    // text at its reserved width, the other is zeroed (~16pt, not 0 — see labelItemLeft). Nothing is
-    // created, destroyed, hidden or shown: slot order is creation order, and both items must stay
-    // visible to keep theirs.
-    // What the label SLOT renders, as opposed to what the user chose (labelMode, which the menu marks
-    // and persistState read). Differs only while frozen with the label off: a frozen icon carries no
-    // reading, so the slot borrows .value rather than letting the indicator go silent. Memory-only —
-    // the persisted mode is untouched, and .custom is respected (that text was an explicit choice).
-    private var effectiveLabelMode: MenuBarLabel {
-        (animationFreeze != nil && labelMode == .off) ? .value : labelMode
-    }
-
-    private func applyLabelMode() {
-        guard let live = activeLabelItem, let left = labelItemLeft, let right = labelItemRight else { return }
-        let idle = (live === left ? right : left)
-        idle.length = 0
-        idle.button?.image = nil
-        idle.button?.title = ""
-        guard effectiveLabelMode != .off || activeKeepAwakeCountdownText != nil else {
-            live.length = 0
-            live.button?.image = nil
-            live.button?.title = ""
-            return
-        }
-        // Align the text toward the animation, so the gap that a reserved slot sometimes leaves opens
-        // away from the icon and the reading stays visually attached to it.
-        live.button?.alignment = (labelSide == .left) ? .right : .left
-        updateValueLabel()   // writes the text, the tint, and the width
-    }
-
-    // The width to hold the live slot at: the wider of the current text and a worst-case template for
-    // the shape on show (Tuning.labelTemplate*). Reserving from the template — not measuring the live
-    // text — is the whole point: an auto-sized slot changes width whenever the value does, and macOS
-    // shifts every item to the LEFT of one that resizes, so the label used to drag its neighbour
-    // sideways twice a second. Held fixed, the label can sit on either side without moving anything.
-    //
-    // max() rather than the template alone so an unbounded rate that overruns its realistic ceiling
-    // widens the slot for that tick instead of being truncated to an ellipsis. That is the only case
-    // where the width moves at all, and a wrong-looking number is worse than a rare nudge.
-    private func labelSlotWidth(for text: String) -> CGFloat {
+    private func updateDisplaySlot() {
+        guard let button = statusItem.button else { return }
         let countdown = activeKeepAwakeCountdownText
         let countdownTemplate: String? = {
             guard countdown != nil else { return nil }
@@ -6762,135 +6346,139 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
                 || (keepAwakeRemainingSeconds ?? 0) >= 3600
             return isHourScale ? "88:88:88" : "88:88"
         }()
+        let cdWidth = countdownTemplate.map { measuredTextWidth($0) } ?? 0
+        let gap = Tuning.labelChartCountdownGap
+        let pad = Tuning.labelSlotPadding
+        let tintColor = keepAwakeTintColor(
+            for: awakeHold, paused: keepAwakeArmedNotHolding, appearance: button.effectiveAppearance
+        )
 
-        if effectiveLabelMode == .chart {
-            let chartBase = Tuning.labelChartWidth
-            let width: CGFloat
-            if let cd = countdownTemplate {
-                let cdWidth = measuredLabelWidth(cd)
-                width = chartBase + Tuning.labelChartCountdownGap + cdWidth
-            } else {
-                width = chartBase
+        switch effectiveDisplayMode {
+        case .gif:
+            if button.image != nil { button.image = nil }
+            if !button.title.isEmpty { button.title = "" }
+            if button.attributedTitle.length > 0 { button.attributedTitle = NSAttributedString() }
+            if animationView?.isHidden != false { animationView?.isHidden = false }
+
+            let gifW = slotLength()
+            let totalW: CGFloat = (countdown != nil) ? (gifW + gap + cdWidth + pad) : gifW
+            if abs(statusItem.length - totalW) > 0.01 {
+                statusItem.length = totalW
             }
-            return ceil(width) + Tuning.labelSlotPadding
-        }
 
-        let baseReserved: String?
-        switch effectiveLabelMode {
-        case .off, .chart:
-            baseReserved = nil
-        case .value:
-            baseReserved = compactLabelText(for: activeLoadSource, ceiling: true)
-        case .custom(let label):
-            baseReserved = label   // a fixed string is its own worst case
-        }
+            if let cd = countdown {
+                if countdownLabel.stringValue != cd { countdownLabel.stringValue = cd }
+                let labelColor = tintColor ?? .labelColor
+                if countdownLabel.textColor != labelColor { countdownLabel.textColor = labelColor }
+                let labelHeight = Tuning.countdownLabelHeight
+                countdownLabel.frame = NSRect(
+                    x: gifW + gap,
+                    y: (button.bounds.height - labelHeight) / 2,
+                    width: cdWidth,
+                    height: labelHeight
+                )
+                if countdownLabel.isHidden { countdownLabel.isHidden = false }
+                animationView?.frame = NSRect(x: 0, y: 0, width: gifW, height: button.bounds.height)
+            } else {
+                if !countdownLabel.isHidden { countdownLabel.isHidden = true }
+                animationView?.frame = NSRect(x: 0, y: 0, width: gifW, height: button.bounds.height)
+            }
+            renderCurrentFrame()
+            button.needsDisplay = true
+            let cdSpoken = countdown.map { ", \($0) remaining" } ?? ""
+            button.setAccessibilityLabel("co-awareness — \(spokenReading(for: activeLoadSource))\(cdSpoken)")
 
-        let reserved: String
-        switch (baseReserved, countdownTemplate) {
-        case let (base?, cd?):
-            reserved = (labelSide == .left) ? "\(base)  \(cd)" : "\(cd)  \(base)"
-        case let (base?, nil):
-            reserved = base
-        case let (nil, cd?):
-            reserved = cd
-        case (nil, nil):
-            return 0
-        }
+        case .trace:
+            if animationView?.isHidden != true { animationView?.isHidden = true }
+            if !countdownLabel.isHidden { countdownLabel.isHidden = true }
+            if !button.title.isEmpty { button.title = "" }
+            if button.attributedTitle.length > 0 { button.attributedTitle = NSAttributedString() }
 
-        let width = max(measuredLabelWidth(reserved), measuredLabelWidth(text))
-        return ceil(width) + Tuning.labelSlotPadding
-    }
+            let chartW = Tuning.labelChartWidth
+            let totalW: CGFloat
+            if countdown != nil {
+                totalW = chartW + gap + cdWidth + pad
+            } else {
+                totalW = chartW + pad
+            }
 
-    private func measuredLabelWidth(_ text: String) -> CGFloat {
-        (text as NSString).size(withAttributes: [.font: Self.labelFont]).width
-    }
-
-    // Write the current label text into the live slot (no-op before the slots exist, or when off and
-    // no countdown is armed). In .value mode this is the active source's compact live reading; in .custom
-    // mode, the fixed user string; when a windowed Keep Awake is armed, the countdown timer is included.
-    // Also carries the slot's width and the Keep Awake tint (see below), so it is called both on
-    // the 2s tick, on the 1s countdown ticker, and from updateKeepAwakeBar().
-    private func updateValueLabel() {
-        guard let item = activeLabelItem, let button = item.button else { return }
-        let countdown = activeKeepAwakeCountdownText
-        guard effectiveLabelMode != .off || countdown != nil else {
-            if item.length != 0 { item.length = 0 }
-            button.image = nil
-            button.title = ""
-            return
-        }
-
-        if effectiveLabelMode == .chart {
-            let width = labelSlotWidth(for: "")
-            if abs(item.length - width) > 0.01 {
-                item.length = width
+            if abs(statusItem.length - totalW) > 0.01 {
+                statusItem.length = totalW
             }
             button.image = makeTraceChartImage(countdown: countdown, appearance: button.effectiveAppearance)
-            button.imagePosition = .imageOnly
-            button.title = ""
+            if button.imagePosition != .imageOnly { button.imagePosition = .imageOnly }
+            button.needsDisplay = true
             let cdSpoken = countdown.map { ", \($0) remaining" } ?? ""
-            let reading = spokenReading(for: activeLoadSource)
-            button.setAccessibilityLabel("co-awareness — \(reading) trace chart\(cdSpoken)")
-            return
-        }
+            button.setAccessibilityLabel("co-awareness — \(spokenReading(for: activeLoadSource)) trace chart\(cdSpoken)")
 
-        button.image = nil
-        button.imagePosition = .noImage
-
-        let baseText: String?
-        switch effectiveLabelMode {
-        case .off, .chart:
-            baseText = nil
         case .value:
-            baseText = compactLabelText(for: activeLoadSource)
-        case .custom(let label):
-            baseText = label
-        }
+            if animationView?.isHidden != true { animationView?.isHidden = true }
+            if !countdownLabel.isHidden { countdownLabel.isHidden = true }
+            if button.image != nil { button.image = nil }
+            if button.imagePosition != .noImage { button.imagePosition = .noImage }
+            button.needsDisplay = true
 
-        let text: String
-        switch (baseText, countdown) {
-        case let (base?, cd?):
-            text = (labelSide == .left) ? "\(base)  \(cd)" : "\(cd)  \(base)"
-        case let (base?, nil):
-            text = base
-        case let (nil, cd?):
-            text = cd
-        case (nil, nil):
-            text = ""
-        }
+            let baseText = compactLabelText(for: activeLoadSource)
+            let displayText: String
+            if let cd = countdown {
+                displayText = "\(baseText)  \(cd)"
+            } else {
+                displayText = baseText
+            }
 
-        // Sizing before the text, so the slot is never briefly too narrow for what is about to go in it.
-        // Assigning only on a real change keeps AppKit from re-running status-bar layout when width holds.
-        let width = labelSlotWidth(for: text)
-        if abs(item.length - width) > 0.01 {
-            item.length = width
+            let reservedText: String
+            let baseReserved = compactLabelText(for: activeLoadSource, ceiling: true)
+            if let cdTemplate = countdownTemplate {
+                reservedText = "\(baseReserved)  \(cdTemplate)"
+            } else {
+                reservedText = baseReserved
+            }
+
+            let measured = max(measuredTextWidth(reservedText), measuredTextWidth(displayText))
+            let totalW = ceil(measured) + pad
+            if abs(statusItem.length - totalW) > 0.01 {
+                statusItem.length = totalW
+            }
+
+            button.title = displayText
+            if let color = tintColor {
+                button.attributedTitle = NSAttributedString(
+                    string: displayText,
+                    attributes: [.foregroundColor: color, .font: Self.labelFont]
+                )
+            } else {
+                button.attributedTitle = NSAttributedString(
+                    string: displayText,
+                    attributes: [.foregroundColor: NSColor.labelColor, .font: Self.labelFont]
+                )
+            }
+            button.setAccessibilityLabel(displayText.replacingOccurrences(of: "\u{2007}", with: ""))
         }
-        button.title = text
-        // The label wears the same tint as the bar under the animation — both through keepAwakeTintColor,
-        // so they cannot disagree: full tone for our own hold, faded for someone else's, faintest while
-        // ours is armed but suspended, nothing when nothing is held and nothing is armed.
-        if let color = keepAwakeTintColor(
-            for: awakeHold, paused: keepAwakeArmedNotHolding, appearance: button.effectiveAppearance) {
-            button.attributedTitle = NSAttributedString(
-                string: text,
-                attributes: [.foregroundColor: color, .font: Self.labelFont]
-            )
-        }
-        // Strip the width padding for VoiceOver — the figure spaces are a layout device.
-        button.setAccessibilityLabel(text.replacingOccurrences(of: "\u{2007}", with: ""))
+    }
+
+    private func measuredTextWidth(_ text: String) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: Self.labelFont]).width
     }
 
     // MARK: - Status Bar Trace Chart
 
-    private func traceChartColor(for value: Double, isBattery: Bool) -> NSColor {
+    private func traceChartColor(for value: Double, isBattery: Bool, dark: Bool) -> NSColor {
         if isBattery {
-            if value < Tuning.batteryChartLowThreshold { return .systemRed }
-            if value < Tuning.batteryChargeMediumThreshold { return .systemYellow }
-            return .systemGreen
+            if value < Tuning.batteryChartLowThreshold {
+                return dark ? Tuning.traceChartTerracottaDark : Tuning.traceChartTerracottaLight
+            }
+            if value < Tuning.batteryChargeMediumThreshold {
+                return dark ? Tuning.traceChartSandDark : Tuning.traceChartSandLight
+            }
+            return dark ? Tuning.traceChartSageDark : Tuning.traceChartSageLight
         } else {
-            if value < Tuning.cpuStateLowThreshold { return .systemGreen }
-            if value < Tuning.cpuStateMediumThreshold { return .systemYellow }
-            return .systemRed
+            if value < Tuning.cpuStateLowThreshold {
+                return dark ? Tuning.traceChartSageDark : Tuning.traceChartSageLight
+            }
+            if value < Tuning.cpuStateMediumThreshold {
+                return dark ? Tuning.traceChartSandDark : Tuning.traceChartSandLight
+            }
+            return dark ? Tuning.traceChartTerracottaDark : Tuning.traceChartTerracottaLight
         }
     }
 
@@ -6906,7 +6494,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             let isHourScale = (keepAwakeSelectedDuration.seconds ?? 0) >= 3600
                 || (keepAwakeRemainingSeconds ?? 0) >= 3600
             let template = isHourScale ? "88:88:88" : "88:88"
-            countdownWidth = measuredLabelWidth(template)
+            countdownWidth = measuredTextWidth(template)
         } else {
             countdownWidth = 0
         }
@@ -6914,56 +6502,51 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         let totalContentWidth = countdown != nil ? chartWidth + gap + countdownWidth : chartWidth
         let imageSize = NSSize(width: totalContentWidth, height: imageHeight)
         let samples = loadHistory
-        let capacity = Tuning.loadHistoryCapacity
+        let barCount = Tuning.labelChartBarCount
+        let barWidth = Tuning.labelChartBarWidth
+        let barRadius = barWidth / 2.0
         let isBattery = (activeLoadSource == .battery)
-        let sideIsLeft = (labelSide == .left)
+        let isDark = appearance?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let hold = awakeHold
+        let paused = keepAwakeArmedNotHolding
 
         let textColor = keepAwakeTintColor(
-            for: awakeHold,
-            paused: keepAwakeArmedNotHolding,
+            for: hold,
+            paused: paused,
             appearance: appearance
         ) ?? NSColor.labelColor
 
         let img = NSImage(size: imageSize, flipped: false) { [weak self] _ in
             guard let self else { return false }
 
-            let chartX: CGFloat
-            let textX: CGFloat
-            if countdown != nil {
-                if sideIsLeft {
-                    chartX = 0
-                    textX = chartWidth + gap
-                } else {
-                    textX = 0
-                    chartX = countdownWidth + gap
-                }
-            } else {
-                chartX = 0
-                textX = 0
-            }
+            let chartX: CGFloat = 0
+            let textX: CGFloat = chartWidth + gap
 
             // 1. Draw chart
             let chartOriginY = (imageHeight - chartHeight) / 2.0
             let plot = NSRect(x: chartX, y: chartOriginY, width: chartWidth, height: chartHeight)
+            let slotWidth = plot.width / CGFloat(barCount)
 
-            NSColor.quaternaryLabelColor.setFill()
-            NSBezierPath(rect: NSRect(x: plot.minX, y: plot.minY, width: plot.width, height: 1)).fill()
+            // Keep-awake track line: when held awake or armed/suspended, illuminate the bottom track
+            if let barColor = self.keepAwakeTintColor(for: hold, paused: paused, appearance: appearance) {
+                barColor.setFill()
+                NSBezierPath(rect: NSRect(x: plot.minX, y: plot.minY, width: plot.width, height: Tuning.keepAwakeBarThickness)).fill()
+            } else if samples.isEmpty {
+                NSColor.quaternaryLabelColor.setFill()
+                NSBezierPath(rect: NSRect(x: plot.minX, y: plot.minY, width: plot.width, height: 1.0)).fill()
+            }
 
             if !samples.isEmpty {
-                let slotWidth = plot.width / CGFloat(capacity)
-                let barWidth = max(1.0, slotWidth - Tuning.labelChartBarGap)
-                let count = min(samples.count, capacity)
+                let count = min(samples.count, barCount)
                 let trailing = samples.suffix(count)
                 for (offset, value) in trailing.enumerated() {
                     let clamped = min(max(value, 0), 1)
-                    let slot = capacity - count + offset
+                    let slot = barCount - count + offset
                     let x = plot.minX + CGFloat(slot) * slotWidth
-                    let h = max(1.0, CGFloat(clamped) * plot.height)
+                    let h = max(barWidth, CGFloat(clamped) * plot.height)
                     let barRect = NSRect(x: x, y: plot.minY, width: barWidth, height: h)
-                    self.traceChartColor(for: clamped, isBattery: isBattery)
-                        .withAlphaComponent(0.9)
-                        .setFill()
-                    NSBezierPath(roundedRect: barRect, xRadius: 0.5, yRadius: 0.5).fill()
+                    self.traceChartColor(for: clamped, isBattery: isBattery, dark: isDark).setFill()
+                    NSBezierPath(roundedRect: barRect, xRadius: barRadius, yRadius: barRadius).fill()
                 }
             }
 
@@ -6975,14 +6558,8 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
                 ]
                 let textSize = (countdownText as NSString).size(withAttributes: attrs)
                 let textY = (imageHeight - textSize.height) / 2.0
-                let alignedTextX: CGFloat
-                if sideIsLeft {
-                    alignedTextX = textX + (countdownWidth - textSize.width)
-                } else {
-                    alignedTextX = textX
-                }
                 (countdownText as NSString).draw(
-                    at: NSPoint(x: alignedTextX, y: textY),
+                    at: NSPoint(x: textX, y: textY),
                     withAttributes: attrs
                 )
             }
@@ -7001,7 +6578,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // reading is a fixed-width readout with the digits in columns, not a string that grows and shrinks.
     //
     // With `ceiling`, every field is fed its own ceiling instead of the live value: the widest reading the
-    // source can produce, measured by labelSlotWidth to reserve the slot and never displayed. One builder
+    // source can produce, measured by updateDisplaySlot to reserve the slot and never displayed. One builder
     // for both, so the reservation cannot drift from the text it reserves for.
     private func compactLabelText(for source: LoadSource, ceiling: Bool = false) -> String {
         if !ceiling && !activeSourceHasSample { return "\(source.labelTag) …" }
@@ -7080,7 +6657,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // against a digit's 8.1pt, so `%3.0f`-style padding still changes width as the digit count changes,
     // which is the jitter this whole path exists to remove.
     //
-    // A value above the ceiling formats wider than the field and is NOT truncated — labelSlotWidth widens
+    // A value above the ceiling formats wider than the field and is NOT truncated — updateDisplaySlot widens
     // the slot for that tick instead. Rare, honest, and self-correcting.
     private static func labelField(_ value: Double, decimals: Int, ceiling: Double) -> String {
         let format = "%.\(decimals)f"
@@ -7092,86 +6669,85 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // MARK: - Preset & source selection
 
     @objc
+    private func selectTraceChartPreset() {
+        setDisplayMode(.trace)
+    }
+
+    @objc
+    private func selectLiveValuePreset() {
+        setDisplayMode(.value)
+    }
+
+    @objc
     private func selectPreset(_ sender: NSMenuItem) {
         guard allPresets.indices.contains(sender.tag) else { return }
         let preset = allPresets[sender.tag]
+        if displayMode != .gif {
+            displayMode = .gif
+            syncGameLoopRunning()
+        }
         switchToGif(to: preset.path, descriptor: preset)
+        applySizing()
+        refreshPresetSelectionState()
+        persistState()
     }
 
     @objc
     private func selectLoadSource(_ sender: NSMenuItem) {
         guard let source = LoadSource(rawValue: sender.tag), source != activeLoadSource else { return }
+        setLoadSource(source)
+    }
+
+    private func setLoadSource(_ source: LoadSource) {
+        guard source != activeLoadSource else { return }
         activeLoadSource = source
-        // Sample the newly-active source at once and re-derive speed immediately (bypassing the
-        // 2s-tick hysteresis), the same way preset switches re-derive on the spot. Pass elapsed=nil:
-        // an on-demand resample has no meaningful interval, so counter-delta signals (memory's swap
-        // rate) just store a baseline here and re-warm over the next tick. Reset lastSampleUptime so
-        // that next tick treats the gap as a fresh start rather than dividing by a stale interval.
-        // reevaluateSpeedForCurrentConditions no-ops until the source has a usable sample.
-        // A mixed-source history would be meaningless, so drop the old source's trace; seed it with
-        // the on-demand resample if that source already has a usable value (e.g. CPU/GPU/memory).
         loadHistory.removeAll(keepingCapacity: true)
         if let seed = sampleActiveSource(elapsed: nil) {
             recordLoadSample(chartSample(forDriver: seed))
         }
         lastSampleUptime = nil
         reevaluateSpeedForCurrentConditions()
-        // Rebuild the other-source rows so the newly-active source drops out of the list and the
-        // previously-active one (re)joins it — the list only ever shows the *other* readers.
-        refreshShowAllSourcesState()
+        applySizing()
+        refreshSourceListState()
         refreshMenuMetrics()
+        persistState()
     }
 
-    @objc
-    private func toggleShowAllSources() {
-        showAllSources.toggle()
-        // Priming on engage refreshes the dormant counter-delta readers' baselines, so their first
-        // delta after the mode turns on isn't computed over a stale multi-minute gap (a rate spike).
-        if showAllSources {
-            primeInactiveSources()
-        }
-        refreshShowAllSourcesState()
+    private func setDisplayMode(_ mode: DisplayMode) {
+        guard mode != displayMode else { return }
+        displayMode = mode
+        syncGameLoopRunning()
+        applySizing()
+        refreshPresetSelectionState()
         refreshMenuMetrics()
+        persistState()
     }
 
     // Store fresh counter baselines for readers that haven't been sampled while inactive, so their
     // first real delta once show-all begins is measured over a single tick, not the whole dormant gap.
     // elapsed=nil → each counter-delta reader just stores its baseline and reports no rate (it warms up
     // on the next 2s tick); instantaneous readers (cpu/gpu/fan/battery) are point reads, so this is a
-    // harmless refresh for them. lastSampleUptime is reset so the next tick starts a fresh interval.
+    // harmless refresh for them.
     private func primeInactiveSources() {
         for source in LoadSource.allCases where source != activeLoadSource && telemetry.isSourceAvailable(source) {
             _ = telemetry.sampleSource(source, elapsed: nil)
         }
-        lastSampleUptime = nil
     }
 
-    // Update the disclosure header glyph and the inline per-source rows. Collapsed → every row hidden.
-    // Expanded → one compact readout row per *available, non-active* source (the active source is shown
-    // on top with the sparkline, and unavailable sources — Fan on fanless Macs, Battery on desktops —
-    // stay hidden, mirroring the old disabled Load Source rows). Each visible row is clickable and
-    // switches the animation's driving source (selectLoadSource).
-    private func refreshShowAllSourcesState() {
-        otherSourcesHeaderView.isExpanded = showAllSources
-        for item in otherSourceRowItems {
-            guard let source = LoadSource(rawValue: item.tag) else { continue }
-            if showAllSources, source != activeLoadSource, telemetry.isSourceAvailable(source) {
-                item.isHidden = false
-                item.title = allSourcesRowText(for: source)
-                item.toolTip = (source == .battery) ? batteryTooltipText() : nil
-            } else {
+    // Update the unified per-source rows.
+    private func refreshSourceListState() {
+        for source in LoadSource.allCases {
+            guard let item = sourceMenuItems[source] else { continue }
+            let available = telemetry.isSourceAvailable(source)
+            if !available {
                 item.isHidden = true
-                item.toolTip = nil
+                continue
             }
+            item.isHidden = false
+            item.title = telemetry.hasSample(source) ? usageLineText(for: source) : MenuTitle.line(source.menuTitle, MenuTitle.warmingUp)
+            item.toolTip = (source == .battery) ? batteryTooltipText() : nil
+            item.state = (source == activeLoadSource) ? .on : .off
         }
-    }
-
-    // One compact "<Source>: <value>" row for the other-sources list, reusing the same line builders
-    // as the single-source dashboard so the two never drift. "warming up..." until the reader (a
-    // counter-delta source) has produced its first usable sample.
-    private func allSourcesRowText(for source: LoadSource) -> String {
-        telemetry.hasSample(source) ? usageLineText(for: source)
-                                    : MenuTitle.line(source.menuTitle, MenuTitle.warmingUp)
     }
 
     // MARK: - Keep Awake
@@ -7242,7 +6818,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // A child already running carries the OLD window's `-t`, so it has to be replaced.
         sleepPreventer.restartForNewWindow(remaining: keepAwakeRemainingSeconds)
         updateSleepPrevention()
-        applyLabelMode()
+        updateDisplaySlot()
         syncKeepAwakeCountdownTicker()
         persistState()
     }
@@ -7264,7 +6840,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     private func clearKeepAwakeWindow() {
         keepAwakeSelectedDuration = .indefinite
         keepAwakeDeadline = nil
-        applyLabelMode()
+        updateDisplaySlot()
         syncKeepAwakeCountdownTicker()
     }
 
@@ -7392,9 +6968,8 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
                     enabled: sleepPreventer.isEnabled
                 ),
                 settings: PersistedState.Settings(
-                    labelMode: labelMode.persistedMode,
-                    labelCustomText: labelMode.persistedCustomText,
-                    labelSide: labelSide.rawValue,
+                    displayMode: displayMode.rawValue,
+                    labelMode: nil,
                     batteryThreshold: keepAwakeBatteryThreshold,
                     freezeAnimation: manualFreeze
                 )
@@ -7402,33 +6977,26 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         )
     }
 
-    // Launch-time freeze. Menu-only like the label side, so it restores unconditionally from the
-    // settings block — no flag exists to defer to. The OS reading is taken here too, so a launch under
-    // Reduce Motion (or with a saved manual freeze) never animates before the first sync: this runs
-    // before the label pass (handoff slot sizing) and before syncGameLoopRunning() ever starts a driver.
+    // Launch-time freeze.
+    // Restores unconditionally from the settings block — no flag exists to defer to. The OS reading is taken
+    // here too, so a launch under Reduce Motion (or with a saved manual freeze) never animates before the
+    // first sync.
     private func applyLaunchFreezeState() {
         manualFreeze = StateStore.load()?.settings?.freezeAnimation ?? false
         systemReduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
-    // Launch-time label mode, the same precedence shape as applyLaunchKeepAwakeState: an explicit
-    // --label / CO_AWARENESS_LABEL wins — including an explicit `off`, which suppresses the saved
-    // mode — otherwise the mode saved by the previous run is restored. Unlike a keep-awake window there
-    // is nothing self-limiting to weigh here: a label holds no assertion and costs nothing but a slot,
-    // so every mode is restorable, not just bounded ones.
-    private func applyLaunchLabelState() {
-        let saved = StateStore.load()?.settings
-        // The side has no flag to defer to (menu-only, like the Keep Awake tint), so it restores on its
-        // own terms — independently of the mode, whose flag may well have won below.
-        if let side = MenuBarLabelSide.fromPersisted(saved?.labelSide) {
-            labelSide = side
+    // Launch-time display mode: an explicit --display / CO_AWARENESS_DISPLAY wins, otherwise the mode
+    // saved by the previous run is restored (with backward compatibility for saved labelMode).
+    private func applyLaunchDisplayState() {
+        if let mode = config.displayMode {
+            displayMode = mode
+            return
         }
-        guard config.label == nil else { return }
-        guard let saved,
-              let restored = MenuBarLabel.fromPersisted(mode: saved.labelMode,
-                                                        customText: saved.labelCustomText)
-        else { return }
-        labelMode = restored
+        let saved = StateStore.load()?.settings
+        if let mode = DisplayMode.fromSavedState(display: saved?.displayMode, legacyLabel: saved?.labelMode) {
+            displayMode = mode
+        }
     }
 
     // Launch-time battery release threshold, in precedence order: an explicit --battery-threshold /
@@ -7497,7 +7065,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         keepAwakeDeadline = deadline
         sleepPreventer.setEnabled(true)
         updateSleepPrevention()
-        applyLabelMode()
+        updateDisplaySlot()
         syncKeepAwakeCountdownTicker()
     }
 
@@ -7528,45 +7096,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         let total = TimeInterval(hours * 3600 + minutes * 60)
         guard total > 0 else { return }
         armKeepAwake(with: .seconds(total))
-    }
-
-    @objc
-    private func selectLabelOff() {
-        setLabelMode(.off)
-    }
-
-    @objc
-    private func selectLabelValue() {
-        setLabelMode(.value)
-    }
-
-    @objc
-    private func selectLabelChart() {
-        setLabelMode(.chart)
-    }
-
-    // Tag is an index into MenuBarLabelSide.allCases — see the Position group's construction.
-    @objc
-    private func selectLabelSide(_ sender: NSMenuItem) {
-        let sides = MenuBarLabelSide.allCases
-        guard sides.indices.contains(sender.tag) else { return }
-        setLabelSide(sides[sender.tag])
-    }
-
-    // Prompt for a fixed custom label. Switches to .custom on Apply; an empty field means .off.
-    @objc
-    private func promptCustomLabel() {
-        let current: String = { if case .custom(let t) = labelMode { return t } else { return "" } }()
-        guard let values = runFieldPrompt(
-            title: "Set Menu Bar Label",
-            message: "Shown in its own menu-bar slot. Up to \(Tuning.labelMaxChars) characters; leave blank for none.",
-            action: "Apply",
-            fields: [PromptField(label: "Label text", value: current, placeholder: "TEXT", width: 260)],
-            caretAtEnd: true
-        ) else { return }
-
-        let input = values[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        setLabelMode(input.isEmpty ? .off : .custom(String(input.prefix(Tuning.labelMaxChars))))
     }
 
     // A row in the Battery Threshold group. Tags are indices into Tuning.batteryThresholdRows, with
@@ -7637,36 +7166,14 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         persistState()
     }
 
-    // Single point that changes the label mode: updates state, reconciles the slot, refreshes the menu,
-    // and persists. The persist belongs here and only here — this is the mutating gesture, the same rule
-    // the Keep Awake intent writers follow.
-    private func setLabelMode(_ mode: MenuBarLabel) {
-        guard mode != labelMode else { return }
-        labelMode = mode
-        applyLabelMode()
-        refreshLabelSelectionState()
-        persistState()
-    }
-
-    // Single point that changes the label's side, same contract as setLabelMode. The move itself is just
-    // applyLabelMode swapping which of the two slots is non-zero; nothing is rebuilt. Takes effect even
-    // while the label is off, so the choice is already in place when it next comes on.
-    private func setLabelSide(_ side: MenuBarLabelSide) {
-        guard side != labelSide else { return }
-        labelSide = side
-        applyLabelMode()
-        refreshLabelSelectionState()
-        persistState()
-    }
-
     // Everything that must react when the effective freeze changes, from either trigger — the
     // conditionsDidChange() shape. Persisting is NOT here: the observer path is a reading, not intent,
     // and persistState() stays gesture-only.
     private func freezeDidChange() {
         syncGameLoopRunning()
-        applyLabelMode()                  // engage/release the label handoff (resizes the slot)
+        updateDisplaySlot()                  // engage/release the label handoff (resizes the slot)
         refreshFreezeAnimationState()
-        refreshLabelSelectionState()      // parent readout may gain/lose the handoff suffix
+        refreshSourceListState()
     }
 
     // Checkmark is INTENT (manualFreeze only); the title names the CONDITION while Reduce Motion
@@ -7706,7 +7213,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             let configArgs = Restarter.appArguments(
                 presetOrPath: activePreset?.key ?? activeGifPath,
                 loadSourceKey: activeLoadSource.key,
-                labelArgument: labelMode.launchArgument,
+                displayArgument: displayMode.rawValue,
                 batteryThresholdPercent: Int((keepAwakeBatteryThreshold * Tuning.percentScale).rounded()),
                 speedMultiplierOverride: config.speedMultiplierOverride,
                 showAllSources: showAllSources,
@@ -7994,9 +7501,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // Shows the line whenever there is anything to say — the Mac is held by anyone, or our own hold is
     // armed but suspended — and distinguishes the three by tone, never by presence alone.
     private func updateKeepAwakeBar() {
-        // The adjacent label wears the same tint on the same condition, so it recolors here rather than
-        // waiting for the next 2s tick (see updateValueLabel).
-        updateValueLabel()
+        updateDisplaySlot()
         guard let bar = keepAwakeBar, let host = animationView?.layer else { return }
         // Not keyed on our own child alone: a bare `caffeinate` in a terminal lights the line too (R16), and
         // so does an armed-but-suspended hold of ours (R7). keepAwakeTint holds the precedence.
@@ -8092,7 +7597,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     // ones — identical for an occlusion resume and an unfreeze. On freeze the last advance already
     // drew the current frame, so no renderCurrentFrame() is needed either way.
     private func syncGameLoopRunning() {
-        let shouldRun = !statusItemOccluded && animationFreeze == nil
+        let shouldRun = !statusItemOccluded && animationFreeze == nil && effectiveDisplayMode == .gif
         if shouldRun {
             if displayLink == nil, fallbackTimer == nil { startGameLoop() }
         } else {
@@ -8274,16 +7779,11 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
 
     private func applySizing() {
         guard !frames.isEmpty else { return }
-        // GIF-based sizing: the item width follows the loaded GIF's own aspect ratio at menu-bar
-        // height — no per-preset constant, no user override. The layer's .resizeAspect gravity
-        // fills the slot proportionally.
-        statusItem.length = slotLength()
-        // Re-sync the layer-host view to the (possibly resized) button. Autoresizing tracks live
-        // resizes, but setting length may not have laid the button out yet, so pin it explicitly.
-        if let button = statusItem.button {
-            animationView?.frame = button.bounds
+        updateDisplaySlot()
+        if effectiveDisplayMode == .gif {
+            updateRenderedFrames()
+            renderCurrentFrame()
         }
-        updateRenderedFrames()
         updateKeepAwakeBar()   // re-lay the overlay bar over the (possibly) resized item
     }
 
