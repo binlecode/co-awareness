@@ -520,8 +520,13 @@
   .label-slot .mini{display:inline-flex; align-items:flex-end; gap:1px; height:14px; width:45px; vertical-align:middle;
     border-bottom:1px solid rgba(255,255,255,.18)}
   .label-slot .mini i{flex:1; border-radius:1px 1px 0 0; opacity:.9}
-  .readout-stage .runner-slot{display:inline-flex; align-items:center; margin:0 6px}
+  .readout-stage .runner-slot{display:inline-flex; align-items:center; justify-content:center; min-width:45px; height:26px; margin:0 6px}
   .readout-stage .runner-slot img{height:26px; width:auto; display:block}
+  .readout-stage .runner-slot .mini{display:inline-flex; align-items:flex-end; gap:1.5px; height:14px; width:45px; vertical-align:middle;
+    border-bottom:1px solid rgba(255,255,255,.18)}
+  .readout-stage .runner-slot .mini i{flex:1; border-radius:1px 1px 0 0; opacity:.9}
+  .readout-stage .runner-slot .val-text{font-family:var(--mono); font-size:12.5px; letter-spacing:.02em; color:rgba(255,255,255,.9);
+    font-variant-numeric:tabular-nums; white-space:nowrap}
   .readout-stage .clock{font-variant-numeric:tabular-nums; font-size:12px; opacity:.9; margin-left:10px}
   /* the dropdown "live dashboard" mock */
   .dash{align-self:stretch; background:var(--ink-2); border:1px solid var(--ink-3); border-radius:12px;
@@ -721,14 +726,14 @@
           <button type="button" data-mode="value" aria-pressed="false">Live Value</button>
         </div>
         <p class="readout-note">…and the dropdown is a live dashboard: a 60-second sparkline, per-source
-          readouts, and load averages — <code>Other Sources</code> switches what drives it.</p>
+          readouts, and load averages — <code>Driving Telemetry Source</code> switches what drives it.</p>
       </div>
       <div class="readout-stage">
         <div class="barmock" role="img" aria-label="A macOS menu bar with a live status item">
           <span class="apple"></span>
           <span class="mtitle">Terminal</span>
           <span class="spacer"></span>
-          <span class="runner-slot"><img src="../gifs/running-horse-white.gif" alt=""></span>
+          <span class="runner-slot" id="readoutSlot"><img src="../gifs/running-horse-white.gif" alt="Running horse"></span>
           <span class="clock">Wed 9:41</span>
         </div>
         <div class="dash" aria-hidden="true">
@@ -740,7 +745,7 @@
         <span class="caption" id="labelCaption">flip the display modes — runner GIF, trace chart, or live value</span>
       </div>
     </div>
-    <p class="heroBar cap">Default is runner GIF; switchable live from the <span class="mono">Presets</span> submenu, or at launch via <span class="mono">--display</span> / <span class="mono">CO_AWARENESS_DISPLAY</span>.</p>
+    <p class="heroBar cap">Default is runner GIF; switchable live from the <span class="mono">Display Mode</span> submenu, or at launch via <span class="mono">--display</span> / <span class="mono">CO_AWARENESS_DISPLAY</span>.</p>
   </section>
 
   <section id="cast">
@@ -1300,42 +1305,41 @@
   }
   renderMark();
 
-  // menu-bar label — mirrors the Menu Bar Label submenu (off / live value / trace chart / custom text)
+  // display modes — mirrors the Display Mode submenu (Runner GIF / Trace Chart / Live Value)
   var segBtns=document.querySelectorAll('#readout .seg button');
-  var labelSlot=document.getElementById('labelSlot');
+  var readoutSlot=document.getElementById('readoutSlot');
   var labelCap=document.getElementById('labelCaption');
   var trace=[22,26,30,28,34,40,52,48,44,58,66,72,63,55,49,44,47,51,46,42,38,45,50,47];
-  function traceBars(){
+  function traceBars(count){
     var html='';
-    for(var t=0;t<trace.length;t++){
-      var u=trace[t];
-      var col=u<45?'var(--river)':(u<70?'var(--lantern)':'var(--ember)');
-      html+='<i style="height:'+Math.max(u,8)+'%;background:'+col+'"></i>';
+    var arr=count?trace.slice(-count):trace;
+    for(var t=0;t<arr.length;t++){
+      var u=arr[t];
+      var col=u<40?'#8AB394':(u<70?'#D4B885':'#CC7566');
+      html+='<i style="height:'+Math.max(u,10)+'%;background:'+col+'"></i>';
     }
     return html;
   }
-  function setLabelMode(mode){
+  function setDisplayMode(mode){
     for(var i=0;i<segBtns.length;i++){
       segBtns[i].setAttribute('aria-pressed', segBtns[i].getAttribute('data-mode')===mode?'true':'false');
     }
-    if(mode==='off'){
-      if(labelSlot) labelSlot.classList.remove('on');
-      if(labelCap) labelCap.textContent='off — the slot claims no menu-bar space';
+    if(!readoutSlot) return;
+    if(mode==='gif'){
+      readoutSlot.innerHTML='<img src="../gifs/running-horse-white.gif" alt="Running horse">';
+      if(labelCap) labelCap.textContent='runner GIF — animated creature whose speed tracks live system load';
+    } else if(mode==='trace'){
+      readoutSlot.innerHTML='<span class="mini">'+traceBars(12)+'</span>';
+      if(labelCap) labelCap.textContent='trace chart — 12-bar mineral sparkline tracking the last 60s';
     } else if(mode==='value'){
-      if(labelSlot){ labelSlot.textContent='CPU 47%'; labelSlot.classList.add('on'); }
-      if(labelCap) labelCap.textContent='live value — the active source, on the 2s tick';
-    } else if(mode==='chart'){
-      if(labelSlot){ labelSlot.innerHTML='<span class="mini">'+traceBars()+'</span>'; labelSlot.classList.add('on'); }
-      if(labelCap) labelCap.textContent='trace chart — the last 60s of the active source';
-    } else {
-      if(labelSlot){ labelSlot.textContent='BUILD'; labelSlot.classList.add('on'); }
-      if(labelCap) labelCap.textContent='custom text — a fixed tag, up to 24 chars';
+      readoutSlot.innerHTML='<span class="val-text">CPU 47%</span>';
+      if(labelCap) labelCap.textContent='live value — monospaced real-time reading with zero jitter';
     }
   }
   for(var b=0;b<segBtns.length;b++){
-    segBtns[b].addEventListener('click',function(){ setLabelMode(this.getAttribute('data-mode')); });
+    segBtns[b].addEventListener('click',function(){ setDisplayMode(this.getAttribute('data-mode')); });
   }
-  setLabelMode('value');
+  setDisplayMode('gif');
 
   // dashboard sparkline — a curated 60s trace (green/amber/vermilion by the same load thresholds)
   var spark=document.getElementById('dashSpark');
