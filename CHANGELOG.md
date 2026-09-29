@@ -34,6 +34,21 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.3.0] - 2026-09-29
+
+### Added
+
+- **Runtime intent forwarding (`set`)**: Added `set` subcommand (`co-awareness set [--keep-awake <dur>] [--keep-awake-pid <pid>] [--battery-threshold <pct>] [--display <mode>] [--load-source <src>] [preset]`). Forwards runtime intent to the active resident instance via atomic `intent.json` and POSIX `SIGUSR1`, eliminating singleton collision errors when controlling a running menu bar instance.
+- **Enriched `--once` snapshot**: Added `power_source` ("ac" | "battery"), `memory_pressure` ("normal" | "warn" | "critical"), `cpu_p_cores`, `cpu_e_cores`, `battery_health_pct`, and `battery_cycles` to the single-line telemetry JSON contract.
+- **State storage symmetry**: Extended `state.json` to persist `loadSource` and `preset`, maintaining consistency between CLI flags and GUI selections across relaunches.
+- **Orthogonal appearance and driver submenus**: Decoupled `Display Mode ▸` (Runner GIF, Trace Chart, Live Value), `Runner Preset ▸` (character skins), and `Driving Telemetry Source ▸` (explicit 10-source selector).
+
+### Changed
+
+- **Read-only telemetry dashboard**: Top 10 hardware sensor items are now non-interactive readouts with inline active driver tags (`[Active · <x>x]`), preventing accidental driver switching during inspection.
+- **Nested Keep Awake preferences**: Reorganized `Keep Awake ▸` with duration controls at the top, `Battery Safety Floor` and `Indicator Bar Tint` nested within, and system assertions grouped below.
+- **Noise reduction**: Removed internal layout debug rows `Width: 18 pt` and `Load Avg: -- / -- / --`.
+
 ## [2.2.1] - 2026-09-28
 
 ### Changed

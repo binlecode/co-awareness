@@ -91,6 +91,7 @@ $BIN --keep-awake-pid >/dev/null 2>&1;              chk "--keep-awake-pid no val
 # this can be baked into a login item), so which value each form resolves to is asserted by behavior
 # in §3a. A bare "rc=0, flag accepted" check here would restate that without observing anything.
 $BIN --battery-threshold >/dev/null 2>&1;           chk "--battery-threshold no value" 1 $?
+$BIN set --bogus >/dev/null 2>&1;                     chk "set unknown flag rejected" 1 $?
 for f in --speed-multiplier --display --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --once --status; do
   $BIN --help 2>&1 | grep -q -- "$f" && { echo "  PASS --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL --help missing $f"; fail=$((fail+1)); }
 done

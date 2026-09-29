@@ -36,6 +36,7 @@ print_help() {
   cat <<EOF
 Usage:
   $APP_CMD_NAME [dog-white|dog-black|horse-black|horse-white|chihiro|chihiro-white|chihiro-black|totoro|totoro-group-white|totoro-group-black|totoro-white|totoro-black|/path/to.gif] [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--display <gif|trace|value>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
+  $APP_CMD_NAME set [--keep-awake <dur>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--display <gif|trace|value>] [--load-source <src>] [preset]
   CO_AWARENESS_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--display <gif|trace|value>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
 
 Presets:
@@ -173,6 +174,13 @@ main() {
   # deliberately not consulted: a reading from the previous build is still a true reading, and a
   # resident instance is the previous build. Exclusivity is the binary's to enforce (it owns the usage
   # text), so every argument goes through unchanged.
+  if [[ $# -gt 0 && ( "$1" == "set" || "$1" == "--set" ) ]]; then
+    if [[ ! -x "$script_dir/CoAwareness" ]]; then
+      print -u2 "$APP_CMD_NAME: no binary to run; build one with \`$APP_CMD_NAME --precompile\`."
+      exit 2
+    fi
+    exec "$script_dir/CoAwareness" "$@"
+  fi
   for arg in "$@"; do
     if [[ "$arg" == "--once" || "$arg" == "--status" ]]; then
       if [[ ! -x "$script_dir/CoAwareness" ]]; then

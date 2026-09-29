@@ -508,14 +508,17 @@ The rate readings (network, disk, swap, battery current, ANE) are counter deltas
 **Schema.** `v` is the contract version and the only field always present; every other key appears when its reader answered. Names carry their unit — `_mibs` is MiB/s (the menu writes "MB/s" as display shorthand: same number, not a second fact). Adding a field is not a version bump; removing one or changing what it means is, and consumers read by key and ignore what they do not know.
 
 ```json
-{"v":1,"cpu_pct":14.2,"cpu_p_pct":9.8,"cpu_e_pct":27.4,"mem_pct":41.0,"swap_mibs":0.00,"bw_gbps":58.3,"gpu_pct":28.0,"gpu_rend_pct":26.0,"gpu_tiler_pct":11.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
+{"v":1,"power_source":"ac","memory_pressure":"normal","cpu_pct":14.2,"cpu_p_pct":9.8,"cpu_e_pct":27.4,"cpu_p_cores":12,"cpu_e_cores":4,"mem_pct":41.0,"swap_mibs":0.00,"bw_gbps":58.3,"gpu_pct":28.0,"gpu_rend_pct":26.0,"gpu_tiler_pct":11.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"battery_health_pct":100.0,"battery_cycles":116,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
 ```
 
 | Field | Unit | Reader | Absent when |
 |---|---|---|---|
 | `v` | int | — | never |
+| `power_source` | `"ac"` · `"battery"` | `BatteryLoadMonitor` / IOKit | never |
+| `memory_pressure` | `"normal"` · `"warn"` · `"critical"` | `sysctl kern.memorystatus_vm_pressure_level` | never |
 | `cpu_pct` | % | `CPULoadMonitor` | never (Mach always answers) |
 | `cpu_p_pct` · `cpu_e_pct` | % | `CPULoadMonitor` cluster split (§ 4.1) | no published cluster map — both absent together, never one |
+| `cpu_p_cores` · `cpu_e_cores` | int | `CPULoadMonitor` topology counts | no published cluster map — both absent together |
 | `mem_pct` | % | `MemoryLoadMonitor` raw used fraction | never |
 | `swap_mibs` | MiB/s | `MemoryLoadMonitor` swap rate | swap counters unreadable |
 | `bw_gbps` | GB/s | `BandwidthLoadMonitor` (§ 4.8) | no AMCC bus histogram |
@@ -526,6 +529,7 @@ The rate readings (network, disk, swap, battery current, ANE) are counter deltas
 | `fan_rpm` | RPM, one entry per fan | `FanLoadMonitor` (SMC) | fanless machine |
 | `battery_pct` | % | `BatteryLoadMonitor` | desktop, no battery |
 | `battery_a` | A, discharge positive | `BatteryLoadMonitor` | not discharging (AC, or no current reading) |
+| `battery_health_pct` · `battery_cycles` | % · int | `BatteryDiagnosticsReader` | desktop or battery service unavailable |
 | `temp_c` | °C, hottest die sensor | `TemperatureLoadMonitor` (SMC) | no readable `Tp**` cluster |
 | `thermal` | `nominal` · `fair` · `serious` · `critical` | `KernelThermalPressure` | never |
 | `ane_w` | W | `ANELoadMonitor` (IOReport) | channel absent |
@@ -986,8 +990,10 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
     "deadline": 780000000.0
   },
   "settings": {
+    "batteryThreshold": 0.20,
     "displayMode": "gif",
-    "batteryThreshold": 0.20
+    "loadSource": "cpu",
+    "preset": "horse-white"
   }
 }
 ```
@@ -1081,6 +1087,47 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
 **Launcher interception.** Handled by the same pre-guard, pre-compile passthrough as `--once` (§ 4.7), for the same reasons and with the same exit 2 for a binary that has not been built.
 
 **Verification.** `tests/qa.sh` §2b covers the core tier — the no-instance answer, exclusivity, and the untouched state file — and is deterministic even with a developer's own app running, because `$BIN` is a check build and the needle is the binary's own name. §3j covers the live half against a real instance: the pid matches the one the script started, a 30m window reports a remainder inside its bounds, an indefinite hold reports `active` with no `remaining_s`, and — after that instance exits with `enabled: true` still on disk — the query returns `{"running":false}` rather than the stale intent.
+
+### 8.4 Runtime Intent Forwarding (The `set` Command)
+
+When `co-awareness` is already resident in the menu bar, control commands (`co-awareness set [--keep-awake <dur>] [--keep-awake-pid <pid>] [--battery-threshold <pct>] [--display <mode>] [--load-source <src>] [preset]`) forward runtime intent to the active instance rather than failing with an "already running" error:
+
+```
+          $ co-awareness set --keep-awake 30m
+                           |
+                           v
+        +-------------------------------------+
+        | ProcessProbe.newestMatch            |
+        | Resolves resident instance PID      |
+        +------------------+------------------+
+                           |
+                           v
+        +-------------------------------------+
+        | Atomic Intent File Generation       |
+        | Writes intent.json.tmp -> rename    |
+        +------------------+------------------+
+                           |
+                           v
+        +-------------------------------------+
+        | POSIX Signal Dispatch              |
+        | kill -USR1 <target_pid>             |
+        | Emits {"ok":true,...} to stdout     |
+        | Exits 0                             |
+        +------------------+------------------+
+                           |
+                           | SIGUSR1
+                           v
+        +-------------------------------------+
+        | Resident CoAwareness (RunLoop)      |
+        | DispatchSource.makeSignalSource     |
+        | Ingests intent.json, mutates state  |
+        | Updates status item & NSMenu        |
+        | Clears intent.json, persists state  |
+        +-------------------------------------+
+```
+
+- **Zero Sockets, Zero Daemon Debt**: Completely unprivileged, stateless execution. Operates without background listening threads, TCP ports, or orphan UNIX domain sockets.
+- **Immediate State Synchronization**: Updates status bar geometry, countdown tickers, and menu checkmarks in the live instance within milliseconds.
 
 ---
 
@@ -1195,6 +1242,7 @@ Parameters accepted by `co-awareness` and `CoAwareness`:
 | `--precompile` | off | Flag | Compiles Swift source atomically if newer than Mach-O, then exits 0/1 without launch | launcher only |
 | `--once` | off | Flag (strictly exclusive) | Emits single-line JSON snapshot of all available hardware sensors; physical units (§ 4.7) | binary & launcher |
 | `--status` | off | Flag (strictly exclusive) | Emits single-line JSON reporting resident instance status and Keep Awake hold (§ 8.3) | binary & launcher |
+| `set [flags]` | — | Subcommand | Forwards runtime intent to resident instance without restarting (§ 8.4) | binary & launcher |
 | `-h` / `--help` | off | Flag | Displays CLI usage synopsis and options reference | binary & launcher |
 
 *Mutual Exclusion Invariant:* `--once` and `--status` must each be the sole argument passed. Companion flags trigger an immediate exit 1 usage error to prevent conflicting GUI configuration.
@@ -1248,6 +1296,9 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v1.24** — the gesture, and the battery's own history | Option-click on any slot toggles Keep Awake without the menu; the dropdown reports battery health, cycle count and capacity | The first action reachable without opening anything — routed *through* the submenu's own arm/disarm so the 5% floor and the override rule cannot drift from it (§ 6.4, § 7.6); the first reading the app does not poll at all, gated entirely on menu open (§ 4.6) |
 | **v1.25.0** — the kernel's throttle vs our throttle | Temperature row annotates `· Thermal Throttling` on `.serious`/`.critical` pressure | Clear separation between what the kernel does to the machine (display-only) and what this app does about it (self-throttling), enforced in wiring and display (§ 5.2) |
 | **v2.0.0** — headless contracts, silicon splits & the rename | `--once` JSON snapshot and `TelemetryCore`; DRAM bus bandwidth via `BandwidthLoadMonitor` + CPU P/E cluster & GPU pipeline splits; `--status` app query; renamed to `co-awareness` — launcher, env prefix, state path | Telemetry core decoupled from GUI display concepts (§ 4.7); physical rate observation on memory controller bus histograms (§ 4.8); headless non-invasive process and hold inspection (§ 8.3); one name, one env prefix, one state path — no alias, no dual-prefix fallback (§ 8.2) |
+| **v2.1.0** — menu bar trace sparkline | `--label chart` / trace display mode | 12-bar mineral sparkline directly on the status bar slot (§ 6) |
+| **v2.2.0** — unified single slot display | `--display <gif\|trace\|value>` | Unified single status item geometry eliminating dual-slot jitter (§ 6) |
+| **v2.3.0** — canonical CLI substrate & ergonomic menu | Runtime intent forwarding (`set`) via POSIX signal + atomic `intent.json`; enriched `--once` snapshot with `power_source`, `memory_pressure`, topology and battery diagnostics; clean 4-tier menu architecture decoupling display modes from character presets and nesting battery safety floor | CLI leads as canonical substrate, GUI projects as ergonomic view; external agents control resident GUI instance without singleton deadlock (§ 8.4); telemetry snapshot parity with menu facts (§ 4.7); eliminated dashboard radio-button misclicks and internal debug leaks (§ 6) |
 
 ---
 
