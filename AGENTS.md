@@ -135,7 +135,7 @@ pkill -f 'CoAwareness'                 # 停止当前用户正在运行的实例
 
 ## 架构要点（正本见 docs/ARCHITECTURE.md）
 
-- **动词优先 CLI 与幂等 start** (`docs/ARCHITECTURE.md` §2, §8.4, §11.2)：首参只放动词（`start`·`status`·`snapshot`·`presets`·`build`），设置一律具名旗标；`start` 有常驻实例时校验后经 `intents/` 逐请求落盘 + `SIGUSR1` 转发，只启动时生效的旗标一律报错；help 只有一份、由二进制生成。启动器的 `legacy_argv` 是旧版本自发 argv 的临时桥，删除跟踪在 ROADMAP。
+- **动词优先 CLI 与幂等 start** (`docs/ARCHITECTURE.md` §2, §8.4, §11.2)：首参只放动词（`start`·`status`·`snapshot`·`presets`·`build`），设置一律具名旗标；`start` 有常驻实例时校验后经 `intents/` 逐请求落盘 + `SIGUSR1` 转发，只启动时生效的旗标一律报错；help 只有一份、由二进制生成；旧写法一律报错并给出替代写法，不设兼容别名。
 - **遥测核心与单发快照** (`docs/ARCHITECTURE.md` §4.7)：全部读数由 `TelemetryCore` 统一持有，GUI 与 `snapshot` 两条入口路径共用同一套 reader，互不定义；`snapshot` 只输出一份 schema（缺读数即缺键），且不接受任何参数。
 - **10 种无特权硬件遥测源** (`docs/ARCHITECTURE.md` §4)：CPU (Mach，含 P/E 簇拆分，簇归属取自 IODeviceTree `cluster-type`，严禁按 `hw.perflevel` 序号切片)、Memory + Swap (Mach `vm_statistics64`)、DRAM 带宽 (`IOReport` "PMP"/"DCS BW" 的 `AMCC…RD+WR` 残留直方图，按桶**中点**加权求均，正本见 §4.8)、GPU (IOAccelerator，含 Renderer/Tiler 拆分)、Network/Disk (IOKit 计数器增量)、Fan RPM (SMC)、Battery mA (IOKit PS)、Max Die Temp (SMC 二分查找 `Tp**`/`Tpx*` 传感器集群最大值)、ANE Watts (`IOReport` "Energy Model" 订阅式增量采样)。`IOReport` 是唯一的私有 API，由 `IOReportClient` 单点 `dlopen`/`dlsym` 绑定、各 reader 各自窄订阅（正本见 §4.5）。每种源均具备 `isAvailable` 探测，不可用时平滑降级。
 - **ThroughputScaler 速率归一化** (`docs/ARCHITECTURE.md` §4.2)：无界速率（网速/磁盘/swap/电池电流）经自适应滑动窗口归一化到 0..1，双向非对称裕量 + 迟滞计数器防抖；有界百分比与绝对温度映射不走 Scaler。

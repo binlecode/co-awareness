@@ -125,6 +125,15 @@ leak=$(for k in $(plutil -extract presets json -o - gifs/presets.json | grep -Eo
 # The launcher keeps no help of its own: it hands --help to the binary before the guard and before any
 # compile, so this neither builds nor touches a running instance. With no binary built yet (a fresh
 # CI checkout) it says so and exits 2 — asserted as whichever of the two this tree is in.
+# A retired spelling on the launcher reaches the binary ahead of the guard and the compile, and is
+# refused there with its replacement — never read as a start, which would forward to (or launch beside)
+# whatever instance is up. Needs the repo binary, which a fresh CI checkout does not have.
+if [ -x ./CoAwareness ]; then
+  err=$(./co-awareness --precompile 2>&1 >/dev/null); rc=$?
+  { [ "$rc" = 1 ] && echo "$err" | grep -q build; } && { echo "  PASS launcher refuses --precompile, naming build"; pass=$((pass+1)); } || { echo "  FAIL launcher --precompile (rc=$rc: $err)"; fail=$((fail+1)); }
+else
+  echo "  NOTE [no repo binary — launcher refusal of --precompile not checked]"
+fi
 out=$(./co-awareness --help 2>&1); rc=$?
 if [ -x ./CoAwareness ]; then
   { [ "$rc" = 0 ] && echo "$out" | grep -q "^Usage:"; } && { echo "  PASS launcher --help is the binary's"; pass=$((pass+1)); } || { echo "  FAIL launcher --help (rc=$rc)"; fail=$((fail+1)); }
@@ -1197,13 +1206,6 @@ if [ "$RUN_LAUNCHER" = 1 ]; then
     && ! pgrep -U "$(id -u)" -f "/CoAwareness( |$)" >/dev/null; } \
     && echo "  PASS build builds and launches nothing" \
     || { echo "  FAIL build (binary stale, or it started an instance)"; total_fail=$((total_fail+1)); }
-  # The temporary bridge: an updater from before the verb-first grammar still runs `--precompile`,
-  # and it must still build. Delete with the launcher's legacy_argv shim.
-  touch CoAwareness.swift
-  ./co-awareness --precompile 2>/dev/null
-  [ CoAwareness -nt CoAwareness.swift ] \
-    && echo "  PASS legacy --precompile still builds (bridge)" \
-    || { echo "  FAIL legacy --precompile no longer builds"; total_fail=$((total_fail+1)); }
 
   # Launch the "victim" instance with a generous self-exit window (a long QA run leaves the machine
   # busy, and the rebuild below adds a compile, so a short EXIT_AFTER could fire before the checks

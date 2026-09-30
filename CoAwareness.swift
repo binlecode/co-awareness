@@ -219,44 +219,6 @@ private enum Restarter {
     // Must match `LABEL` in scripts/install-login-item.sh — the plist that owns the login-item job.
     static let launchAgentLabel = "ai.bera.coawareness"
 
-    // Login items written before the verb-first grammar bake `launcher --no-detach [flags] <preset>
-    // [flags]` (and, from older builds still, `--label <mode>`) into the plist. The launcher's `legacy_argv` shim still reads that shape; this rewrites
-    // the plist once into `launcher start --foreground --preset <preset> …`, so the shim can be retired
-    // without costing anyone their login start. The file only, no launchctl: launchd reads the plist at
-    // the next login, and a reload now would restart the very instance doing the rewrite. Only for a
-    // plist that names the launcher this process came through, so a development checkout can never
-    // rewrite the login item of an installed copy that still speaks the old grammar.
-    static func migrateLegacyLoginItem(environment: [String: String]) {
-        guard let launcher = environment["CO_AWARENESS_LAUNCHER"], !launcher.isEmpty else { return }
-        let url = URL(fileURLWithPath: NSString(string: "~/Library/LaunchAgents/\(launchAgentLabel).plist").expandingTildeInPath)
-        guard let data = try? Data(contentsOf: url),
-              var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
-              let argv = plist["ProgramArguments"] as? [String],
-              argv.count >= 2, argv[0] == launcher, argv[1] == "--no-detach" else { return }
-        // The one bareword that is not a flag's value is the preset; it becomes --preset in place. An
-        // older login item can also carry `--label`, whose values map onto --display.
-        let valueFlags: Set = ["--speed-multiplier", "--display", "--load-source", "--keep-awake",
-                               "--keep-awake-pid", "--battery-threshold", "--label"]
-        let labelToDisplay = ["value": "value", "chart": "trace", "trace": "trace", "off": "gif"]
-        var rest: [String] = []
-        var previous = ""
-        for arg in argv.dropFirst(2) {
-            if previous == "--label" {
-                rest += ["--display", labelToDisplay[arg.lowercased()] ?? "gif"]
-            } else if arg == "--label" {
-                // Emitted together with its value on the next pass.
-            } else {
-                if !arg.hasPrefix("-"), !valueFlags.contains(previous) { rest.append("--preset") }
-                rest.append(arg)
-            }
-            previous = arg
-        }
-        plist["ProgramArguments"] = [launcher, "start", "--foreground"] + rest
-        guard let out = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0),
-              (try? out.write(to: url, options: .atomic)) != nil else { return }
-        fputs("Login item rewritten to the start/--preset form: \(url.path)\n", stderr)
-    }
-
     // Pure so the mapping is testable without a launchd job or a real launcher (tests/restart.swift);
     // the one impure question ("am I the agent's process?") is answered by the caller and passed in.
     static func mode(environment: [String: String], isLaunchAgentJob: Bool) -> Mode {
@@ -1386,9 +1348,7 @@ private struct Config {
     }
 
     // Spellings the verb-first grammar does not accept, each refused with the replacement it names
-    // (exit 1). Refused rather than translated: the launcher's `legacy_argv` shim is the one temporary
-    // bridge, and only for the argv older builds of this app emit on their own (a restart, a login
-    // item, a precompile). Nothing else gets a second spelling.
+    // (exit 1). Refused rather than translated: a second spelling is a second entry to keep alive.
     private static let retiredSpellings: [String: String] = [
         "set": "`set` is `start`: pass the same flags to `start` (or on their own) and a running instance is updated in place",
         "--set": "`--set` is `start`: pass the same flags to `start` (or on their own) and a running instance is updated in place",
@@ -4790,7 +4750,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         // pre-rename directory (R26). GUI-only by construction — the headless paths never get
         // here, and `status` must stay read-only (§ 8.3).
         StateStore.migrateLegacyDirectoryIfNeeded()
-        Restarter.migrateLegacyLoginItem(environment: ProcessInfo.processInfo.environment)
 
         NSApp.setActivationPolicy(.accessory)
 

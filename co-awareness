@@ -44,49 +44,6 @@ exec_binary() {
   CO_AWARENESS_BIN_NAME="$APP_CMD_NAME" exec "$swift_bin" "$@"
 }
 
-# TEMPORARY BRIDGE — delete with its ROADMAP row. Builds before the verb-first grammar emit argv of
-# their own that the grammar refuses: the self-updater runs `launcher --precompile`, its Restart runs
-# `launcher <preset> --load-source …`, and a login item bakes `launcher --no-detach … <preset> …`
-# (older ones also `--label <mode>`).
-# Those processes are already on disk and cannot be changed, so they are read here, once, with a
-# stderr note; the running app then rewrites the login item (Restarter.migrateLegacyLoginItem). Only
-# those shapes: any other old spelling reaches the binary and is refused with its replacement.
-legacy_argv() {
-  local arg prev="" rewritten=0
-  LEGACY_ARGV=()
-  if [[ $# -eq 1 && "$1" == "--precompile" ]]; then
-    LEGACY_ARGV=(build)
-    print -u2 "$APP_CMD_NAME: read legacy \`--precompile\` as \`build\`."
-    return
-  fi
-  if [[ " $* " != *" --no-detach "* ]] \
-     && [[ $# -eq 0 || "$1" == -* || "$1" == (start|status|snapshot|presets|build|set) ]]; then
-    LEGACY_ARGV=("$@")
-    return
-  fi
-  for arg in "$@"; do
-    if [[ "$prev" == "--label" ]]; then
-      case "${arg:l}" in
-        value) LEGACY_ARGV+=(--display value) ;;
-        chart|trace) LEGACY_ARGV+=(--display trace) ;;
-        *) LEGACY_ARGV+=(--display gif) ;;
-      esac
-    elif [[ "$arg" == "--label" ]]; then
-      rewritten=1
-    elif [[ "$arg" == "--no-detach" ]]; then
-      LEGACY_ARGV+=(--foreground); rewritten=1
-    elif [[ "$arg" == -* || "$prev" == (--speed-multiplier|--display|--load-source|--keep-awake|--keep-awake-pid|--battery-threshold) ]]; then
-      LEGACY_ARGV+=("$arg")
-    else
-      LEGACY_ARGV+=(--preset "$arg"); rewritten=1
-    fi
-    prev="$arg"
-  done
-  if (( rewritten )); then
-    print -u2 "$APP_CMD_NAME: read legacy arguments as: ${LEGACY_ARGV[*]}"
-  fi
-}
-
 # Compiles CoAwareness.swift to the sibling binary when the source is newer (or the binary is
 # missing). Returns 0 when the binary is current — already, or after a successful build — and 1 when
 # swiftc failed, which is the caller's cue to fall back to the interpreted `swift`.
@@ -118,21 +75,17 @@ main() {
   local allow_extra=0
   local log_file pid arg rc log_json
   local -a passthrough_args swift_cmd existing_pids
-  typeset -ga LEGACY_ARGV
 
   launcher_path="$(resolve_script_path)"
   script_dir="${launcher_path:h}"
   local swift_src="$script_dir/CoAwareness.swift"
   local swift_bin="$script_dir/CoAwareness"
 
-  legacy_argv "$@"
-  set -- "${LEGACY_ARGV[@]}"
-
   # Help, and the spellings the binary refuses with a pointer to their replacement, go straight to it:
   # on the start path below they would be compiled and detached, and the refusal would land in a log.
   for arg in "$@"; do
     case "$arg" in
-      -h|--help|--once|--status|--set|--precompile|--label|--detach) exec_binary "$@" ;;
+      -h|--help|--once|--status|--set|--precompile|--label|--no-detach|--detach) exec_binary "$@" ;;
     esac
   done
 

@@ -36,6 +36,16 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.4.1] - 2026-09-30
+
+### Removed
+
+- **The legacy-argv bridge.** The launcher no longer reads the argv that builds before 2.4.0 emit on
+  their own (the updater's `--precompile`, its Restart command, a login item's `--no-detach <preset>`),
+  and the app no longer rewrites a login item in that form. Every retired spelling is now refused with
+  its replacement. An install still on 2.3.x or earlier should re-run `install.sh` (and
+  `scripts/install-login-item.sh` if login start was on) instead of updating from the menu.
+
 ## [2.4.0] - 2026-09-30
 
 ### Changed
