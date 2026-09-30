@@ -36,7 +36,7 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
-## [Unreleased]
+## [2.4.0] - 2026-09-30
 
 ### Changed
 
