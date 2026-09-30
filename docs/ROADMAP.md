@@ -18,4 +18,6 @@ Ordered by ROI, highest first — value against cost, not just the priority band
 tracking: what is wrong, and where the design lives. Mechanism, schema, parameters and verification live
 in the design the row points to — never restated here.
 
-Nothing is open.
+| ID | Item | Pri | Blocked by |
+|---|---|---|---|
+| R29 | **Retire the legacy-argv bridge.** Delete the launcher's `legacy_argv`, `Restarter.migrateLegacyLoginItem`, and qa.sh §6's legacy `--precompile` row together; bridge rationale in `docs/ARCHITECTURE.md` § 2. | P3 | Installed copies have been through one launch on the verb-first grammar (which rewrites their login item); removing it earlier strands an un-updated install's restart and login start |

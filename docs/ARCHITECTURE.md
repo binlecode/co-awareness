@@ -45,7 +45,7 @@ All repository documentation lives in `docs/`. The repository root holds only `R
 
 co-awareness is a single-file, unbundled native macOS menu bar application written in Swift and AppKit. It visualizes real-time hardware telemetry by driving the playback rate of an animated status-bar GIF and providing an integrated live diagnostic dashboard with built-in sleep inhibition.
 
-There are **three entry paths and one shared telemetry engine**. The GUI is the interactive status bar visualizer; `--once` is a single-shot JSON snapshot of physical hardware readings for non-visual consumers (§ 4.7); and `--status` is a lightweight JSON query reporting whether an instance is resident and its active sleep hold state (§ 8.3). The paths are strictly partitioned: `--status` inspects process and state files without initializing telemetry readers; `--once` and the GUI share `TelemetryCore` and nothing else.
+There is **one CLI grammar for two kinds of caller, three entry paths, and one shared telemetry engine**. The first argument is always a verb, every setting is a named flag, and every command answers with one JSON line — so an agent drives the app over argv while a person uses the menu. `start` (the default verb) is the GUI: it launches the status bar visualizer, or forwards its settings to the instance already running (§ 8.4). `snapshot` is a single-shot JSON reading of the physical hardware for non-visual consumers (§ 4.7); `status` reports whether an instance is resident and its sleep hold (§ 8.3); `presets` lists `gifs/presets.json` (§ 9.1). The paths are strictly partitioned: `status` inspects process and state files without initializing telemetry readers; `snapshot` and the GUI share `TelemetryCore` and nothing else.
 
 ```
                       +---------------------------------+
@@ -54,8 +54,8 @@ There are **three entry paths and one shared telemetry engine**. The GUI is the 
                       +---------------------------------+
                                        |
         +------------------------------+------------------------------+
-        | --status                     | --once                       | GUI launch
-        | (pre-guard, pre-compile)     | (pre-guard, pre-compile)     | singleton -> compile -> detach
+        | status                       | snapshot                     | start (default verb)
+        | (pre-guard, pre-compile)     | (pre-guard, pre-compile)     | guard -> forward, or compile -> detach
         v                              v                              v
 +-------------------------------+ +-------------------------------+ +-------------------------------+
 | Status Query Path             | | Snapshot Path                 | | CoAwarenessApp (GUI)          |
@@ -97,87 +97,67 @@ There are **three entry paths and one shared telemetry engine**. The GUI is the 
 2. **Zero-Xcode Single-File & Unbundled Binary:** The entire runtime resides in `CoAwareness.swift` (~8.3k lines) compiled via `swiftc -O -strict-concurrency=complete`. Direct Mach-O execution avoids `.app` bundle complexity, code signature sealing that blocks in-place atomic recompilation, and Apple Developer notarization overhead (§ 2).
 3. **Pure User-Space & Kernel Lifetime Binding:** Every metric is collected via unprivileged Mach, IOKit, SMC, and IOReport interfaces. Sleep prevention is strictly bound to child process lifetimes (`caffeinate -di -w <pid>`), guaranteeing automatic kernel reclamation on termination and prohibiting persistent NVRAM mutations via root `pmset` (§ 7.5).
 4. **Jitter-Free Menu Bar Geometry:** Status item widths are strictly reserved using figure-space padding (U+2007) and monospaced tabular digits, preventing variable-width telemetry readings from triggering WindowServer lateral layout reflows (§ 6.1).
-5. **Single-Process, CLI-First Architecture:** Directly invokable via standard CLI argv with side-effect-free query paths (`--once`, `--status`). Background daemon sockets, IPC servers, and embedded protocol parsers (e.g. MCP) are excluded, eliminating idle memory footprint and orphan socket hazards (§ 4.7, § 8.3).
+5. **Single-Process, CLI-First Architecture:** Directly invokable via standard CLI argv with side-effect-free query paths (`snapshot`, `status`, `presets`) and an idempotent `start` that changes a running instance through a file spool and a signal (§ 8.4). Background daemon sockets, IPC servers, and embedded protocol parsers (e.g. MCP) are excluded, eliminating idle memory footprint and orphan socket hazards (§ 4.7, § 8.3).
 6. **Self-Contained Dotfile Philosophy:** Runner presets and configuration reside entirely in local Git-tracked files (`gifs/`) or explicit filesystem paths. Remote asset downloads and online repositories are excluded, guaranteeing full offline operation, transparent auditability, and zero network attack surface (§ 9.1).
 
 ---
 
 ## 2. Launcher & Compilation Lifecycle
 
-Execution is governed by the `co-awareness` zsh script, which manages compilation, process singletons, and detached execution.
+Execution is governed by the `co-awareness` zsh script: verb dispatch, the singleton guard, compilation, and detached execution. It parses no setting and keeps no help text — both belong to the binary, so neither can drift.
 
 ```
-                             +----------------------------+
-                             |     Execution Request      |
-                             |       (co-awareness)       |
-                             +-------------+--------------+
-                                           |
-                    +----------------------+----------------------+
-                    | --once or --status                          | GUI launch / --precompile
-                    | (Headless fast-path)                        |
-                    v                                             v
-     +------------------------------+              +------------------------------+
-     | Does Mach-O binary exist     |              | Swift toolchain available?   |
-     | and is executable?           |              | (command -v swift)           |
-     +--------------+---------------+              +--------------+---------------+
-                    |                                             |
-            +-------+-------+                             +-------+-------+
-            |               |                             |               |
-           Yes              No                           Yes              No
-            |               |                             |               |
-            v               v                             v               v
-     +--------------+ +-----------+                +--------------+ +-----------+
-     | exec binary  | | Print err |                | Parse CLI    | | Print err |
-     | with argv    | |  exit 2   |                | flags / opts | |  exit 127 |
-     +--------------+ +-----------+                +------+-------+ +-----------+
-                                                          |
-                                           +--------------+--------------+
-                                           | --precompile flag?          |
-                                           |                             |
-                                          Yes                            No
-                                           |                             |
-                                           v                             v
-                                  +------------------+         +--------------------+
-                                  | compile_if_stale |         | Singleton Guard:   |
-                                  | & exit (0 or 1)  |         | pgrep -U <uid>     |
-                                  +------------------+         +---------+----------+
-                                                                         |
-                                                          +--------------+--------------+
+                            +--------------------------------+
+                            |   co-awareness <verb> [flags]  |
+                            |   legacy_argv (temporary)      |
+                            +---------------+----------------+
+                                            |
+        +-----------------------------------+-----------------------------+
+        | --help, status, snapshot,         | build                       | start (default)
+        | presets, any refused word         |                             |
+        v                                   v                             v
+ +------------------------+     +------------------------+   +------------------------+
+ | binary built?          |     | compile_if_stale       |   | singleton guard:       |
+ | yes: exec it, argv     |     | exit 0, or 1 if swiftc |   | pgrep -U <uid>         |
+ |      unchanged         |     | failed; starts nothing |   | (skipped with --extra) |
+ | no:  exit 2, name      |     +------------------------+   +-----------+------------+
+ |      `build`           |                                              |
+ +------------------------+                               +--------------+--------------+
                                                           |                             |
-                                                     Match found                    No match
-                                                    & no --extra                  (or --extra)
+                                                     match found                     no match
                                                           |                             |
-                                                          v                             v
-                                                   +--------------+           +------------------+
-                                                   | Exit 0 with  |           | compile_if_stale |
-                                                   | notice       |           +--------+---------+
-                                                   +--------------+                    |
-                                                                         +-------------+-------------+
-                                                                         |                           |
-                                                                    swiftc ok                  swiftc failed
-                                                                         |                           |
-                                                                         v                           v
-                                                              +---------------------+     +--------------------+
-                                                              | Atomic rename:      |     | Fallback:          |
-                                                              | mv .new -> binary   |     | swift script.swift |
-                                                              +----------+----------+     +---------+----------+
-                                                                         |                          |
-                                                                         +------------+-------------+
-                                                                                      |
-                                                                                      v
-                                                                      +--------------------------------+
-                                                                      | Launch Process:                |
-                                                                      | - Detached: nohup & + verify   |
-                                                                      | - Foreground: exec             |
-                                                                      +--------------------------------+
+                                                          v                             |
+                                          +-------------------------------+             |
+                                          | --foreground given? exit 1    |             |
+                                          | else run binary as a child,   |             |
+                                          | CO_AWARENESS_FORWARD_ONLY=1:  |             |
+                                          |  validate, spool, SIGUSR1,    |             |
+                                          |  reply, exit 0 / 1 / 2        |             |
+                                          | exit 3 (instance gone):       |             |
+                                          |  fall through to the launch   +------------>|
+                                          +-------------------------------+             |
+                                                                                        v
+                                                                        +-------------------------------+
+                                                                        | compile_if_stale              |
+                                                                        | swiftc -> .new -> mv, or the  |
+                                                                        | interpreted `swift` fallback  |
+                                                                        +---------------+---------------+
+                                                                                        |
+                                                                                        v
+                                                                        +-------------------------------+
+                                                                        | detached: nohup, reply        |
+                                                                        |  {"action":"started",...}     |
+                                                                        | --foreground: exec            |
+                                                                        +-------------------------------+
 ```
 
 ### Compilation Mechanics
 
-- **Fast-Path Headless Interception:** Both `--once` and `--status` are handled in the first statement of argument parsing, prior to toolchain checks, prior to the singleton check, and prior to any compilation pass. If the Mach-O binary exists, the launcher directly replaces itself via `exec`. If missing, it exits 2 with guidance to run `--precompile`. This ensures headless queries never incur compilation latency or race against a running instance.
+- **Dispatch Ahead of Guard and Compile:** `--help`, `status`, `snapshot`, `presets`, and any word the grammar refuses go straight to the binary, ahead of toolchain checks, the singleton guard and any compile. The launcher replaces itself via `exec`, or exits 2 naming `build` when there is no binary yet. None of them writes or locks anything, so a query never pays compile latency or races a running instance, and a refused spelling is answered on the terminal instead of in a detached log.
 - **Atomic Rename:** When compiling, the launcher outputs to `CoAwareness.new` before invoking `mv` (`rename(2)`) over `CoAwareness`. This guarantees that an existing live process paging from the Mach-O binary does not crash during a rebuild.
-- **Precompilation Hook (`--precompile`):** Exposes the compilation branch without launching the process. Used by the in-app self-updater to build newly pulled source code while the current instance remains live.
-- **Singleton Guard Before Compile:** On the interactive GUI launch path, `pgrep -U "$(id -u)"` executes strictly before `compile_if_stale`, ensuring that duplicate launch requests never attempt concurrent compilation against the same target binary.
+- **`build`:** Exposes the compilation branch without launching the process. Used by the in-app self-updater to build newly pulled source code while the current instance remains live, and by `install.sh` and the login-item installer.
+- **Singleton Guard Before Compile:** On the `start` path, `pgrep -U "$(id -u)"` executes strictly before `compile_if_stale`, ensuring that duplicate launch requests never attempt concurrent compilation against the same target binary. A match means `start` forwards instead of launching (§ 8.4), with no compile: the resident process runs the previous build, and the binary on disk was built from it.
+- **Temporary Legacy-Argv Bridge (`legacy_argv`):** Builds from before the verb-first grammar emit argv of their own that it refuses — their self-updater runs `launcher --precompile`, their Restart runs `launcher <preset> …`, and their login items bake `launcher --no-detach … <preset> …` (older ones also `--label <mode>`). Those processes and plists are already on disk and cannot be changed, and refusing them would silently cost every existing install its restart and its login start. The launcher reads exactly those shapes, once, with a stderr note; any other old spelling reaches the binary and is refused with its replacement. On launch the app rewrites an old-shaped login item into the new form (`Restarter.migrateLegacyLoginItem`: file only, no `launchctl` — a reload would restart the instance doing the rewrite — and only when the plist names the launcher this process came through, so a development checkout never rewrites an installed copy's login item). The bridge's removal is tracked in `docs/ROADMAP.md`.
 - **Strict Concurrency Safety:** Compiled with Swift 5 `-strict-concurrency=complete`. All UI and state-managing classes are annotated `@MainActor`.
 - **Interpreted Fallback & Singleton Scope:** If `swiftc` compilation fails or toolchain elements are unavailable, the launcher falls back to interpreted execution via `swift CoAwareness.swift`. This degraded emergency fallback is intentionally not singleton-guarded: the launcher's singleton check (`pgrep -U "$(id -u)" -f "/CoAwareness( |$)"`) explicitly matches the compiled binary path to avoid false positives against editors holding `CoAwareness.swift` open or background `swiftc` builds, while the interpreted fallback process executes directly under `/usr/bin/swift`.
 
@@ -474,9 +454,9 @@ Battery telemetry operates across two distinct time domains to honor the unprivi
 
 `CO_AWARENESS_FORCE_BATTERY=<pct>[:battery|:ac]` pins the charge and power state on `BatteryLoadMonitor` itself, not on a caller. Two places in the app read `IOPSCopyPowerSourcesInfo` — Keep Awake's suspension policy (§ 7.2) and this reader — and a hook honored by only one of them would let them disagree about the same battery in the same run. Current (mA) is left real: the hook simulates a charge and a power state, nothing else. On a desktop it also makes the reader *answer*, which is the only way a machine with no battery can exercise the path at all.
 
-### 4.7 Telemetry Core & the `--once` Snapshot
+### 4.7 Telemetry Core & the `snapshot` Command
 
-The unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `--once` is the one way anything else asks. It answers for the *machine* only — the sibling question, about this app's own process and its sleep hold, is `--status` (§ 8.3), which reaches no reader.
+The unprivileged readers used to run inside a status item, so the only consumer of a reading was a pair of human eyes. `TelemetryCore` is the type that owns them; `snapshot` is the one way anything else asks. It answers for the *machine* only — the sibling question, about this app's own process and its sleep hold, is `status` (§ 8.3), which reaches no reader.
 
 **Module boundaries.** Each row's *not its business* column names the canonical owner, so nothing has to be inferred:
 
@@ -484,10 +464,10 @@ The unprivileged readers used to run inside a status item, so the only consumer 
 |---|---|---|
 | `TelemetryCore` | Every reader, its availability probe and its scaler, plus the per-source dispatch (`sampleSource(_:elapsed:)`, `isSourceAvailable(_:)`, `hasSample(_:)`, `currentLoad(_:)`) and one `snapshot()` returning physical units | Speed mapping, menu text, labels, Keep Awake, `state.json` — all `CoAwarenessApp` |
 | `CoAwarenessApp` | Everything on screen and every intent that persists; asks the core for readings | How a reading is taken — `TelemetryCore` |
-| `co-awareness` (launcher) | Singleton guard, `compile_if_stale`, detach — for **GUI launches only** | Telemetry; and on the `--once` path, compiling anything |
-| Field projection / filtering | Caller piping to `jq` or JSON parsers | Not `--once` (no `--query`; rates require discrete delta window) |
-| Admission decisions | Caller's workload orchestrator applying thresholds | Not `--once` (no `--check`; thresholds belong to caller; keeps `CO_AWARENESS_FORCE_THERMAL` display-only) |
-| Tool schema export | Calling agent harness native registry | Not `--once` (no `--tool-spec`; avoids duplicate schema drift without consumers) |
+| `co-awareness` (launcher) | Singleton guard, `compile_if_stale`, detach — for **`start` only** | Telemetry; and on the `snapshot` path, compiling anything |
+| Field projection / filtering | Caller piping to `jq` or JSON parsers | Not `snapshot` (no `--query`; rates require discrete delta window) |
+| Admission decisions | Caller's workload orchestrator applying thresholds | Not `snapshot` (no `--check`; thresholds belong to caller; keeps `CO_AWARENESS_FORCE_THERMAL` display-only) |
+| Tool schema export | Calling agent harness native registry | Not `snapshot` (no `--tool-spec`; avoids duplicate schema drift without consumers) |
 
 The core never imports a display concept. It returns MB/s, °C, W, RPM, %, A — never the 0..1 driver value. Normalization to 0..1 is a speed-mapping question, which is why the scalers (§ 4.4) stay *inside* the readers, where they are how a rate reader produces its own number, and why nothing in a snapshot reads one. The core also never touches `state.json`: a snapshot describes the machine, not this app's intent, and a second writer would break the single-writer model (§ 8.2).
 
@@ -495,12 +475,12 @@ The core never imports a display concept. It returns MB/s, °C, W, RPM, %, A —
 
 | Property | Contract |
 |---|---|
-| Argument form | `--once` **must be the only argument.** Any other flag with it is a usage error, not a silent ignore — every other flag configures a GUI this path does not build |
+| Argument form | `snapshot` **takes no arguments.** Any flag with it is a usage error, not a silent ignore — every flag configures a GUI this path does not build |
 | Output | Exactly one line on stdout, a JSON object, newline-terminated. Nothing else on stdout, ever — the usage error above prints to stderr *without* the usage block for this reason |
 | Unavailable source | Its keys are **absent**. Never `null`, never a zero standing in for "no reading" |
 | Side effects | None. No `NSApplication`, no status item, no `state.json` read or write, no `caffeinate`, no update check, no compile |
 | Concurrency | Safe while a GUI instance runs, and safe in parallel with itself. It holds nothing and writes nothing |
-| Exit | `0` a snapshot was printed (even if degraded) · `1` usage error · `2` binary not built (launcher only, names `--precompile`) |
+| Exit | `0` a snapshot was printed (even if degraded) · `1` usage error · `2` binary not built (launcher only, names `build`) |
 | Latency | One process start plus one sampling window. ~290 ms wall measured on an M4 Max, dominated by the window |
 
 The rate readings (network, disk, swap, battery current, ANE) are counter deltas and do not exist at a single instant, so the path samples, waits `Tuning.snapshotWindow`, samples again against the *measured* gap, and prints. The budget is therefore a window, not a syscall: a sub-10 ms snapshot could only carry the point readings, and splitting the schema into fast keys and slow keys would be two schemas.
@@ -536,11 +516,11 @@ The rate readings (network, disk, swap, battery current, ANE) are counter deltas
 
 Precision follows the reader, not the field: percentages and °C carry one decimal, rates, watts and amps two, RPM none — each finer than the hardware's own resolution. The line is assembled by hand rather than by `JSONEncoder`, because the contract fixes the key order and the per-unit precision and an encoder gives neither.
 
-**Launcher interception.** `--once` is handled in the first statement of argument handling, ahead of both the singleton guard and `compile_if_stale`, and `exec`s the binary with argv unchanged (exclusivity is the binary's to enforce, since it owns the usage text). The source being newer than the binary is deliberately not consulted: a reading from the previous build is still a true reading, and compiling here would put a `swiftc` race back in front of the very guard that exists to prevent one (§ 2). A missing binary is one stderr line naming `--precompile` and exit 2.
+**Launcher dispatch.** `snapshot` goes to the binary ahead of both the singleton guard and `compile_if_stale`, with argv unchanged (the no-arguments rule is the binary's to enforce, since it owns the usage text). The source being newer than the binary is deliberately not consulted: a reading from the previous build is still a true reading, and compiling here would put a `swiftc` race back in front of the very guard that exists to prevent one (§ 2). A missing binary is one stderr line naming `build` and exit 2.
 
 **Headless is measured, not assumed.** The GPU (IOAccelerator), SMC and IOReport readers are kernel-side and were *expected* to answer with no WindowServer connection. `tests/qa.sh` §2a is what turns that into a measurement: it runs in the core tier, which never boots a GUI, and asserts the always-present keys are there rather than only that the JSON parses — a snapshot degrading to `{"v":1}` would otherwise pass "absent when unavailable" while telling the truth about nothing.
 
-**Headless negative space.** `--once` emits the full JSON snapshot line exclusively. Single-field extraction (`--query`), admission gating (`--check`), and agent tool-schema export (`--tool-spec`) are explicitly declined: rate counters require a discrete integration window (querying $N$ fields costs $N \times 200\text{ ms}$ vs. single 200 ms `--once | jq`), admission thresholds belong to caller orchestrators, and static schema export introduces drift without active consumers. Re-proposal requires a caller environment that demonstrably cannot pipe stdout or an external agent harness that dynamically ingests CLI tool schemas.
+**Headless negative space.** `snapshot` emits the full JSON snapshot line exclusively. Single-field extraction (`--query`), admission gating (`--check`), and agent tool-schema export (`--tool-spec`) are explicitly declined: rate counters require a discrete integration window (querying $N$ fields costs $N \times 200\text{ ms}$ vs. single 200 ms `snapshot | jq`), admission thresholds belong to caller orchestrators, and static schema export introduces drift without active consumers. Re-proposal requires a caller environment that demonstrably cannot pipe stdout or an external agent harness that dynamically ingests CLI tool schemas.
 
 ### 4.8 DRAM Bus Bandwidth (`BandwidthLoadMonitor`)
 
@@ -1001,17 +981,17 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
 - **Fail-Silent:** Corrupt, missing, or unwritable files fall back to system defaults without surfacing dialogs.
 - **Atomic Persistence:** `data.write(to:options: .atomic)` — Foundation writes a temp file and renames it into place.
 - **Single-Writer Rule:** `persistState()` is the sole disk writer, assembling memory state atomically to avoid race conditions.
-- **Rename Migration:** On GUI launch only — never on the `--status` path, which must stay read-only (§ 8.3) — `StateStore` moves a pre-rename `Application Support/menubar-load-runner/` directory into `co-awareness/` when, and only when, the new directory is absent. Never merged, never repeated; failure stays fail-silent like everything else here.
+- **Rename Migration:** On GUI launch only — never on the `status` path, which must stay read-only (§ 8.3) — `StateStore` moves a pre-rename `Application Support/menubar-load-runner/` directory into `co-awareness/` when, and only when, the new directory is absent. Never merged, never repeated; failure stays fail-silent like everything else here.
 
-### 8.3 The `--status` Query
+### 8.3 The `status` Query
 
-`--once` (§ 4.7) answers for the machine. It cannot answer for *this app*: a snapshot is stateless and knows no other process, so nothing could ask whether an instance was already resident or whether the Mac was being held awake and for how much longer. `--status` is that question, and only that one — the readers are not on this path at all.
+`snapshot` (§ 4.7) answers for the machine. It cannot answer for *this app*: a snapshot is stateless and knows no other process, so nothing could ask whether an instance was already resident or whether the Mac was being held awake and for how much longer. `status` is that question, and only that one — the readers are not on this path at all.
 
 ```
 +-----------------------------------------------------------------------------------------------+
 |                                    Headless Query Pathways                                    |
 +---------------------------------------------------------------+-------------------------------+
-| Property / Dimension          | --once (Hardware Telemetry)   | --status (Process/Hold State) |
+| Property / Dimension          | snapshot (Hardware Telemetry) | status (Process/Hold State)   |
 +---------------------------------------------------------------+-------------------------------+
 | Target Entity                 | The Machine                   | The App                       |
 | Query Engine                  | TelemetryCore                 | StatusReport                  |
@@ -1026,7 +1006,7 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
 
 ```
                      +---------------------------------------+
-                     |        $ co-awareness --status        |
+                     |         $ co-awareness status         |
                      +-------------------+-------------------+
                                          |
                                          v
@@ -1068,7 +1048,7 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
 
 | Property | Contract |
 |---|---|
-| Argument form | `--status` **must be the only argument**, sharing one rule (and one refusal) with `--once` in `Config.parse()`, so a second headless flag cannot drift into a second spelling of it |
+| Argument form | `status` **takes no arguments**, sharing one rule (and one refusal) with `snapshot` and `presets` in `Config.parse()`, so a query verb cannot drift into a second spelling of it |
 | Output | Exactly one line on stdout, a JSON object, newline-terminated. `{"running":false}`, or `{"running":true,"pid":1598,"keep_awake":{"active":true,"remaining_s":3540}}` |
 | Absent keys | `keep_awake` appears only with a live instance; `remaining_s` only for a timed window. Never a `null`, never a `0` standing in for "no hold" — the same rule as the snapshot schema |
 | Side effects | None. No `NSApplication`, no reader, no `caffeinate`, no update check, no compile, and the state file is opened read-only |
@@ -1082,52 +1062,79 @@ State is persisted to `~/Library/Application Support/co-awareness/state.json`:
 |---|---|
 | `preset` · `load_source` | `Restarter.appArguments` rebuilds argv on the **restart** path only, so a preset or source changed from the menu is not in a running instance's argv until it restarts. Reading argv would report a value that was true at launch and is not true now |
 | The pid a `--keep-awake-pid` hold is bound to | That binding never reaches the state file by design (pids are recycled — § 7.4), so it is not visible across processes. The hold still reports `active`, with `remaining_s` absent |
-| Which of two same-named processes is the GUI one | A concurrent `--once` or `--status` of the same binary is indistinguishable by executable name. Both really are this app, the window is sub-second, and closing it would mean reading every candidate's argv — accepted and recorded rather than paid for |
+| Which of two same-named processes is the GUI one | A concurrent `snapshot` or `status` of the same binary is indistinguishable by executable name. Both really are this app, the window is sub-second, and closing it would mean reading every candidate's argv — accepted and recorded rather than paid for |
 
-**Launcher interception.** Handled by the same pre-guard, pre-compile passthrough as `--once` (§ 4.7), for the same reasons and with the same exit 2 for a binary that has not been built.
+**Launcher dispatch.** Handled by the same pre-guard, pre-compile dispatch as `snapshot` (§ 4.7), for the same reasons and with the same exit 2 for a binary that has not been built.
 
 **Verification.** `tests/qa.sh` §2b covers the core tier — the no-instance answer, exclusivity, and the untouched state file — and is deterministic even with a developer's own app running, because `$BIN` is a check build and the needle is the binary's own name. §3j covers the live half against a real instance: the pid matches the one the script started, a 30m window reports a remainder inside its bounds, an indefinite hold reports `active` with no `remaining_s`, and — after that instance exits with `enabled: true` still on disk — the query returns `{"running":false}` rather than the stale intent.
 
-### 8.4 Runtime Intent Forwarding (The `set` Command)
+### 8.4 Idempotent `start` & Runtime Intent Forwarding
 
-When `co-awareness` is already resident in the menu bar, control commands (`co-awareness set [--keep-awake <dur>] [--keep-awake-pid <pid>] [--battery-threshold <pct>] [--display <mode>] [--load-source <src>] [preset]`) forward runtime intent to the active instance rather than failing with an "already running" error:
+`start` — the default verb — leaves exactly one resident instance carrying the requested settings, whether or not one was already up. With nobody resident it launches; with an instance resident it forwards the settings to that instance and exits. A caller never has to ask `status` first and choose a verb from the answer, and a person who re-runs the command they launched with changes the running app instead of meeting "already running".
 
 ```
-          $ co-awareness set --keep-awake 30m
-                           |
-                           v
-        +-------------------------------------+
-        | ProcessProbe.newestMatch            |
-        | Resolves resident instance PID      |
-        +------------------+------------------+
-                           |
-                           v
-        +-------------------------------------+
-        | Atomic Intent File Generation       |
-        | Writes intent.json.tmp -> rename    |
-        +------------------+------------------+
-                           |
-                           v
-        +-------------------------------------+
-        | POSIX Signal Dispatch              |
-        | kill -USR1 <target_pid>             |
-        | Emits {"ok":true,...} to stdout     |
-        | Exits 0                             |
-        +------------------+------------------+
-                           |
-                           | SIGUSR1
-                           v
-        +-------------------------------------+
-        | Resident CoAwareness (RunLoop)      |
-        | DispatchSource.makeSignalSource     |
-        | Ingests intent.json, mutates state  |
-        | Updates status item & NSMenu        |
-        | Clears intent.json, persists state  |
-        +-------------------------------------+
+        $ co-awareness --display value --keep-awake 2h
+                             |
+                             v
+        +------------------------------------------+
+        | launcher: pgrep finds an instance        |
+        | binary start, CO_AWARENESS_FORWARD_ONLY=1|
+        +--------------------+---------------------+
+                             |
+                             v
+        +------------------------------------------+
+        | IntentForwarder                          |
+        | target = ProcessProbe.oldestMatch        |
+        | launch-only flag given?  -> exit 1       |
+        | validate every setting   -> exit 1       |
+        | spool intents/<ns>-<pid>.json (rename)   |
+        | kill -USR1 <target>                      |
+        | {"action":"forwarded","pid":N}, exit 0   |
+        +--------------------+---------------------+
+                             | SIGUSR1
+                             v
+        +------------------------------------------+
+        | resident CoAwarenessApp                  |
+        | DispatchSource -> drainRuntimeIntents    |
+        | take each file (rename out), send order  |
+        | apply through the menu's own setters     |
+        | persistState()                           |
+        +------------------------------------------+
 ```
 
-- **Zero Sockets, Zero Daemon Debt**: Completely unprivileged, stateless execution. Operates without background listening threads, TCP ports, or orphan UNIX domain sockets.
-- **Immediate State Synchronization**: Updates status bar geometry, countdown tickers, and menu checkmarks in the live instance within milliseconds.
+| Module / Boundary | Owns | Not its business |
+|---|---|---|
+| Launcher | Dispatch; for `start`, the singleton guard and then either the forward hand-off or `compile_if_stale` + detach; refusing `--foreground` while an instance is resident | Parsing or validating a setting — the binary owns every flag's meaning |
+| `IntentForwarder` (binary) | Picking the target, validating every setting, spooling one file, the signal, the one-line reply | Applying anything, and `state.json` — the single writer stays `persistState()` (§ 8.2) |
+| Resident `CoAwarenessApp` | Draining the spool in send order through the setters the menu uses, then `persistState()` | Syntax — the forwarder refused bad input before anything was sent |
+
+**Interface.**
+
+| Property | Contract |
+|---|---|
+| Reply | One line on stdout: `{"action":"started","pid":N,"log":"<path>"}` (launcher, detached) · `{"action":"forwarded","pid":N}` · `{"action":"unchanged","pid":N}` (resident, no settings given). No line with `--foreground` — stdout then belongs to the app |
+| Exit | `0` started, forwarded or unchanged · `1` usage error, a refused value, or a launch-only flag while resident · `2` resident but no binary to reach it with (launcher) · `3` private between launcher and binary: the forward-only run found nobody left, and the launcher launches instead |
+| Settings vs launch-only | Settings (`--preset`, `--display`, `--load-source`, `--keep-awake`, `--keep-awake-pid`, `--battery-threshold`) apply at launch or live. A launch-only flag (`--speed-multiplier`, `--show-all-sources`, `--no-update-check`, `--foreground`) while resident is exit 1 and nothing in the same call is applied — all or nothing, so `forwarded` never reports a half-done request. `--extra` skips the resident check and always launches |
+| Environment | Flag over env, on both paths. Only settings that were given are forwarded, never defaults. Launch-only env (`CO_AWARENESS_SHOW_ALL`, `CO_AWARENESS_UPDATE_CHECK`) is read at launch only |
+| `forwarded` means sent | The signal is one-way. The one check only the instance can make — whether this Mac can read the requested source — happens after the reply; a refusal there is a stderr line in the instance's log, and the current source stays |
+
+**Strict forward, forgiving launch.** Both paths use the same parsers with opposite failure policies. A launch degrades a bad value to a default (unknown source → cpu, bad window → off, bad threshold → 20%), because its argv may be baked into a login item, and a failed launch there costs the user the app with nobody watching. A forward loses nothing by refusing: the instance stays exactly as it was, and the caller — who is watching — is told at once. A GIF path is made absolute against the caller's working directory before it is sent, because the resident process has its own.
+
+**A spool, not one shared file.** Each forward writes its own file into `intents/` beside `state.json`, named by its send time in zero-padded nanoseconds (lexical order is send order), under a dot-name and then `rename(2)`'d in. One shared file would need a read-merge-write between concurrent forwarders, and a lock across processes is exactly what a daemon-free path lacks: three concurrent forwards against one merged file lost fields in 5 of 6 measured runs (2026-09-30). The resident takes each file by renaming it out of the spool *before* reading it, since a read followed by a delete loses a file written between the two.
+
+**`SIGUSR1` before anyone is listening.** The signal's default action terminates the process. Every entry path sets it to ignored as its first statement, so a process picked as the target while it is still booting — or one that is not a GUI at all — survives. The GUI drains the spool as soon as its dispatch source is live, so a forward that arrived during boot is applied, not lost. A file sent before the receiving process started (`sentAt` against `ProcessProbe.startTime`) was meant for an instance that has exited, and is discarded rather than applied to its successor.
+
+**Target: the oldest instance.** `ProcessProbe.oldestMatch` on the binary's own executable name, uid-scoped like the guard. The transient processes of the same binary — a concurrent `status` or `snapshot`, or another `start` about to forward — are always younger than the menu-bar instance, where the newest match would pick exactly those.
+
+| Not covered | Why not | Protected invariant | Reopen when |
+|---|---|---|---|
+| Acknowledgement from the instance | A reply needs a second channel plus a caller-side timeout, or a socket. The only refusal left after sending is source availability, which `snapshot` already answers (the key is absent) | No listener, nothing left behind when a process dies | A caller must act on whether a live change landed, and `status` / `snapshot` cannot tell it |
+| Live `--speed-multiplier` / `--show-all-sources` | Both are menu-toggleable, but forwarding them widens the settings table for no caller that needs it; launch-only keeps one rule | One entry per setting, no partial apply | A script must change either without a restart |
+| A `stop` verb | `status` supplies the pid; the menu's Exit and `kill <pid>` cover it | Subtract before adding | An agent must release the app itself, not only Keep Awake |
+| Two `start`s in the same instant with nothing resident | Both pass the guard and both launch — the same window the guard always had, a few ms between `pgrep` and the new process appearing. Closing it needs a lock held across exec, which the daemon-free path does not have | Guard before compile | Observed in practice |
+| The launcher/binary race (exit 3) under test | Hitting the window on purpose needs a hook that delays the binary between the launcher's `pgrep` and its own probe — a hook that changes behaviour under test | No behaviour-changing test hooks | — |
+
+**Verification.** `tests/qa.sh` §2: each retired spelling is refused with its replacement, and the forward-only run with nobody resident exits 3. §3k against a live check-build instance: a setting reaches the instance's own state file; a bare `start` is `unchanged` with one process; a launch-only flag leaves the state file byte-identical; a bad value spools nothing; three concurrent forwards all land; a forward into a booting instance is applied and the instance survives. §6: a second launcher `start` forwards without compiling, and `--foreground` is refused.
 
 ---
 
@@ -1158,12 +1165,12 @@ Built-in preset identities are decoupled from Swift code into `gifs/presets.json
 
 At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining menu items, keywords, and speed curves dynamically.
 
-- **Preset Sourcing Boundary:** Presets are data-driven via `gifs/presets.json` or supplied via raw CLI positional path (`./co-awareness /path/to.gif`). In-app community asset stores, remote downloaders, and dynamic runtime preset import are excluded to preserve local auditability, offline operation, and the self-contained dotfile philosophy.
+- **Preset Sourcing Boundary:** Presets are data-driven via `gifs/presets.json` or supplied as a GIF path (`--preset /path/to.gif`). `PresetRegistry` is the one reader of the manifest, shared by the GUI, the `presets` command and the forward path's `--preset` check, and the help lists no preset — the manifest is the list. In-app community asset stores, remote downloaders, and dynamic runtime preset import are excluded to preserve local auditability, offline operation, and the self-contained dotfile philosophy.
 
 ### 9.2 Git-Native In-App Update Engine
 
 - **Update Probe (`UpdateChecker`):** Executes `git ls-remote --tags --refs origin 'v*'` against the origin remote, comparing the highest strict three-component SemVer against `AppInfo.version`.
-- **Precompile Before Restart (`Builder`):** On user confirmation, runs `git pull --ff-only` followed by `co-awareness --precompile`.
+- **Precompile Before Restart (`Builder`):** On user confirmation, runs `git pull --ff-only` followed by `co-awareness build`.
 - **Supervisor-Preserving Relaunch (`Restarter`):** Dispatches a detached `/bin/sh` script waiting for the old process PID to terminate, then relaunches via either `launchctl kickstart` (for LaunchAgent jobs) or the original launcher command line.
 - **Update Frequency Boundary:** Update checks execute strictly on launch (`UpdateChecker`) and on user demand via the menu. Background periodic polling timers are excluded to avoid unnecessary network activity and timer lifecycle debt.
 
@@ -1173,7 +1180,7 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 
 | Subsystem | Hard Invariant | Architectural Rationale |
 |---|---|---|
-| **Process Model** | Single binary execution per UID (`pgrep -U`) | Prevents duplicate menu bar status items across accidental terminal launches while supporting Fast User Switching. |
+| **Process Model** | One resident instance per UID (`pgrep -U`); a second `start` forwards to it | Prevents duplicate menu bar status items across repeated launches while supporting Fast User Switching; `--extra` is the only way to a second instance (§ 8.4). |
 | **SMC Access** | Exactly one `io_connect_t` instance | `SMCClient.shared` holds process-lifetime connection without opening redundant kernel handles. |
 | **Private API** | `IOReport` bound only by `dlopen`/`dlsym`, never linked | The one unheadered API in the build. Runtime binding keeps the zero-dependency single-file compile intact and makes every absence (dylib, symbol, group, rail) a clean `isAvailable == false` instead of a launch failure (§ 4.5). |
 | **Sleep Assertion** | Hard 5% critical battery floor | Sleep assertions unconditionally terminate at $\le 5\%$ battery, protecting laptop hardware from deep discharge (§ 7.2). |
@@ -1181,7 +1188,7 @@ At launch, `JSONDecoder` hydrates `allPresets: [PresetDescriptor]`, determining 
 | **Menu Layout** | Static slot width reservation | Status items must never resize based on live data values to guarantee zero layout jitter on the menu bar (§ 6.1). WindowServer owns ultimate placement under congestion (§ 6.2). |
 | **Game Loop** | Occlusion stops driver completely | Full occlusion (notch, inactive space, display off) must reduce render CPU utilization to exactly 0.0%. |
 | **State File** | Single-writer centralized save | `persistState()` is the only function permitted to write `state.json`, eliminating partial block overwrites. |
-| **Headless Paths** | `--once` and `--status` write nothing and hold nothing | Side-effect freedom is what makes them safe beside a live instance and in parallel with themselves; it is also why both are exempt from the singleton guard and the compile (§ 4.7, § 8.3). `--status` reads `state.json` and must never write it — a query cannot be allowed to disturb the instance it asks about. |
+| **Headless Paths** | `snapshot`, `status` and `presets` write nothing and hold nothing | Side-effect freedom is what makes them safe beside a live instance and in parallel with themselves; it is also why all three are exempt from the singleton guard and the compile (§ 4.7, § 8.3). `status` reads `state.json` and must never write it — a query cannot be allowed to disturb the instance it asks about. |
 | **Telemetry Core** | Physical units out, no display concepts in | `TelemetryCore` never returns a 0..1 driver value from `snapshot()` and never reads AppKit, Keep Awake or `state.json`, so one set of readers serves both entry paths without either defining the other (§ 4.7). |
 
 ---
@@ -1193,7 +1200,7 @@ Comprehensive reference of values defined in `Tuning`:
 | Constant Name | Value | Unit | Functional Role |
 |---|---|---|---|
 | `loadSampleInterval` | `2.0` | Seconds | Telemetry sampling and dashboard refresh period |
-| `snapshotWindow` | `0.2` | Seconds | Delta window between the two samples `--once` takes; the snapshot's whole latency budget (§ 4.7) |
+| `snapshotWindow` | `0.2` | Seconds | Delta window between the two samples `snapshot` takes; the snapshot's whole latency budget (§ 4.7) |
 | `cpuSmoothingAlpha` | `0.2` | Fraction | Exponential moving average alpha for CPU load smoothing |
 | `speedUpdateHysteresis` | `0.08` | Fraction | Minimum load delta required to adjust animation speed |
 | `constrainedSpeedCeilingFraction` | `0.5` | Fraction | Animation speed cap under thermal/power/memory pressure |
@@ -1223,35 +1230,35 @@ Comprehensive reference of values defined in `Tuning`:
 
 ### 11.2 Command-Line Interface (CLI) Parameters
 
-Parameters accepted by `co-awareness` and `CoAwareness`:
+The first argument is a verb; omitted, or a flag, means `start`. Settings apply at launch or live (§ 8.4); launch-only flags are refused while an instance is resident.
 
 | Parameter | Default | Domain / Format | Functional Role | Location |
 |---|---|---|---|---|
-| `[preset\|path]` | `horse-white` | Built-in key or `.gif` path | Selects the active runner animation preset or local GIF asset | CLI positional |
-| `--speed-multiplier <x>` | auto-speed | Float (e.g. `0.5`, `1.0`, `2.0`) | Overrides dynamic load scaling with a fixed animation playback speed | binary & launcher |
-| `--load-source <src>` | `cpu` | `cpu` · `memory` · `gpu` · `network` · `disk` · `fan` · `battery` · `temperature` · `ane` · `bandwidth` | Telemetry monitor driving animation rate (§ 4) | binary & launcher |
-| `--show-all-sources` | off | Flag | Continuously samples all available readers even when the menu is closed | binary & launcher |
-| `--display <mode>` | `gif` | `gif` · `trace` · `value` | Selects status-bar representation: animated GIF, trace chart, or live reading | binary & launcher |
-| `--keep-awake <dur>` | `off` | `off` · `on` · `<dur>` (`30m`, `2h`, `1h30m`) | Arms sleep prevention until turned off or until window expires (§ 7.1) | binary & launcher |
-| `--keep-awake-pid <pid>`| off | Positive integer PID | Binds sleep prevention to lifetime of target process; terminates on exit (§ 7.4) | binary & launcher |
-| `--battery-threshold <x>`| `20` | Whole % (`6`–`100`) or `off`/`0` | Charge level where Keep Awake suspends on battery (§ 7.2; floor at 5% is hard) | binary & launcher |
-| `--no-update-check` | off | Flag | Disables background update tag polling on startup (§ 9.2) | binary & launcher |
-| `--foreground` / `--no-detach` | detached | Flag | Runs process attached to current terminal shell (disables default nohup detach) | launcher only |
-| `--detach` | default | Flag | Launches process detached in the background via nohup and logging | launcher only |
-| `--extra` | off | Flag | Bypasses launcher singleton guard to permit concurrent instance execution | launcher only |
-| `--precompile` | off | Flag | Compiles Swift source atomically if newer than Mach-O, then exits 0/1 without launch | launcher only |
-| `--once` | off | Flag (strictly exclusive) | Emits single-line JSON snapshot of all available hardware sensors; physical units (§ 4.7) | binary & launcher |
-| `--status` | off | Flag (strictly exclusive) | Emits single-line JSON reporting resident instance status and Keep Awake hold (§ 8.3) | binary & launcher |
-| `set [flags]` | — | Subcommand | Forwards runtime intent to resident instance without restarting (§ 8.4) | binary & launcher |
-| `-h` / `--help` | off | Flag | Displays CLI usage synopsis and options reference | binary & launcher |
+| `start` | default verb | Verb + settings + launch-only flags | Launches, or forwards the settings to the resident instance; one JSON reply (§ 8.4) | launcher & binary |
+| `status` | — | Verb, no arguments | One JSON line: is an instance resident, and its Keep Awake hold (§ 8.3) | launcher & binary |
+| `snapshot` | — | Verb, no arguments | One JSON line of every hardware reading in physical units (§ 4.7) | launcher & binary |
+| `presets` | — | Verb, no arguments | One JSON line: `default` and each built-in preset's `key` and `title`, in manifest order (§ 9.1) | launcher & binary |
+| `build` | — | Verb, no arguments | Compiles if the source is newer, atomic rename, launches nothing; exit 0/1 (§ 2) | launcher only |
+| `--preset <key\|path>` | saved, else `defaultPreset` | Built-in key (see `presets`) or `.gif` path | Setting: the runner animation | binary |
+| `--display <mode>` | `gif` (or saved) | `gif` · `trace` · `value` | Setting: status-bar representation (§ 6) | binary |
+| `--load-source <src>` | `cpu` (or saved) | `cpu` · `memory` · `gpu` · `network` · `disk` · `fan` · `battery` · `temperature` · `ane` · `bandwidth` | Setting: the reader driving the animation (§ 4) | binary |
+| `--keep-awake <dur>` | `off` (or saved window) | `off` · `on` · `<dur>` (`30m`, `2h`, `1h30m`; ≤ 24h) | Setting: sleep prevention until off or until the window expires (§ 7.1) | binary |
+| `--keep-awake-pid <pid>`| off | Running process pid; wins over `--keep-awake` | Setting: sleep prevention bound to that process's lifetime (§ 7.4) | binary |
+| `--battery-threshold <x>`| `20` (or saved) | Whole % (`6`–`100`) or `off`/`0` | Setting: charge where Keep Awake releases on battery; the 5% floor is fixed (§ 7.2) | binary |
+| `--speed-multiplier <x>` | auto-speed | Positive float | Launch-only: fixed playback speed instead of load-driven | binary |
+| `--show-all-sources` | off | Flag | Launch-only: samples every reader even while the menu is closed | binary |
+| `--no-update-check` | off | Flag | Launch-only: no release-tag probe at launch (§ 9.2) | binary |
+| `--foreground` | detached | Flag | Launch-only: stays attached to the shell instead of nohup detach | launcher |
+| `--extra` | off | Flag | Skips the resident check: always launches another instance | launcher & binary |
+| `-h` / `--help` | — | Flag, any position | The one help text, generated by the binary; lists no preset | binary (launcher execs it) |
 
-*Mutual Exclusion Invariant:* `--once` and `--status` must each be the sole argument passed. Companion flags trigger an immediate exit 1 usage error to prevent conflicting GUI configuration.
+*No-arguments invariant:* `status`, `snapshot` and `presets` take nothing; any companion argument is exit 1 with stdout left empty. Retired spellings (`set`, `--once`, `--status`, `--precompile`, `--label`, `--no-detach`, `--detach`, a bare preset word, `CO_AWARENESS_PATH`, `CO_AWARENESS_LABEL`) are exit 1 with the replacement named — except the argv older builds emit on their own, which the launcher's temporary bridge reads (§ 2).
 
 ### 11.3 Environment Variables & Test / Observability Hooks
 
 | Variable Name | Type / Values | Default | Subsystem & Behavioral Role |
 |---|---|---|---|
-| `CO_AWARENESS_PATH` | Path string | unset | Overrides default GIF asset path |
+| `CO_AWARENESS_PRESET` | Preset key or GIF path | unset | Same as `--preset`; the flag wins |
 | `CO_AWARENESS_LOAD_SOURCE` | Source enum | `cpu` | Sets active telemetry monitor driving animation |
 | `CO_AWARENESS_DISPLAY` | Mode | `gif` | Sets default status bar display mode |
 | `CO_AWARENESS_KEEP_AWAKE` | Duration string | `off` | Sets startup Keep Awake hold duration |
@@ -1260,6 +1267,7 @@ Parameters accepted by `co-awareness` and `CoAwareness`:
 | `CO_AWARENESS_UPDATE_CHECK` | `0` or `1` | `1` | Toggles launch-time update check |
 | `CO_AWARENESS_LOG_FILE` | Path string | `/tmp/co-awareness.log` | Detached execution output log path |
 | `CO_AWARENESS_BIN_NAME` | String | `CoAwareness` | Binary name override for process matching |
+| `CO_AWARENESS_FORWARD_ONLY` | `1` | unset | Launcher → binary protocol, not a user setting: forward only, and exit 3 when nobody is resident (§ 8.4) |
 | `CO_AWARENESS_EXIT_AFTER` | Seconds (float) | unset | Test hook: cleanly terminates app (exit 0) after duration |
 | `CO_AWARENESS_FORCE_UNAVAILABLE` | Comma-separated sources | unset | Test hook: forces named telemetry sources unavailable |
 | `CO_AWARENESS_FORCE_BATTERY` | `pct[:battery\|:ac]` | unset | Test hook: simulates battery charge level and power source (§ 4.6) |
@@ -1301,6 +1309,7 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v2.3.0** — canonical CLI substrate & ergonomic menu | Runtime intent forwarding (`set`) via POSIX signal + atomic `intent.json`; enriched `--once` snapshot with `power_source`, `memory_pressure`, topology and battery diagnostics; clean 4-tier menu architecture decoupling display modes from character presets and nesting battery safety floor | CLI leads as canonical substrate, GUI projects as ergonomic view; external agents control resident GUI instance without singleton deadlock (§ 8.4); telemetry snapshot parity with menu facts (§ 4.7); eliminated dashboard radio-button misclicks and internal debug leaks (§ 6) |
 | **v2.3.1** — GIF layout collapse hotfix | Disarm Keep Awake with countdown no longer collapses GIF view to zero width; decoupled GIF rasterization from status item width | Cleared legacy autoresizingMask on animationView, unifying internal layout ownership under updateDisplaySlot(); slotLength() strictly bounds frame rasterization (§ 6) |
 | **v2.3.2** — Keep Awake menu checkmark exclusivity | Strict mutual exclusion between "Off" and duration rows in Section 1 of Keep Awake submenu | Duration rows only marked when sleep prevention is active, eliminating contradictory double-checked Off + Until turned off state (§ 7) |
+| **v2.4.0** — one CLI grammar for agents and humans | Verb-first argv (`start` · `status` · `snapshot` · `presets` · `build`), `--preset` as a flag, idempotent `start` forwarding to a resident instance through a per-request spool, one binary-owned help with no preset list | An agent reaches the same outcome whether or not an instance is up, with one JSON reply to parse (§ 8.4); presets live only in the manifest (§ 9.1); argv that older builds emit on their own keeps working through a temporary launcher bridge (§ 2) |
 
 ---
 

@@ -98,7 +98,8 @@ To run attached to the current shell session:
 
 Notes:
 
-- **Single instance.** Only one instance runs at a time. Running any command below a second time does nothing unless you pass `--extra` to allow an additional instance.
+- **One instance, changed in place.** Only one instance runs at a time. Running the command again with settings — `--preset`, `--display`, `--load-source`, `--keep-awake`, `--keep-awake-pid`, `--battery-threshold` — applies them to the running instance instead of starting another; with no settings it does nothing. Launch-only flags (`--speed-multiplier`, `--show-all-sources`, `--no-update-check`, `--foreground`) are refused while it runs. `--extra` starts an additional instance anyway.
+- **One line of JSON back.** Every command answers with one line: `{"action":"started"|"forwarded"|"unchanged","pid":N}` for a start, and the query commands below print theirs.
 - **Detached logs.** A detached launch writes output to `/tmp/co-awareness.log` (override with the `CO_AWARENESS_LOG_FILE` environment variable). Use `--foreground` to send output straight to your terminal instead.
 
 ## Global command
@@ -107,7 +108,7 @@ The installer symlinks the launcher onto your `PATH` (at `~/.local/bin/co-awaren
 can launch it as **`co-awareness`** from any folder:
 
 ```bash
-co-awareness dog-black
+co-awareness --preset dog-black
 ```
 
 Running from a cloned repo instead? Symlink it yourself:
@@ -116,13 +117,17 @@ Running from a cloned repo instead? Symlink it yourself:
 ln -s "$PWD/co-awareness" ~/.local/bin/co-awareness
 ```
 
-`co-awareness` supports the same flags (`--foreground`, `--no-detach`, `--detach`, `--extra`),
-plus `--precompile` — build the binary if the source is newer, then exit without launching. It's safe
-to run while the app is going; the in-app updater uses it so a restart doesn't wait on a compile. And
-`--once`, which prints the sensors as one line of JSON and exits without touching the menu bar at all
-(see [Read the sensors from a script](#read-the-sensors-from-a-script---once)), and `--status`, which
-says whether an instance is already up and whether it is holding the Mac awake
-(see [Ask whether one is already running](#ask-whether-one-is-already-running---status)).
+The first argument is a command; leave it out and it means `start`:
+
+| Command | Does |
+|---|---|
+| `co-awareness [start] [flags]` | Start in the menu bar, or apply the flags to the instance already running |
+| `co-awareness status` | One JSON line: is an instance up, and is it holding the Mac awake ([more](#ask-whether-one-is-already-running-status)) |
+| `co-awareness snapshot` | One JSON line with every sensor reading, without touching the menu bar ([more](#read-the-sensors-from-a-script-snapshot)) |
+| `co-awareness presets` | One JSON line listing the built-in presets |
+| `co-awareness build` | Build the binary if the source is newer, then exit without launching — safe while the app runs; the in-app updater uses it so a restart doesn't wait on a compile |
+
+`co-awareness --help` is the full reference.
 
 ## Start at login (personal, optional)
 
@@ -130,7 +135,7 @@ Auto-start via a **per-user LaunchAgent** — no root, no installer, no `.app` b
 
 ```bash
 ./scripts/install-login-item.sh                              # start at login (defaults to horse-white)
-./scripts/install-login-item.sh dog-black --load-source memory   # bake in launcher args
+./scripts/install-login-item.sh --preset dog-black --load-source memory   # bake in launcher args
 ./scripts/uninstall-login-item.sh                            # remove it again
 ```
 
@@ -157,7 +162,7 @@ for changing the baked-in args:
 - **Change the preset or load source** — this is the *only* reason to reinstall. Re-run the installer
   with the new args; it re-bakes the plist and restarts:
   ```bash
-  ./scripts/install-login-item.sh dog-black --load-source fan
+  ./scripts/install-login-item.sh --preset dog-black --load-source fan
   ```
 
 ## Built-in presets
@@ -169,49 +174,24 @@ for changing the baked-in args:
 > [any GIF of your own](#use-a-custom-gif) works just as well.
 
 ```bash
-# Default
-./co-awareness horse-white
-
-# Black horse preset (Pinterest silhouette)
-./co-awareness horse-black
-
-# Chihiro walking preset (color, and white/black silhouettes)
-./co-awareness chihiro
-./co-awareness chihiro-white
-./co-awareness chihiro-black
-
-# Totoro preset
-./co-awareness totoro
-
-# White Totoro group preset (transparent, wide — renders at its GIF aspect ratio)
-./co-awareness totoro-group-white
-
-# Black Totoro group preset (transparent, wide — renders at its GIF aspect ratio)
-./co-awareness totoro-group-black
-
-# White Totoro preset
-./co-awareness totoro-white
-
-# Black Totoro preset
-./co-awareness totoro-black
-
-# White dog preset
-./co-awareness dog-white
-
-# Black dog preset
-./co-awareness dog-black
+./co-awareness presets                # the built-in keys, from gifs/presets.json
+./co-awareness --preset totoro        # switch — live, if it is already running
 ```
+
+Horse (the default, `horse-white`), dog, Chihiro and Totoro, most in white and black silhouettes for
+light and dark menu bars; the menu's **Presets** submenu shows them all. `gifs/presets.json` is the
+list — the CLI and the help read it rather than keeping a copy.
 
 ## Use a custom GIF
 
 ```bash
-./co-awareness /absolute/path/to/your.gif
+./co-awareness --preset /absolute/path/to/your.gif
 ```
 
 Or:
 
 ```bash
-CO_AWARENESS_PATH=/absolute/path/to/your.gif ./co-awareness
+CO_AWARENESS_PRESET=/absolute/path/to/your.gif ./co-awareness
 ```
 
 ## Width
@@ -331,10 +311,10 @@ Picking any option instantly switches both the active telemetry driver and the s
 > throughput is. Under Low Power Mode, thermal, or memory pressure the app caps its own animation
 > speed at half the preset's range.
 
-## Read the sensors from a script (`--once`)
+## Read the sensors from a script (`snapshot`)
 
 ```bash
-./co-awareness --once
+./co-awareness snapshot
 {"v":1,"cpu_pct":14.2,"cpu_p_pct":9.8,"cpu_e_pct":27.4,"mem_pct":41.0,"swap_mibs":0.00,"bw_gbps":58.3,"gpu_pct":28.0,"gpu_rend_pct":26.0,"gpu_tiler_pct":11.0,"net_rx_mibs":1.40,"net_tx_mibs":0.20,"disk_read_mibs":0.00,"disk_write_mibs":3.10,"fan_rpm":[2160],"battery_pct":96.0,"battery_a":0.80,"temp_c":78.0,"thermal":"nominal","ane_w":0.00}
 ```
 
@@ -343,7 +323,7 @@ status line, or an agent deciding whether this machine has the thermal and batte
 build. No menu bar, no window, no state file, and nothing to install or leave running:
 
 ```bash
-./co-awareness --once | jq -r '"\(.temp_c) °C, \(.thermal)"'
+./co-awareness snapshot | jq -r '"\(.temp_c) °C, \(.thermal)"'
 ```
 
 - **Physical units, named with them.** `_pct` is a percentage, `_mibs` is MiB/s, `_gbps` is GB/s,
@@ -357,21 +337,22 @@ build. No menu bar, no window, no state file, and nothing to install or leave ru
   is safe to run beside a running instance, or several at once — it writes nothing and locks nothing.
 - **Takes about 0.3 s.** Throughput readings are counter deltas, so it samples, waits, and samples
   again; that window is nearly the whole runtime.
-- Needs the binary built (`./co-awareness --precompile` once, if you have never launched it);
+- Needs the binary built (`./co-awareness build` once, if you have never launched it);
   it deliberately won't compile one for you, so a snapshot never turns into a 30-second build.
 
-## Ask whether one is already running (`--status`)
+## Ask whether one is already running (`status`)
 
 ```bash
-./co-awareness --status
+./co-awareness status
 {"running":true,"pid":1598,"keep_awake":{"active":true,"remaining_s":3540}}
 ```
 
-`--once` answers for the machine; this answers for the app. It's the question a script has before it
-launches another instance, or before it assumes the Mac will still be awake in an hour:
+`snapshot` answers for the machine; this answers for the app. It's the question a script has before
+it assumes the Mac will still be awake in an hour. (It is not needed before starting one: `start`
+already does the right thing either way.)
 
 ```bash
-./co-awareness --status | jq -e '.running' >/dev/null || ./co-awareness
+./co-awareness status | jq -e '.keep_awake.active' >/dev/null || echo "nothing is holding the Mac awake"
 ```
 
 - **Nothing running is an answer, not an error** — `{"running":false}`, and still exit 0. Exit 1 means
@@ -383,21 +364,22 @@ launches another instance, or before it assumes the Mac will still be awake in a
 - **Read-only.** It looks at the process table and reads the state file; it writes neither, so it is
   safe beside a running instance and in parallel with itself.
 
-## Keep Awake at launch (`--keep-awake`)
+## Keep Awake from the command line (`--keep-awake`)
 
 ```bash
-./co-awareness --keep-awake 4h        # arm a 4-hour window at startup
+./co-awareness --keep-awake 4h        # arm a 4-hour window — at startup, or live if it is running
 ./co-awareness --keep-awake on        # until turned off
 CO_AWARENESS_KEEP_AWAKE=90m ./co-awareness
 ```
 
-`--keep-awake` (or `CO_AWARENESS_KEEP_AWAKE`) arms sleep prevention as the app starts, so a
-long unattended run can be scripted instead of clicked. It takes `off` (the default), `on` /
+`--keep-awake` (or `CO_AWARENESS_KEEP_AWAKE`) arms sleep prevention as the app starts — or, with the
+app already running, on that instance — so a long unattended run can be scripted instead of clicked. It takes `off` (the default), `on` /
 `indefinite`, or a duration — **a unit is required**: `30m`, `2h`, `1h30m`, `90s`, up to 24 hours.
 A bare number is rejected rather than guessed at, since minutes and hours are both plausible readings
-and picking wrong is a 60× error in how long your Mac stays awake. An unrecognized value warns on
-stderr and launches with Keep Awake off; it never fails the launch, because this value can be baked
-into a login item:
+and picking wrong is a 60× error in how long your Mac stays awake. At launch an unrecognized value warns
+on stderr and launches with Keep Awake off; it never fails the launch, because this value can be baked
+into a login item. Sent to a running instance it is refused instead (exit 1), and the instance is left
+as it was:
 
 ```bash
 ./scripts/install-login-item.sh --keep-awake 4h
@@ -590,8 +572,8 @@ Coverage is split into explicit tiers around one question — **does the check b
 
 | Tier | Sections | Needs a GUI session? | Role |
 |---|---|---|---|
-| `core` | §1 build (warning-clean) · §2 CLI/version · §2a `--once` snapshot · §2b `--status` | No | Primary gate — must pass before a release; headless-safe |
-| `gui` | §3 launch lifecycle · §3a–§3i Keep Awake / persistence / status item geometry / sleep assertions / animation driver / battery diagnostics / kernel thermal · §3j `--status` against a live instance · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
+| `core` | §1 build (warning-clean) · §2 CLI/version · §2a `snapshot` · §2b `status` · §2c `presets` | No | Primary gate — must pass before a release; headless-safe |
+| `gui` | §3 launch lifecycle · §3a–§3i Keep Awake / persistence / status item geometry / sleep assertions / animation driver / battery diagnostics / kernel thermal · §3j `status` and §3k idempotent `start` against a live instance · §5 reader readouts · §4 error paths (all boot `NSApplication` + a status item) | Yes (WindowServer) | Best-effort — needs a logged-in Mac; skipped on a headless host |
 | `launcher` | §6 launcher + singleton (disruptive `pkill`) | — | Manual — run locally before a release |
 | manual | the menu walk + the eyes-only checks — never scripted | — | Hands and eyes; a NOTE in the tiers above is an unanswered case, not a pass |
 
@@ -599,7 +581,7 @@ Coverage is split into explicit tiers around one question — **does the check b
 tests**, by policy: every check launches the real binary and asserts a real side effect (a `caffeinate`
 child, a state file, the live status item's own geometry and readout) — never a re-ported copy of the app's
 own logic, which passes while the app is broken. This is why the `core` tier is thin: most of the real binary needs a status item, so the behavioral
-checks live in `gui`. The exceptions are `--once` (§2a) and `--status` (§2b), which build no GUI at all — running the
+checks live in `gui`. The exceptions are `snapshot` (§2a), `status` (§2b) and `presets` (§2c), which build no GUI at all — running the
 snapshot in the headless tier *is* the proof that the readers answer with no WindowServer behind them.
 
 A GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) mirrors these tiers
@@ -684,4 +666,4 @@ please open an issue and it will be taken down
 promptly.
 
 You don't need the bundled GIFs — point the app at any GIF you have the rights to use:
-`co-awareness /absolute/path/to/your.gif` (or set `CO_AWARENESS_PATH`).
+`co-awareness --preset /absolute/path/to/your.gif` (or set `CO_AWARENESS_PRESET`).

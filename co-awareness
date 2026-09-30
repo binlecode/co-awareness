@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-readonly APP_CMD_NAME="co-awareness/co-awareness"
+readonly APP_CMD_NAME="co-awareness"
 
 # Absolute, symlink-resolved path of THIS script. The app re-execs it for the update prompt's
 # Restart button (exported as CO_AWARENESS_LAUNCHER below), and it is also where the
@@ -32,103 +32,59 @@ resolve_script_path() {
   print -- "$dir/${source:t}"
 }
 
-print_help() {
-  cat <<EOF
-Usage:
-  $APP_CMD_NAME [dog-white|dog-black|horse-black|horse-white|chihiro|chihiro-white|chihiro-black|totoro|totoro-group-white|totoro-group-black|totoro-white|totoro-black|/path/to.gif] [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--display <gif|trace|value>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
-  $APP_CMD_NAME set [--keep-awake <dur>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--display <gif|trace|value>] [--load-source <src>] [preset]
-  CO_AWARENESS_PATH=/path/to.gif $APP_CMD_NAME [--speed-multiplier <x>] [--load-source <cpu|memory|gpu|network|disk|fan|battery|temperature|ane|bandwidth>] [--show-all-sources] [--display <gif|trace|value>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--no-update-check] [--foreground|--no-detach]
+# The one help text lives in the binary (Config.printUsage), which reads its lists from code and
+# presets.json, so the launcher keeps no copy to drift. Also the exit for every command the binary
+# answers on its own — status, snapshot, presets, and any word it refuses — with no guard and no
+# compile in front: none of them writes or locks anything, and all must run beside a live instance.
+exec_binary() {
+  if [[ ! -x "$swift_bin" ]]; then
+    print -u2 "$APP_CMD_NAME: no binary yet; build one with \`$APP_CMD_NAME build\`."
+    exit 2
+  fi
+  CO_AWARENESS_BIN_NAME="$APP_CMD_NAME" exec "$swift_bin" "$@"
+}
 
-Presets:
-  dog-white   Built-in running dog (white)
-  dog-black   Built-in running dog (black)
-  horse-black  Built-in running horse (black)
-  horse-white   Built-in running horse (white, default)
-  chihiro  Built-in walking Chihiro (color)
-  chihiro-white  Built-in walking Chihiro (white silhouette)
-  chihiro-black  Built-in walking Chihiro (black silhouette)
-  totoro  Built-in running Totoro
-  totoro-group-white  Built-in Totoro group GIF (white, transparent)
-  totoro-group-black  Built-in Totoro group GIF (black, transparent)
-  totoro-white  Built-in running Totoro (white)
-  totoro-black  Built-in running Totoro (black)
-
-Options:
-  --speed-multiplier <x>     Fixed speed (e.g. 0.5, 1.0, 1.5, 2.0)
-  --load-source <src>        Reader driving the animation: cpu (default), memory, gpu, network, disk, fan, battery, temperature, ane (Apple Neural Engine power), bandwidth (DRAM bus GB/s)
-                             (also via CO_AWARENESS_LOAD_SOURCE; unknown/unavailable -> cpu)
-  --show-all-sources         Start with the menu's "Other Sources" list expanded, sampling every available
-                             reader and showing each as a live row (also via CO_AWARENESS_SHOW_ALL=1;
-                             click a row to switch source; the active source still drives the animation)
-  --display <gif|trace|value> Status-bar representation: 'gif' (default, animated creature),
-                             'trace' (compact post-modern load chart), or 'value' (compact live reading)
-                             (also via CO_AWARENESS_DISPLAY; switchable from the menu)
-  --keep-awake <off|on|dur>  Arm Keep Awake at launch: 'on' until turned off, or a duration with a unit
-                             (30m, 2h, 1h30m; up to 24h), 'off' (default) leaves it disabled
-                             (also via CO_AWARENESS_KEEP_AWAKE; switchable from the menu).
-                             An armed window is saved and resumed on the next launch; passing this
-                             flag -- even as 'off' -- overrides what was saved
-  --keep-awake-pid <pid>     Arm Keep Awake bound to a process: sleep prevention is held until that
-                             pid exits, then released automatically (also via
-                             CO_AWARENESS_KEEP_AWAKE_PID). The shape that fits an unattended
-                             terminal job (\`--keep-awake-pid \$!\`), where a fixed window is a
-                             guess. Wins over --keep-awake if both are given; a pid that
-                             is already gone warns and launches with keep-awake off. Never resumed
-                             after a reboot, since pids are recycled
-  --battery-threshold <pct|off>
-                             Charge at or below which Keep Awake releases on battery (default 20;
-                             'off' never releases on charge alone). Whole percents only -- 20 or 20%,
-                             not 0.20; out-of-range values are clamped to 6-100
-                             (also via CO_AWARENESS_BATTERY_THRESHOLD). Below 5% on battery
-                             the Mac sleeps regardless -- that floor is not configurable
-  --no-update-check          Skip the launch check for a newer release (also via CO_AWARENESS_UPDATE_CHECK=0)
-  --foreground, --no-detach  Run attached to current shell (default is detached)
-  --detach                   Run detached (default)
-  --extra                    Allow launching a new instance even if one is already running
-  --precompile               Compile the source if it is newer than the binary, then exit without
-                             launching. Safe to run while an instance is live (the build is renamed
-                             into place). The in-app updater uses this so a restart is instant
-  --once                     Print one line of JSON with every reading this machine answers for
-                             (physical units; an unavailable source is an absent key), then exit --
-                             no menu bar, no state file, no compile. Must be the only argument.
-                             Safe beside a running instance and in parallel with itself. Takes about
-                             200 ms: the rate readers need a delta window. Exits 2 if the binary has
-                             not been built yet (run --precompile first)
-  --status                   Print one line of JSON about the process rather than the hardware:
-                             whether an instance is already resident (running, pid) and whether it
-                             is holding the Mac awake (keep_awake.active, plus remaining_s for a
-                             timed window), then exit -- no menu bar, no compile, no state write.
-                             Must be the only argument. Exits 0 whether or not an instance is up;
-                             exits 2 if the binary has not been built yet (run --precompile first)
-  -h, --help                 Show this help
-
-Examples:
-  $APP_CMD_NAME
-  $APP_CMD_NAME dog-white
-  $APP_CMD_NAME dog-black
-  $APP_CMD_NAME horse-black
-  $APP_CMD_NAME horse-white
-  $APP_CMD_NAME chihiro
-  $APP_CMD_NAME chihiro-white
-  $APP_CMD_NAME chihiro-black
-  $APP_CMD_NAME totoro
-  $APP_CMD_NAME totoro-group-white
-  $APP_CMD_NAME totoro-group-black
-  $APP_CMD_NAME totoro-white
-  $APP_CMD_NAME totoro-black
-  $APP_CMD_NAME --load-source gpu
-  $APP_CMD_NAME --load-source battery
-  $APP_CMD_NAME --show-all-sources
-  $APP_CMD_NAME --display value
-  $APP_CMD_NAME --display trace
-  $APP_CMD_NAME --once
-  $APP_CMD_NAME --status
-  $APP_CMD_NAME --keep-awake 4h
-  $APP_CMD_NAME --keep-awake-pid \$!
-  $APP_CMD_NAME horse-black --speed-multiplier 1.2
-  $APP_CMD_NAME --foreground horse-black
-  CO_AWARENESS_PATH=/tmp/cat.gif $APP_CMD_NAME
-EOF
+# TEMPORARY BRIDGE — delete with its ROADMAP row. Builds before the verb-first grammar emit argv of
+# their own that the grammar refuses: the self-updater runs `launcher --precompile`, its Restart runs
+# `launcher <preset> --load-source …`, and a login item bakes `launcher --no-detach … <preset> …`
+# (older ones also `--label <mode>`).
+# Those processes are already on disk and cannot be changed, so they are read here, once, with a
+# stderr note; the running app then rewrites the login item (Restarter.migrateLegacyLoginItem). Only
+# those shapes: any other old spelling reaches the binary and is refused with its replacement.
+legacy_argv() {
+  local arg prev="" rewritten=0
+  LEGACY_ARGV=()
+  if [[ $# -eq 1 && "$1" == "--precompile" ]]; then
+    LEGACY_ARGV=(build)
+    print -u2 "$APP_CMD_NAME: read legacy \`--precompile\` as \`build\`."
+    return
+  fi
+  if [[ " $* " != *" --no-detach "* ]] \
+     && [[ $# -eq 0 || "$1" == -* || "$1" == (start|status|snapshot|presets|build|set) ]]; then
+    LEGACY_ARGV=("$@")
+    return
+  fi
+  for arg in "$@"; do
+    if [[ "$prev" == "--label" ]]; then
+      case "${arg:l}" in
+        value) LEGACY_ARGV+=(--display value) ;;
+        chart|trace) LEGACY_ARGV+=(--display trace) ;;
+        *) LEGACY_ARGV+=(--display gif) ;;
+      esac
+    elif [[ "$arg" == "--label" ]]; then
+      rewritten=1
+    elif [[ "$arg" == "--no-detach" ]]; then
+      LEGACY_ARGV+=(--foreground); rewritten=1
+    elif [[ "$arg" == -* || "$prev" == (--speed-multiplier|--display|--load-source|--keep-awake|--keep-awake-pid|--battery-threshold) ]]; then
+      LEGACY_ARGV+=("$arg")
+    else
+      LEGACY_ARGV+=(--preset "$arg"); rewritten=1
+    fi
+    prev="$arg"
+  done
+  if (( rewritten )); then
+    print -u2 "$APP_CMD_NAME: read legacy arguments as: ${LEGACY_ARGV[*]}"
+  fi
 }
 
 # Compiles CoAwareness.swift to the sibling binary when the source is newer (or the binary is
@@ -140,7 +96,7 @@ EOF
 # it; see docs for the concurrency posture.
 #
 # The build goes to a temp and is renamed into place, never written over the binary directly:
-# `--precompile` exists to run *while an instance is live*, and overwriting a running Mach-O in place
+# `build` exists to run *while an instance is live*, and overwriting a running Mach-O in place
 # corrupts the process paging out of it. rename(2) within one directory is atomic and leaves the live
 # process holding its old inode. `tests/qa.sh` §6 asserts the live instance survives a rebuild.
 compile_if_stale() {
@@ -160,36 +116,52 @@ main() {
   local script_dir launcher_path swift_module_cache
   local launch_detached=1
   local allow_extra=0
-  local do_precompile=0
-  local log_file pid arg
-  local -a passthrough_args swift_cmd
+  local log_file pid arg rc log_json
+  local -a passthrough_args swift_cmd existing_pids
+  typeset -ga LEGACY_ARGV
 
   launcher_path="$(resolve_script_path)"
   script_dir="${launcher_path:h}"
+  local swift_src="$script_dir/CoAwareness.swift"
+  local swift_bin="$script_dir/CoAwareness"
 
-  # --once and --status: hand the whole argv to the binary and get out of the way. FIRST, ahead of the
-  # singleton guard and ahead of any compile — neither writes anything or locks anything, and both must
-  # run beside a live instance or in parallel with themselves, while compiling here would put a swiftc
-  # race back in front of the very guard that exists to prevent it. The source being newer is
-  # deliberately not consulted: a reading from the previous build is still a true reading, and a
-  # resident instance is the previous build. Exclusivity is the binary's to enforce (it owns the usage
-  # text), so every argument goes through unchanged.
-  if [[ $# -gt 0 && ( "$1" == "set" || "$1" == "--set" ) ]]; then
-    if [[ ! -x "$script_dir/CoAwareness" ]]; then
-      print -u2 "$APP_CMD_NAME: no binary to run; build one with \`$APP_CMD_NAME --precompile\`."
-      exit 2
-    fi
-    exec "$script_dir/CoAwareness" "$@"
-  fi
+  legacy_argv "$@"
+  set -- "${LEGACY_ARGV[@]}"
+
+  # Help, and the spellings the binary refuses with a pointer to their replacement, go straight to it:
+  # on the start path below they would be compiled and detached, and the refusal would land in a log.
   for arg in "$@"; do
-    if [[ "$arg" == "--once" || "$arg" == "--status" ]]; then
-      if [[ ! -x "$script_dir/CoAwareness" ]]; then
-        print -u2 "$APP_CMD_NAME: no binary to read from; build one with \`$APP_CMD_NAME --precompile\`."
-        exit 2
-      fi
-      exec "$script_dir/CoAwareness" "$@"
-    fi
+    case "$arg" in
+      -h|--help|--once|--status|--set|--precompile|--label|--detach) exec_binary "$@" ;;
+    esac
   done
+
+  case "${1:-}" in
+    build)
+      # Build and stop. This is the app's half of a self-update — `git pull` moves the source, and the
+      # compile that makes it runnable has to happen *before* the app quits, or the user watches an
+      # empty menu bar for as long as swiftc takes (measured 6.5s warm, 32s on a cold clang module
+      # cache, 132s once under load). Deliberately ahead of the singleton guard: its whole purpose is
+      # to run while an instance is live, which is what the temp+rename in compile_if_stale is for.
+      if [[ $# -gt 1 ]]; then
+        print -u2 "$APP_CMD_NAME: \`build\` takes no arguments."
+        exit 1
+      fi
+      if compile_if_stale "$swift_src" "$swift_bin"; then
+        exit 0
+      fi
+      print -u2 "$APP_CMD_NAME: swiftc failed; the next launch compiles on demand or falls back to interpreted swift."
+      exit 1
+      ;;
+    start)
+      shift
+      ;;
+    ""|-*)
+      ;;
+    *)
+      exec_binary "$@"
+      ;;
+  esac
 
   if ! command -v swift >/dev/null 2>&1; then
     print -u2 "$APP_CMD_NAME: swift command not found"
@@ -199,87 +171,66 @@ main() {
   swift_module_cache="${SWIFT_MODULE_CACHE:-/tmp/swift-module-cache}"
 
   passthrough_args=()
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --foreground|--no-detach)
+  for arg in "$@"; do
+    case "$arg" in
+      --foreground)
         launch_detached=0
         ;;
-      --detach)
-        launch_detached=1
-        ;;
       --extra)
+        # The binary needs it too: it runs its own resident check before booting a GUI.
         allow_extra=1
-        ;;
-      --precompile)
-        do_precompile=1
+        passthrough_args+=("$arg")
         ;;
       *)
-        passthrough_args+=("$1")
+        passthrough_args+=("$arg")
         ;;
     esac
-    shift
   done
-  set -- "${passthrough_args[@]}"
 
-  # Preset keyword → GIF path resolution lives in Swift (CoAwarenessApp.init), and the
-  # preset profiles + default preset now live in gifs/presets.json, so the launcher forwards the
-  # positional arg unchanged and only intercepts its own --help.
-  if [[ $# -gt 0 ]]; then
-    case "$1" in
-      -h|--help)
-        print_help
-        exit 0
-        ;;
-    esac
-  fi
-
-  local swift_src="$script_dir/CoAwareness.swift"
-  local swift_bin="$script_dir/CoAwareness"
-
-  # --precompile: build and stop. This is the app's half of a self-update — `git pull` moves the
-  # source, and the compile that makes it runnable has to happen *before* the app quits, or the user
-  # watches an empty menu bar for as long as swiftc takes (measured 6.5s warm, 32s on a cold clang
-  # module cache, 132s once under load). Deliberately ahead of the singleton guard: its whole purpose
-  # is to run while an instance is live, which is what the temp+rename in compile_if_stale is for.
-  if (( do_precompile )); then
-    if compile_if_stale "$swift_src" "$swift_bin"; then
-      exit 0
-    fi
-    print -u2 "$APP_CMD_NAME: swiftc failed; the next launch compiles on demand or falls back to interpreted swift."
-    exit 1
-  fi
-
-  # Enforce singleton unless --extra is specified. Ahead of the compile, so a duplicate launch costs
-  # a pgrep rather than a full swiftc run — and, when the source is stale, so it can't start a second
-  # build racing the one whose gap it wandered into.
+  # The singleton guard, ahead of the compile, so a second `start` costs a pgrep rather than a full
+  # swiftc run — and, when the source is stale, so it can't start a second build racing the one
+  # whose gap it wandered into.
   if (( ! allow_extra )); then
-    # Match the compiled binary by its path — `/CoAwareness` followed by a space
-    # (it has args) or end-of-line (env-var mode, no positional). Args no longer carry a
-    # `.gif` path now that Swift resolves preset keywords, so the old `.*\.gif` pattern
-    # would miss keyword launches. The trailing `( |$)` keeps this from matching an editor
-    # holding `CoAwareness.swift` open, or a `swiftc`/`swift` build of the source.
-    # (The interpreted `swift …/CoAwareness.swift` fallback, used only when swiftc
-    # fails, is intentionally not singleton-guarded.) pgrep -f excludes its own process;
-    # the lowercase launcher path `co-awareness` never matches this pattern.
+    # Match the compiled binary by its path — `/CoAwareness` followed by a space (it has args) or
+    # end-of-line (no args). The trailing `( |$)` keeps this from matching an editor holding
+    # `CoAwareness.swift` open, or a `swiftc`/`swift` build of the source. (The interpreted
+    # `swift …/CoAwareness.swift` fallback, used only when swiftc fails, is intentionally not
+    # singleton-guarded.) pgrep -f excludes its own process; the lowercase launcher path
+    # `co-awareness` never matches this pattern.
     #
-    # `-U "$(id -u)"` scopes the search to the calling user: plain `pgrep -f` sees every
-    # user's processes, so with fast user switching this refused user B's *first* launch by
-    # naming a PID in user A's session — one B can't see, click, or kill. The guard means
-    # "don't stack instances in *my* menu bar", and the menu bar is per-session.
-    local existing_pids
+    # `-U "$(id -u)"` scopes the search to the calling user: plain `pgrep -f` sees every user's
+    # processes, so with fast user switching this refused user B's *first* launch by naming a PID in
+    # user A's session — one B can't see, click, or kill. The guard means "don't stack instances in
+    # *my* menu bar", and the menu bar is per-session.
     existing_pids=($(pgrep -U "$(id -u)" -f "/CoAwareness( |$)" || true))
     if [[ ${#existing_pids[@]} -gt 0 ]]; then
-      print -u2 "$APP_CMD_NAME: An instance of CoAwareness is already running (PID: ${existing_pids[*]})."
-      print -u2 "Use --extra to launch multiple instances."
-      exit 1
+      # `start` is idempotent: with an instance up, the settings go to it instead of a second one.
+      # No compile on this path — the resident process is the previous build, and the binary on disk
+      # was built from it. --foreground has no live meaning, so it is refused rather than dropped.
+      if (( ! launch_detached )); then
+        print -u2 "$APP_CMD_NAME: --foreground only takes effect when an instance starts, and one is running (PID: ${existing_pids[*]}). Quit it first, or pass --extra for a second instance. Nothing was changed."
+        exit 1
+      fi
+      if [[ ! -x "$swift_bin" ]]; then
+        print -u2 "$APP_CMD_NAME: an instance is running but there is no binary to reach it with; build one with \`$APP_CMD_NAME build\`."
+        exit 2
+      fi
+      # Run as a child, not exec'd: exit 3 means the instance pgrep saw is gone by the time the binary
+      # looked, and the launch below is then the right answer rather than a GUI attached to this shell.
+      rc=0
+      CO_AWARENESS_BIN_NAME="$APP_CMD_NAME" CO_AWARENESS_FORWARD_ONLY=1 \
+        "$swift_bin" start "${passthrough_args[@]}" || rc=$?
+      if (( rc != 3 )); then
+        exit $rc
+      fi
     fi
   fi
 
   if compile_if_stale "$swift_src" "$swift_bin"; then
-    swift_cmd=("$swift_bin" "$@")
+    swift_cmd=("$swift_bin" "${passthrough_args[@]}")
   else
     mkdir -p -- "$swift_module_cache"
-    swift_cmd=(swift -strict-concurrency=complete -module-cache-path "$swift_module_cache" "$swift_src" "$@")
+    swift_cmd=(swift -strict-concurrency=complete -module-cache-path "$swift_module_cache" "$swift_src" "${passthrough_args[@]}")
   fi
 
   # CO_AWARENESS_LAUNCHER / _LAUNCH_MODE are how the app answers "can I restart myself, and
@@ -288,8 +239,8 @@ main() {
   # launcher once I've exited"; `attached` means the caller is waiting on us, so the app offers a
   # restart only when launchd is the caller — asked via `launchctl list`, NOT sniffed from
   # XPC_SERVICE_NAME, which a LaunchAgent job reports as "0" — and never steals a --foreground run
-  # out from under the shell that started it. LAUNCHER is also what the app runs `--precompile`
-  # through, so the swiftc invocation lives in this file only.
+  # out from under the shell that started it. LAUNCHER is also what the app runs `build` through, so
+  # the swiftc invocation lives in this file only.
   if (( launch_detached )); then
     log_file="${CO_AWARENESS_LOG_FILE:-/tmp/co-awareness.log}"
     mkdir -p -- "$(dirname -- "$log_file")"
@@ -299,7 +250,9 @@ main() {
       nohup "${swift_cmd[@]}" >>"$log_file" 2>&1 < /dev/null &
     pid=$!
     disown "$pid" 2>/dev/null || true
-    print -- "$APP_CMD_NAME: started in background (pid=$pid, log=$log_file)"
+    log_json="${log_file//\\/\\\\}"
+    log_json="${log_json//\"/\\\"}"
+    print -r -- "{\"action\":\"started\",\"pid\":$pid,\"log\":\"$log_json\"}"
     exit 0
   fi
 

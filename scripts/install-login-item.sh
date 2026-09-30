@@ -5,9 +5,9 @@
 # footprint is one plist in ~/Library/LaunchAgents/, fully reversed by
 # scripts/uninstall-login-item.sh.
 #
-# Any extra args are baked into the login item (preset keyword, --load-source, etc.):
+# Any extra args are baked into the login item (--preset, --load-source, etc.):
 #   ./scripts/install-login-item.sh
-#   ./scripts/install-login-item.sh dog-black --load-source memory
+#   ./scripts/install-login-item.sh --preset dog-black --load-source memory
 #   ./scripts/install-login-item.sh --keep-awake 4h        # arm Keep Awake at every login
 set -euo pipefail
 
@@ -30,20 +30,20 @@ LAUNCHER="$REPO_DIR/co-awareness"
 [ -x "$LAUNCHER" ] || { echo "error: launcher not found or not executable: $LAUNCHER" >&2; exit 1; }
 
 # Best-effort pre-build so login start doesn't depend on swiftc being on launchd's PATH. Through the
-# launcher's --precompile, which owns the build command — and which renames the new binary into place
+# launcher's `build`, which owns the build command — and which renames the new binary into place
 # rather than writing over it, so a reinstall while an instance is running can't corrupt the process
 # that is paging out of it.
 if command -v swiftc >/dev/null 2>&1; then
   echo "Pre-building binary…"
-  "$LAUNCHER" --precompile \
+  "$LAUNCHER" build \
     || echo "warn: pre-build failed; login start will fall back to on-demand compile" >&2
 fi
 
-# ProgramArguments: launcher, then --no-detach so launchd supervises the real process
+# ProgramArguments: launcher, `start --foreground` so launchd supervises the real process
 # (the launcher's default detach-and-exit would look like the job finished), then passthrough args.
 xml_escape(){ local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
 prog=""
-for a in "$LAUNCHER" "--no-detach" "$@"; do
+for a in "$LAUNCHER" "start" "--foreground" "$@"; do
   prog+="    <string>$(xml_escape "$a")</string>"$'\n'
 done
 
@@ -87,6 +87,6 @@ launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || true   # start now, no lo
 
 echo "Installed login item: $LABEL"
 echo "  plist:   $PLIST"
-echo "  command: $LAUNCHER --no-detach $*"
+echo "  command: $LAUNCHER start --foreground $*"
 echo "  log:     $LOG"
 echo "Uninstall: $SCRIPT_DIR/uninstall-login-item.sh"

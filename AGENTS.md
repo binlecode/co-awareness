@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 开工前必须明确以下六条硬底线，**违反会导致进程崩溃、构建并发冲突或破坏核心设计哲学**：
 
 - 🔴 **单文件无包架构（Unbundled Swift）**：所有业务逻辑集中于 `CoAwareness.swift`，零外部包依赖，由 `swiftc -O -strict-concurrency=complete` 编译；绝不引入 Xcode 项目、SwiftPM (`Package.swift`)、CocoaPods 或外部第三方库。类均标注 `@MainActor`，构建必须保持零警告。
-- 🔴 **原子重命名编译（Atomic Rename）**：启动脚本 `--precompile` 必须先编译到临时路径再通过 `mv`（`rename(2)`）原子替换目标二进制；严禁在运行中原地覆盖 Mach-O 二进制文件，否则破坏正在运行进程的内存分页导致当场崩溃。
+- 🔴 **原子重命名编译（Atomic Rename）**：启动脚本 `build` 必须先编译到临时路径再通过 `mv`（`rename(2)`）原子替换目标二进制；严禁在运行中原地覆盖 Mach-O 二进制文件，否则破坏正在运行进程的内存分页导致当场崩溃。
 - 🔴 **单例守卫必须前置于编译（Singleton Guard Before Compile）**：启动器中的 `pgrep -U "$(id -u)"` 检查必须严格在 `compile_if_stale` 之前执行，防止多个并发启动请求同时触发 `swiftc` 写入同一目标路径。
 - 🔴 **零 Mock 真实驱动测试（Zero Mocks / Real Binary Assertions）**：`tests/qa.sh` 是唯一测试套件，必须驱动真实二进制检验真实副作用；严禁在测试中复制业务代码类型；只允许使用无侵入可观测性环境变量（`EXIT_AFTER`, `LOG_*`, `FORCE_BATTERY`, `FORCE_UNAVAILABLE`, `FORCE_THERMAL`, `STATE_FILE`），严禁引入改变业务决策逻辑的 hook。
 - 🔴 **无特权只读遥测与纯用户态（Unprivileged & Read-Only）**：遥测仅限公开或无特权的 Mach / IOKit / SMC 接口，严禁请求 root，严禁通过 `pmset disablesleep` 修改系统全局 NVRAM 电源策略；Keep Awake 仅通过绑定自身 PID 的 `caffeinate -di -w <pid>` 实现，保证进程异常退出时内核自动回收。
@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 
 **co-awareness** —— 原生 macOS 状态栏动态负载可视化与轻量级诊断监控套件（Swift + AppKit）。
 
-- **单文件 + 原生启动脚本**：`CoAwareness.swift` (~6.6k 行) + 原生 zsh 启动脚本 `co-awareness`，无需 Xcode / SwiftPM，直截了当。
+- **单文件 + 原生启动脚本**：`CoAwareness.swift` (~8.3k 行) + 原生 zsh 启动脚本 `co-awareness`，无需 Xcode / SwiftPM，直截了当。
 - **动态帧率自适应**：10 种无特权硬件遥测源（CPU、内存+Swap、DRAM 总线带宽、GPU、网络、磁盘、风扇、电池放电电流、芯片结温、神经引擎功耗）驱动状态栏 GIF 变速播放。
 - **平滑归一化与自限流**：移植自 `btop` 的 `ThroughputScaler` 自适应非对称迟滞缩放无界速率；高热/低电量/内存压力下自动减半自身帧率；全遮挡（刘海/隐藏/灭屏）0% CPU 暂停；支持系统 Reduce Motion（启用时读数自动交接给标签栏）。
 - **进程生命周期防休眠**：内置基于 `caffeinate -di -w <pid>` 的 Keep Awake 与 `IOPMCopyAssertionsByProcess` 外部断言嗅探器。
@@ -73,7 +73,7 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
   - 子系统规约节内直接用结构化表格界定所有权与负向边界（`Module / Boundary | Owns | Not its business`），记录在案的 NO、底层物理/内核机理与重开触发器由各子系统就地声明闭环。
   - **严禁设立脱离业务模块的「拒绝提案总表/公墓」**：同文档内一个边界只声明一次，杜绝在子系统写过之后又在文末附录全文复述，保持高信息密度。
   - **语言技术化去噪**：剔除口语化吐槽、情绪化辞藻与历史包袱，通篇保持客观、严密、高信息密度的系统工程语言。
-  - **严禁将路标跟踪编号（`R<n>`）引入架构正本**：`R<n>` 纯粹是 `docs/ROADMAP.md` 与进行中计划书 `docs/PLAN-*.md` 的过程工单代号。`docs/ARCHITECTURE.md` 是面向工程师的现行架构正本，所有子系统、标题、规约与负向总表一律使用正式技术名（如 `--once` 快照、P/E 簇拆分、进程绑定睡眠），严禁在标题或正文中保留 `(R24)`、`(R27)` 等过期路标编号，杜绝误导读者。
+  - **严禁将路标跟踪编号（`R<n>`）引入架构正本**：`R<n>` 纯粹是 `docs/ROADMAP.md` 与进行中计划书 `docs/PLAN-*.md` 的过程工单代号。`docs/ARCHITECTURE.md` 是面向工程师的现行架构正本，所有子系统、标题、规约与负向总表一律使用正式技术名（如 `snapshot` 快照、P/E 簇拆分、进程绑定睡眠），严禁在标题或正文中保留 `(R24)`、`(R27)` 等过期路标编号，杜绝误导读者。
 
 🔴 **一份设计文档（`PLAN-` / `ARCHITECTURE.md` 的子系统节）先答清四件事，顺序就是这个顺序**：
 
@@ -93,16 +93,18 @@ This file provides guidance to Claude Code (claude.ai/code) and all coding agent
 ## 常用命令
 
 ```bash
-# 启动与运行
-./co-awareness                       # 默认预设 (horse-white)，后台脱离终端运行
-./co-awareness --foreground           # 前台运行（查看 stderr / print 输出）
-./co-awareness dog-black --display value   # 指定预设 + 状态栏数值读数
+# 启动与运行（首参是动词，缺省即 start；start 幂等：已有实例则把设置转发给它）
+./co-awareness                       # start：已保存设置或默认预设，后台脱离终端运行
+./co-awareness --foreground           # 前台运行（查看 stderr / print 输出）；已有实例时报错
+./co-awareness --preset dog-black --display value   # 指定预设 + 状态栏数值读数（运行中即热切换）
 ./co-awareness --load-source bandwidth    # 以 DRAM 总线带宽 (GB/s) 驱动动画
-./co-awareness --once                 # 单行 JSON 快照（九路读数，物理单位），随即退出；无 GUI / 无 state.json / 无编译
-./co-awareness --help
+./co-awareness snapshot               # 单行 JSON 快照（物理单位），随即退出；无 GUI / 无 state.json / 无编译
+./co-awareness status                 # 单行 JSON：是否有常驻实例、Keep Awake 状态
+./co-awareness presets                # 单行 JSON：内置预设（取自 gifs/presets.json）
+./co-awareness --help                 # 唯一 help 由二进制生成，不列预设
 
 # 编译与无启动检查
-./co-awareness --precompile           # 仅当源码较新时原子编译，不启动（保持运行实例不损坏）
+./co-awareness build                  # 仅当源码较新时原子编译，不启动（保持运行实例不损坏）
 swiftc -O -strict-concurrency=complete CoAwareness.swift -o tmp/coaware-check  # 快速编译检查
 
 # 自动化测试与调试钩子（均无需 TCC / 辅助功能权限）
@@ -122,7 +124,7 @@ tests/qa.sh                                 # 全量回归测试（需要活跃 
 tests/qa.sh --launcher                       # 包含启动器单例与原子替换破坏性测试（会 pkill 实例）
 
 # 开机自启 LaunchAgent（基于 scripts/ 已有脚本，勿手写 plist）
-./scripts/install-login-item.sh [preset] [flags]   # 安装并启动用户 LaunchAgent
+./scripts/install-login-item.sh [flags]            # 安装并启动用户 LaunchAgent（如 --preset dog-black）
 ./scripts/uninstall-login-item.sh                  # 卸载 LaunchAgent
 
 # 进程清理
@@ -133,19 +135,20 @@ pkill -f 'CoAwareness'                 # 停止当前用户正在运行的实例
 
 ## 架构要点（正本见 docs/ARCHITECTURE.md）
 
-- **遥测核心与单发快照** (`docs/ARCHITECTURE.md` §4.7)：全部读数由 `TelemetryCore` 统一持有，GUI 与 `--once` 两条入口路径共用同一套 reader，互不定义；`--once` 只输出一份 schema（缺读数即缺键），且必须是唯一参数。
+- **动词优先 CLI 与幂等 start** (`docs/ARCHITECTURE.md` §2, §8.4, §11.2)：首参只放动词（`start`·`status`·`snapshot`·`presets`·`build`），设置一律具名旗标；`start` 有常驻实例时校验后经 `intents/` 逐请求落盘 + `SIGUSR1` 转发，只启动时生效的旗标一律报错；help 只有一份、由二进制生成。启动器的 `legacy_argv` 是旧版本自发 argv 的临时桥，删除跟踪在 ROADMAP。
+- **遥测核心与单发快照** (`docs/ARCHITECTURE.md` §4.7)：全部读数由 `TelemetryCore` 统一持有，GUI 与 `snapshot` 两条入口路径共用同一套 reader，互不定义；`snapshot` 只输出一份 schema（缺读数即缺键），且不接受任何参数。
 - **10 种无特权硬件遥测源** (`docs/ARCHITECTURE.md` §4)：CPU (Mach，含 P/E 簇拆分，簇归属取自 IODeviceTree `cluster-type`，严禁按 `hw.perflevel` 序号切片)、Memory + Swap (Mach `vm_statistics64`)、DRAM 带宽 (`IOReport` "PMP"/"DCS BW" 的 `AMCC…RD+WR` 残留直方图，按桶**中点**加权求均，正本见 §4.8)、GPU (IOAccelerator，含 Renderer/Tiler 拆分)、Network/Disk (IOKit 计数器增量)、Fan RPM (SMC)、Battery mA (IOKit PS)、Max Die Temp (SMC 二分查找 `Tp**`/`Tpx*` 传感器集群最大值)、ANE Watts (`IOReport` "Energy Model" 订阅式增量采样)。`IOReport` 是唯一的私有 API，由 `IOReportClient` 单点 `dlopen`/`dlsym` 绑定、各 reader 各自窄订阅（正本见 §4.5）。每种源均具备 `isAvailable` 探测，不可用时平滑降级。
 - **ThroughputScaler 速率归一化** (`docs/ARCHITECTURE.md` §4.2)：无界速率（网速/磁盘/swap/电池电流）经自适应滑动窗口归一化到 0..1，双向非对称裕量 + 迟滞计数器防抖；有界百分比与绝对温度映射不走 Scaler。
 - **CADisplayLink 与自限流** (`docs/ARCHITECTURE.md` §3, §5)：屏幕刷新率同步的 vsync 游戏循环；全遮挡（刘海/隐藏/灭屏）时完全暂停渲染（0% CPU）；高热/低电量/内存压力下自动减半自身帧率；支持系统 Reduce Motion（启用时读数自动交接给标签栏）。
 - **Keep Awake 睡眠阻止与外部断言嗅探** (`docs/ARCHITECTURE.md` §7)：通过 `SleepPreventer` 启动 `caffeinate -di -w <pid>` 绑定进程生命周期；支持预设/自定义定时窗口（跨重启恢复）；底线 5% 电池保护；通过 `IOPMCopyAssertionsByProcess` 嗅探系统其他进程断言，两段式归因排布（This Mac vs This App）。
 - **单状态栏项极简显示架构** (`docs/ARCHITECTURE.md` §6)：状态栏在 Runner GIF (`gif`)、Trace Chart (`trace`) 与实时数值 (`value`) 间严格互斥三选一，彻底消除双槽位散射与视觉杂讯，通过预留宽度与花样空格（U+2007）严格防抖。
 - **状态持久化单点守恒** (`docs/ARCHITECTURE.md` §8.2)：`~/Library/Application Support/co-awareness/state.json` 由 `persistState()` 统一全量写盘，持久化意图（Intent）而非易失运行状态。
-- **预设注册表与自更新** (`docs/ARCHITECTURE.md` §9)：动图配置完全由 `gifs/presets.json` 驱动；自更新先 `git pull --ff-only` 再执行 `--precompile` 原子编译，最后在弹窗提示后由 detached 脚本完成重启。
+- **预设注册表与自更新** (`docs/ARCHITECTURE.md` §9)：动图配置完全由 `gifs/presets.json` 驱动；自更新先 `git pull --ff-only` 再执行 `build` 原子编译，最后在弹窗提示后由 detached 脚本完成重启。
 
 ### 添加内置预设流程
 1. 将优化裁剪好的 GIF 放入 `gifs/<name>.gif`（必须透明背景、紧凑边界）。
 2. 在 `gifs/presets.json` 的 `presets` 数组中添加配置项（指定 `key`、`menuTitle`、`file`、`speed` 范围与指数）。
-3. 运行 `./co-awareness <name>` 验证宽高比适配与各档位动画速度。
+3. 运行 `./co-awareness --preset <name>` 验证宽高比适配与各档位动画速度（`presets` 与 help 自动跟随 manifest，无需改代码）。
 4. 运行 `tests/qa.sh --core` 确认解析无误。
 
 ---

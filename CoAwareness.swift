@@ -162,7 +162,7 @@ private enum UpdateChecker {
 // measured 6.5s against a warm clang module cache, 32s cold, and 132s once under load, which is what
 // made a working restart read as a broken one.
 //
-// The build command is NOT duplicated here. The launcher owns it behind `--precompile`, so the flags
+// The build command is NOT duplicated here. The launcher owns it behind `build`, so the flags
 // cannot drift: if they did, the launcher's mtime check would just recompile at restart and this whole
 // path would silently stop buying anything. The launcher path comes from the same
 // CO_AWARENESS_LAUNCHER marker `Restarter.mode` reads — no marker means we were not started by
@@ -178,7 +178,7 @@ private enum Builder {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launcher)
-        process.arguments = ["--precompile"]
+        process.arguments = ["build"]
         let errPipe = Pipe()
         process.standardOutput = FileHandle.nullDevice
         process.standardError = errPipe
@@ -218,6 +218,44 @@ private enum Restarter {
 
     // Must match `LABEL` in scripts/install-login-item.sh — the plist that owns the login-item job.
     static let launchAgentLabel = "ai.bera.coawareness"
+
+    // Login items written before the verb-first grammar bake `launcher --no-detach [flags] <preset>
+    // [flags]` (and, from older builds still, `--label <mode>`) into the plist. The launcher's `legacy_argv` shim still reads that shape; this rewrites
+    // the plist once into `launcher start --foreground --preset <preset> …`, so the shim can be retired
+    // without costing anyone their login start. The file only, no launchctl: launchd reads the plist at
+    // the next login, and a reload now would restart the very instance doing the rewrite. Only for a
+    // plist that names the launcher this process came through, so a development checkout can never
+    // rewrite the login item of an installed copy that still speaks the old grammar.
+    static func migrateLegacyLoginItem(environment: [String: String]) {
+        guard let launcher = environment["CO_AWARENESS_LAUNCHER"], !launcher.isEmpty else { return }
+        let url = URL(fileURLWithPath: NSString(string: "~/Library/LaunchAgents/\(launchAgentLabel).plist").expandingTildeInPath)
+        guard let data = try? Data(contentsOf: url),
+              var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+              let argv = plist["ProgramArguments"] as? [String],
+              argv.count >= 2, argv[0] == launcher, argv[1] == "--no-detach" else { return }
+        // The one bareword that is not a flag's value is the preset; it becomes --preset in place. An
+        // older login item can also carry `--label`, whose values map onto --display.
+        let valueFlags: Set = ["--speed-multiplier", "--display", "--load-source", "--keep-awake",
+                               "--keep-awake-pid", "--battery-threshold", "--label"]
+        let labelToDisplay = ["value": "value", "chart": "trace", "trace": "trace", "off": "gif"]
+        var rest: [String] = []
+        var previous = ""
+        for arg in argv.dropFirst(2) {
+            if previous == "--label" {
+                rest += ["--display", labelToDisplay[arg.lowercased()] ?? "gif"]
+            } else if arg == "--label" {
+                // Emitted together with its value on the next pass.
+            } else {
+                if !arg.hasPrefix("-"), !valueFlags.contains(previous) { rest.append("--preset") }
+                rest.append(arg)
+            }
+            previous = arg
+        }
+        plist["ProgramArguments"] = [launcher, "start", "--foreground"] + rest
+        guard let out = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0),
+              (try? out.write(to: url, options: .atomic)) != nil else { return }
+        fputs("Login item rewritten to the start/--preset form: \(url.path)\n", stderr)
+    }
 
     // Pure so the mapping is testable without a launchd job or a real launcher (tests/restart.swift);
     // the one impure question ("am I the agent's process?") is answered by the caller and passed in.
@@ -270,7 +308,7 @@ private enum Restarter {
         case .launchAgent:
             return ["/bin/launchctl", "kickstart", "gui/\(uid)/\(launchAgentLabel)"]
         case .launcher(let path):
-            return [path] + appArguments
+            return [path, "start"] + appArguments
         case .unsupported:
             return nil
         }
@@ -294,7 +332,7 @@ private enum Restarter {
         keepAwakeBoundPID: pid_t?
     ) -> [String] {
         var args: [String] = []
-        if !presetOrPath.isEmpty { args.append(presetOrPath) }
+        if !presetOrPath.isEmpty { args += ["--preset", presetOrPath] }
         args += ["--load-source", loadSourceKey]
         args += ["--display", displayArgument]
         args += ["--battery-threshold", batteryThresholdPercent <= 0 ? "off" : String(batteryThresholdPercent)]
@@ -372,7 +410,7 @@ private enum Tuning {
 
     static let cpuSmoothingAlpha: Double = 0.2
     static let loadSampleInterval: TimeInterval = 2.0
-    // Delta window between the two samples the `--once` snapshot takes. The rate readers (network,
+    // Delta window between the two samples the `snapshot` takes. The rate readers (network,
     // disk, swap, battery current, ANE) are counter deltas and have no value at a single instant, so
     // a snapshot has to span one. Long enough for a counter to move on an idle machine, short enough
     // that a script can call this between other work — it is what the snapshot's whole latency is.
@@ -1066,6 +1104,29 @@ private enum ProcessProbe {
     // guard: the menu bar is per-session, and another user's pid is one this user can't see or kill.
     // Both the full name and p_comm are matched, so a name typed as the truncated form still lands.
     static func newestMatch(_ needle: String) -> (pid: pid_t, name: String)? {
+        bestMatch(needle, newest: true)
+    }
+
+    // The same search with the opposite tie-break, for the forward target of `start`: the menu-bar
+    // instance has been up since before any transient process of the same binary (a concurrent
+    // `status`, `snapshot`, or another `start` about to forward), so oldest is the resident one.
+    static func oldestMatch(_ needle: String) -> (pid: pid_t, name: String)? {
+        bestMatch(needle, newest: false)
+    }
+
+    // When `pid` started, from its kinfo_proc; nil if it is gone. Lets a pending intent be dated
+    // against the process it was sent to, so one left behind by an instance that has since exited is
+    // recognizably stale rather than applied to its successor.
+    static func startTime(of pid: pid_t) -> Date? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let started = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(started.tv_sec) + TimeInterval(started.tv_usec) / 1_000_000)
+    }
+
+    private static func bestMatch(_ needle: String, newest: Bool) -> (pid: pid_t, name: String)? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_UID, Int32(bitPattern: getuid())]
         var size = 0
         guard sysctl(&mib, UInt32(mib.count), nil, &size, nil, 0) == 0, size > 0 else { return nil }
@@ -1089,9 +1150,10 @@ private enum ProcessProbe {
             guard full.range(of: needle, options: .caseInsensitive) != nil
                     || short.range(of: needle, options: .caseInsensitive) != nil else { continue }
             let started = entry.kp_proc.p_starttime
-            if let best,
-               (best.started.tv_sec, best.started.tv_usec) >= (started.tv_sec, started.tv_usec) {
-                continue
+            if let best {
+                let kept = (best.started.tv_sec, best.started.tv_usec)
+                let candidate = (started.tv_sec, started.tv_usec)
+                if newest ? kept >= candidate : kept <= candidate { continue }
             }
             best = (pid, full, started)
         }
@@ -1247,18 +1309,23 @@ private struct Config {
     enum ParseResult {
         case config(Config)
         case help
-        // `--once`: print one JSON line of telemetry and exit. Carries no Config, because there is
+        // `snapshot`: print one JSON line of telemetry and exit. Carries no Config, because there is
         // nothing to configure — no GIF, no label, no Keep Awake, no window.
         case snapshot
-        // `--status`: print one JSON line about the resident instance and its sleep hold, and exit.
+        // `status`: print one JSON line about the resident instance and its sleep hold, and exit.
         // Carries no Config for the same reason, and reads rather than starts anything.
         case status
+        // `presets`: print the built-in preset registry as one JSON line and exit.
+        case presets
+        // `start` with an instance already resident: the validated request goes to that pid.
+        case forward(StateStore.RuntimeIntent, pid_t)
+        // The launcher's forward-only run found nobody left to forward to (private exit 3).
+        case residentGone
     }
 
-    // A built-in preset keyword (e.g. "horse-white") or an absolute/tilde GIF path. Empty means
-    // "no arg given" → the app falls back to the manifest's defaultPreset.
-    // Keyword→path resolution happens in CoAwarenessApp.init against `allPresets`,
-    // so the shell launcher forwards this arg unchanged.
+    // `--preset`: a built-in preset keyword (e.g. "horse-white") or an absolute/tilde GIF path. Empty
+    // means "not given" → the saved preset, else the manifest's defaultPreset.
+    // Keyword→path resolution happens in CoAwarenessApp.init against `allPresets`.
     let presetOrPath: String
     let speedMultiplierOverride: Double?
     // Which representation appears in the menu bar: .gif (default), .trace (chart), or .value (reading).
@@ -1279,9 +1346,8 @@ private struct Config {
     // toggleable from the menu regardless.
     let showAllSources: Bool
     // Keep Awake at launch, from --keep-awake / CO_AWARENESS_KEEP_AWAKE. nil = not requested
-    // (the persisted window, if any, is restored instead). This is LAUNCH-time arming only: the
-    // launcher's singleton refuses a second invocation, so it can't arm an instance that's already
-    // running — that would need IPC, which a bundle-less binary doesn't have.
+    // (the persisted window, if any, is restored instead). Launch-time arming only; arming an
+    // instance that is already running goes through IntentForwarder instead.
     let keepAwake: KeepAwakeLaunchOption?
     // Keep Awake's battery release point, from --battery-threshold /
     // CO_AWARENESS_BATTERY_THRESHOLD, as a charge FRACTION (0.20), already clamped. nil = neither
@@ -1319,227 +1385,192 @@ private struct Config {
             ? "off" : "\(Int((fraction * Tuning.percentScale).rounded()))%"
     }
 
-    private static func handleSetCommand(_ args: [String]) {
-        let ownName = ProcessProbe.name(of: getpid())
-            ?? URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
-        guard let instance = ProcessProbe.newestMatch(ownName) else {
-            fputs("co-awareness: No running instance of CoAwareness found to set. Launch one first or run without 'set'.\n", stderr)
-            exit(1)
-        }
+    // Spellings the verb-first grammar does not accept, each refused with the replacement it names
+    // (exit 1). Refused rather than translated: the launcher's `legacy_argv` shim is the one temporary
+    // bridge, and only for the argv older builds of this app emit on their own (a restart, a login
+    // item, a precompile). Nothing else gets a second spelling.
+    private static let retiredSpellings: [String: String] = [
+        "set": "`set` is `start`: pass the same flags to `start` (or on their own) and a running instance is updated in place",
+        "--set": "`--set` is `start`: pass the same flags to `start` (or on their own) and a running instance is updated in place",
+        "--once": "`--once` is the `snapshot` command",
+        "--status": "`--status` is the `status` command",
+        "--precompile": "`--precompile` is the `build` command",
+        "--label": "`--label` is not accepted; use --display <gif|trace|value>",
+        "--no-detach": "`--no-detach` is `--foreground`",
+        "--detach": "`--detach` is not accepted; detached is the default",
+    ]
+    private static let retiredEnvironment: [String: String] = [
+        "CO_AWARENESS_PATH": "CO_AWARENESS_PATH is CO_AWARENESS_PRESET",
+        "CO_AWARENESS_LABEL": "CO_AWARENESS_LABEL is not read; use CO_AWARENESS_DISPLAY",
+    ]
 
-        var intent = StateStore.RuntimeIntent()
-        var iterator = args.makeIterator()
-        while let arg = iterator.next() {
-            switch arg {
-            case "--display":
-                guard let val = iterator.next() else {
-                    fputs("co-awareness set: --display requires a value\n", stderr)
-                    exit(1)
-                }
-                intent.displayMode = val
-            case "--load-source":
-                guard let val = iterator.next() else {
-                    fputs("co-awareness set: --load-source requires a value\n", stderr)
-                    exit(1)
-                }
-                intent.loadSource = val
-            case "--keep-awake":
-                guard let val = iterator.next() else {
-                    fputs("co-awareness set: --keep-awake requires a value\n", stderr)
-                    exit(1)
-                }
-                intent.keepAwake = val
-            case "--keep-awake-pid":
-                guard let val = iterator.next(), let pid = Int32(val) else {
-                    fputs("co-awareness set: --keep-awake-pid requires an integer pid\n", stderr)
-                    exit(1)
-                }
-                intent.keepAwakePID = pid
-            case "--battery-threshold":
-                guard let val = iterator.next(), let pct = Config.parseBatteryThreshold(val) else {
-                    fputs("co-awareness set: invalid value for --battery-threshold\n", stderr)
-                    exit(1)
-                }
-                intent.batteryThreshold = pct
-            default:
-                if !arg.hasPrefix("-") {
-                    intent.preset = arg
-                } else {
-                    fputs("co-awareness set: unknown flag \"\(arg)\"\n", stderr)
-                    exit(1)
-                }
-            }
-        }
-        intent.timestamp = ProcessInfo.processInfo.systemUptime
-
-        guard let url = StateStore.intentFileURL else {
-            fputs("co-awareness: Could not resolve intent file URL.\n", stderr)
-            exit(1)
-        }
-        if let data = try? JSONEncoder().encode(intent) {
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: url, options: .atomic)
-            kill(pid_t(instance.pid), SIGUSR1)
-            print("{\"ok\":true,\"target_pid\":\(instance.pid),\"action\":\"intent_forwarded\"}")
-            exit(0)
-        } else {
-            fputs("co-awareness: Failed to encode intent.\n", stderr)
-            exit(1)
-        }
+    // The first argument. Omitted, or a flag, means `start`. `build` is the launcher's — it compiles
+    // the source this binary was built from — and is named here only to refuse it with a pointer.
+    enum Verb: String {
+        case start, status, snapshot, presets, build
     }
 
     static func parse() -> ParseResult? {
-        let args = CommandLine.arguments.dropFirst()
+        var args = Array(CommandLine.arguments.dropFirst())
 
-        if let first = args.first, first == "set" || first == "--set" {
-            let setArgs = Array(args.dropFirst())
-            handleSetCommand(setArgs)
+        if args.contains("--help") || args.contains("-h") {
+            printUsage()
+            return .help
+        }
+        // A retired verb only counts in the verb slot; a retired flag counts anywhere a flag can stand.
+        for (index, arg) in args.enumerated() {
+            guard let hint = retiredSpellings[arg], index == 0 || arg.hasPrefix("-") else { continue }
+            fputs("co-awareness: \(hint). Run with --help for the full grammar.\n", stderr)
             return nil
         }
 
-        // The headless flags first, and each exclusive. Every other flag configures a GUI neither path
-        // builds, so a companion argument is a usage error rather than something to ignore — and the
-        // error goes to stderr WITHOUT the usage block, because the contract is that stdout carries the
-        // JSON line or nothing at all. One rule for both: a second headless flag must not be able to
-        // drift into a second spelling of the same refusal.
-        let headlessModes: [(flag: String, result: ParseResult)] = [("--once", .snapshot), ("--status", .status)]
-        if let mode = headlessModes.first(where: { args.contains($0.flag) }) {
+        let verb = args.first.flatMap(Verb.init(rawValue:))
+        switch verb {
+        case .status?, .snapshot?, .presets?:
+            // The query verbs take nothing. Every other argument configures a GUI none of them builds,
+            // so a companion is a usage error rather than something to ignore — and it goes to stderr
+            // with stdout left empty, because stdout carries the JSON line or nothing at all.
             guard args.count == 1 else {
-                fputs("\(mode.flag) must be the only argument: it prints one line of JSON to stdout and exits, with no GUI to configure.\n", stderr)
+                fputs("`\(args[0])` takes no arguments: it prints one line of JSON to stdout and exits.\n", stderr)
                 return nil
             }
-            return mode.result
+            switch verb {
+            case .status?: return .status
+            case .snapshot?: return .snapshot
+            default: return .presets
+            }
+        case .build?:
+            fputs("`build` compiles the source, so it runs through the co-awareness launcher rather than the binary.\n", stderr)
+            return nil
+        case .start?:
+            args.removeFirst()
+        case nil:
+            if let first = args.first, !first.hasPrefix("-") {
+                fputs("Unknown command \"\(first)\". Commands: start, status, snapshot, presets, build. To choose a preset, pass --preset \(first).\n", stderr)
+                return nil
+            }
         }
+        return parseStart(args, environment: ProcessInfo.processInfo.environment)
+    }
 
-        var presetOrPath: String?
+    private static func parseStart(_ args: [String], environment env: [String: String]) -> ParseResult? {
+        var presetArg: String?
         var speedMultiplierOverride: Double?
         var displayArg: String?
-        var displayFlagGiven = false
-        var labelFlagGiven = false
         var loadSourceArg: String?
         var keepAwakeArg: String?
         var keepAwakePIDArg: String?
         var batteryThresholdArg: String?
         var updateCheckEnabled = true
         var showAllSources = false
+        var extraInstance = false
+        // Flags that configure a process as it starts and have no live counterpart. Given while an
+        // instance is resident they are refused, not dropped: dropping one would report "forwarded"
+        // for a request that was only half carried out.
+        var launchOnlyGiven: [String] = []
 
         var iterator = args.makeIterator()
+        func value(for flag: String, expected: String) -> String? {
+            guard let next = iterator.next() else {
+                fputs("Missing value for \(flag). Expected \(expected).\n", stderr)
+                return nil
+            }
+            return next
+        }
         while let arg = iterator.next() {
             switch arg {
-            case "--help", "-h":
-                printUsage()
-                return .help
+            case "--preset":
+                guard let raw = value(for: arg, expected: "a preset key (see `presets`) or a GIF path") else { return nil }
+                presetArg = raw
             case "--speed-multiplier":
-                guard let value = iterator.next(), let parsed = Double(value), parsed > 0 else {
-                    fputs("Invalid value for --speed-multiplier. Expected a positive number.\n", stderr)
-                    printUsage()
+                guard let raw = value(for: arg, expected: "a positive number") else { return nil }
+                guard let parsed = Double(raw), parsed > 0 else {
+                    fputs("Invalid value for --speed-multiplier \"\(raw)\". Expected a positive number.\n", stderr)
                     return nil
                 }
                 speedMultiplierOverride = parsed
+                launchOnlyGiven.append(arg)
             case "--display":
-                if labelFlagGiven {
-                    fputs("Cannot pass both --display and --label.\n", stderr)
+                guard let raw = value(for: arg, expected: "gif, trace, or value") else { return nil }
+                guard DisplayMode.parse(raw) != nil else {
+                    fputs("Invalid value for --display \"\(raw)\". Expected gif, trace, or value.\n", stderr)
                     return nil
                 }
-                displayFlagGiven = true
-                guard let value = iterator.next() else {
-                    fputs("Invalid value for --display. Expected gif, trace, or value.\n", stderr)
-                    printUsage()
-                    return nil
-                }
-                guard let parsed = DisplayMode.parse(value) else {
-                    fputs("Invalid value for --display \"\(value)\". Expected gif, trace, or value.\n", stderr)
-                    printUsage()
-                    return nil
-                }
-                displayArg = parsed.rawValue
-            case "--label":
-                if displayFlagGiven {
-                    fputs("Cannot pass both --display and --label.\n", stderr)
-                    return nil
-                }
-                labelFlagGiven = true
-                guard let value = iterator.next() else {
-                    fputs("Invalid value for --label. Expected off, value, or chart.\n", stderr)
-                    printUsage()
-                    return nil
-                }
-                fputs("Warning: --label is deprecated; use --display <gif|trace|value> instead.\n", stderr)
-                switch value.lowercased() {
-                case "value": displayArg = DisplayMode.value.rawValue
-                case "chart", "trace": displayArg = DisplayMode.trace.rawValue
-                case "off": displayArg = DisplayMode.gif.rawValue
-                default:
-                    fputs("Invalid value for --label \"\(value)\". Custom text labels have been removed; expected off, value, or chart.\n", stderr)
-                    return nil
-                }
+                displayArg = raw
             case "--load-source":
-                guard let value = iterator.next() else {
-                    fputs("Invalid value for --load-source. Expected one of: \(LoadSource.allCases.map(\.key).joined(separator: ", ")).\n", stderr)
-                    printUsage()
-                    return nil
-                }
-                loadSourceArg = value
+                guard let raw = value(for: arg, expected: "one of: \(LoadSource.allCases.map(\.key).joined(separator: ", "))") else { return nil }
+                loadSourceArg = raw
             case "--keep-awake":
-                guard let value = iterator.next() else {
-                    fputs("Invalid value for --keep-awake. Expected off, on, or a duration with a unit (e.g. 30m, 2h, 1h30m).\n", stderr)
-                    printUsage()
-                    return nil
-                }
-                keepAwakeArg = value
+                guard let raw = value(for: arg, expected: "off, on, or a duration with a unit (e.g. 30m, 2h, 1h30m)") else { return nil }
+                keepAwakeArg = raw
             case "--keep-awake-pid":
-                guard let value = iterator.next() else {
-                    fputs("Invalid value for --keep-awake-pid. Expected the pid of a running process (e.g. --keep-awake-pid $!).\n", stderr)
-                    printUsage()
-                    return nil
-                }
-                keepAwakePIDArg = value
+                guard let raw = value(for: arg, expected: "the pid of a running process (e.g. --keep-awake-pid $!)") else { return nil }
+                keepAwakePIDArg = raw
             case "--battery-threshold":
-                guard let value = iterator.next() else {
-                    fputs("Invalid value for --battery-threshold. Expected a whole percent (e.g. 20) or off.\n", stderr)
-                    printUsage()
-                    return nil
-                }
-                batteryThresholdArg = value
+                guard let raw = value(for: arg, expected: "a whole percent (e.g. 20) or off") else { return nil }
+                batteryThresholdArg = raw
             case "--no-update-check":
                 updateCheckEnabled = false
+                launchOnlyGiven.append(arg)
             case "--show-all-sources":
                 showAllSources = true
+                launchOnlyGiven.append(arg)
+            case "--extra":
+                extraInstance = true
+            case "--foreground":
+                fputs("--foreground is a launcher flag: the binary always runs attached. Launch through co-awareness to use it.\n", stderr)
+                return nil
             default:
-                if presetOrPath == nil {
-                    presetOrPath = arg
+                if arg.hasPrefix("-") {
+                    fputs("Unknown flag \(arg). Run with --help for the full grammar.\n", stderr)
                 } else {
-                    fputs("Unexpected argument: \(arg)\n", stderr)
-                    printUsage()
-                    return nil
+                    fputs("Unexpected argument \"\(arg)\". To choose a preset, pass --preset \(arg).\n", stderr)
                 }
+                return nil
             }
         }
 
-        if presetOrPath == nil {
-            presetOrPath = ProcessInfo.processInfo.environment["CO_AWARENESS_PATH"]
+        for (name, hint) in retiredEnvironment where env[name]?.isEmpty == false {
+            fputs("co-awareness: \(hint).\n", stderr)
+            return nil
         }
-
-        // No positional arg and no env override → empty, so the app resolves the manifest default.
-        let value = (presetOrPath?.isEmpty == false) ? presetOrPath! : ""
-
-        if loadSourceArg == nil {
-            loadSourceArg = ProcessInfo.processInfo.environment["CO_AWARENESS_LOAD_SOURCE"]
+        // Flag over env, for launch and forward alike, so both paths read one request. An empty env
+        // value is absent: `CO_AWARENESS_DISPLAY=` must not read as an explicit value.
+        func fromEnvironment(_ current: String?, _ name: String) -> String? {
+            if let current { return current }
+            guard let raw = env[name], !raw.isEmpty else { return nil }
+            return raw
         }
+        presetArg = fromEnvironment(presetArg, "CO_AWARENESS_PRESET")
+        displayArg = fromEnvironment(displayArg, "CO_AWARENESS_DISPLAY")
+        loadSourceArg = fromEnvironment(loadSourceArg, "CO_AWARENESS_LOAD_SOURCE")
+        keepAwakeArg = fromEnvironment(keepAwakeArg, "CO_AWARENESS_KEEP_AWAKE")
+        keepAwakePIDArg = fromEnvironment(keepAwakePIDArg, "CO_AWARENESS_KEEP_AWAKE_PID")
+        batteryThresholdArg = fromEnvironment(batteryThresholdArg, "CO_AWARENESS_BATTERY_THRESHOLD")
 
-        if displayArg == nil {
-            displayArg = ProcessInfo.processInfo.environment["CO_AWARENESS_DISPLAY"]
-        }
-        if displayArg == nil, let legacy = ProcessInfo.processInfo.environment["CO_AWARENESS_LABEL"], !legacy.isEmpty {
-            fputs("Warning: CO_AWARENESS_LABEL is deprecated; use CO_AWARENESS_DISPLAY instead.\n", stderr)
-            switch legacy.lowercased() {
-            case "value": displayArg = DisplayMode.value.rawValue
-            case "chart", "trace": displayArg = DisplayMode.trace.rawValue
-            default: displayArg = DisplayMode.gif.rawValue
+        // `start` is idempotent: with an instance of this binary already resident, the request becomes
+        // a change to that instance rather than a second menu-bar item. `--extra` is the one way to ask
+        // for a second instance anyway, and it skips the question.
+        if !extraInstance, let resident = IntentForwarder.residentInstance() {
+            guard launchOnlyGiven.isEmpty else {
+                fputs("co-awareness: \(launchOnlyGiven.joined(separator: ", ")) \(launchOnlyGiven.count == 1 ? "takes" : "take") effect only when an instance starts, and one is running (pid \(resident)). Quit it first, or pass --extra for a second instance. Nothing was changed.\n", stderr)
+                return nil
             }
+            guard let intent = IntentForwarder.intent(
+                preset: presetArg, display: displayArg, loadSource: loadSourceArg,
+                keepAwake: keepAwakeArg, keepAwakePID: keepAwakePIDArg, batteryThreshold: batteryThresholdArg
+            ) else { return nil }
+            return .forward(intent, resident)
         }
+        // The launcher saw an instance and asked this binary for the forward only; it has gone since.
+        // Say so with the private status, and let the launcher take the start path it skipped rather
+        // than booting a GUI attached to the caller's shell.
+        if env["CO_AWARENESS_FORWARD_ONLY"] == "1" { return .residentGone }
+
+        // From here on: a launch. Every value degrades rather than fails — this request can be baked
+        // into a login item, and a bad value there must never cost the user the menu-bar app.
         var displayMode: DisplayMode?
-        if let raw = displayArg, !raw.isEmpty {
+        if let raw = displayArg {
             if let parsed = DisplayMode.parse(raw) {
                 displayMode = parsed
             } else {
@@ -1547,25 +1578,10 @@ private struct Config {
                 displayMode = .gif
             }
         }
-        // Unknown/absent → .cpu (today's behavior). Never a launch failure, per spec.
-        var loadSource = LoadSource.from(key: loadSourceArg) ?? .cpu
-        if let requested = loadSourceArg, LoadSource.from(key: requested) == nil, !requested.isEmpty {
+        // Unknown → .cpu. A real key this Mac cannot read is resolved later, against the readers.
+        let loadSource = LoadSource.from(key: loadSourceArg) ?? .cpu
+        if let requested = loadSourceArg, LoadSource.from(key: requested) == nil {
             fputs("Unknown --load-source \"\(requested)\"; falling back to cpu. Known: \(LoadSource.allCases.map(\.key).joined(separator: ", ")).\n", stderr)
-        }
-
-        // Forgiveness: a load-source keyword (cpu/memory/gpu/network/disk) typed in the POSITIONAL
-        // (preset) slot is a common mix-up with --load-source — and would otherwise be treated as a
-        // GIF path and fail to launch with a fatal error box. Interpret it as the load source and let
-        // the default preset stand in. An explicit --load-source always wins.
-        var positional = value
-        if let src = LoadSource.from(key: positional) {
-            if loadSourceArg == nil || loadSourceArg?.isEmpty == true {
-                loadSource = src
-                fputs("Interpreting positional \"\(positional)\" as --load-source \(src.key); using the default preset. (Pass a preset keyword or GIF path as the positional argument.)\n", stderr)
-            } else {
-                fputs("Ignoring positional \"\(positional)\" (looks like a load source, but --load-source \(loadSource.key) was given); using the default preset.\n", stderr)
-            }
-            positional = ""
         }
 
         var exitAfterSeconds: TimeInterval?
@@ -1582,9 +1598,6 @@ private struct Config {
             updateCheckEnabled = false
         }
 
-        if keepAwakeArg == nil {
-            keepAwakeArg = ProcessInfo.processInfo.environment["CO_AWARENESS_KEEP_AWAKE"]
-        }
         // An unparseable value degrades to an explicit off with a warning, the way --load-source
         // degrades to cpu: this can be baked into a LaunchAgent, and a bad value must never cost the
         // user their menu-bar app. It still counts as "the flag was given", so it also suppresses the
@@ -1601,9 +1614,6 @@ private struct Config {
             }
         }
 
-        if keepAwakePIDArg == nil {
-            keepAwakePIDArg = ProcessInfo.processInfo.environment["CO_AWARENESS_KEEP_AWAKE_PID"]
-        }
         // Resolved AFTER --keep-awake so it can win the collision: a pid binding is the more specific
         // intent of the two, and it is the one with a stopping condition the caller can point at.
         //
@@ -1625,11 +1635,6 @@ private struct Config {
             }
         }
 
-        if batteryThresholdArg == nil {
-            batteryThresholdArg = ProcessInfo.processInfo.environment["CO_AWARENESS_BATTERY_THRESHOLD"]
-        }
-        // An empty env value counts as absent, exactly as with --label: `…BATTERY_THRESHOLD=` must not
-        // read as an explicit value and clobber the saved setting.
         var batteryThreshold: Double?
         if let raw = batteryThresholdArg?.trimmingCharacters(in: .whitespaces), !raw.isEmpty {
             if let requested = parseBatteryThreshold(raw) {
@@ -1657,7 +1662,7 @@ private struct Config {
 
         return .config(
             Config(
-                presetOrPath: NSString(string: positional).expandingTildeInPath,
+                presetOrPath: NSString(string: presetArg ?? "").expandingTildeInPath,
                 speedMultiplierOverride: speedMultiplierOverride,
                 displayMode: displayMode,
                 loadSource: loadSource,
@@ -1671,25 +1676,155 @@ private struct Config {
         )
     }
 
+    // The one help text. The launcher execs this rather than keeping a copy, and every list in it —
+    // sources, the Keep Awake cap, the threshold bounds — is read from the code, so none can drift.
+    // Presets are deliberately absent: they are data, and `presets` lists them.
     static func printUsage() {
         let envBin = ProcessInfo.processInfo.environment["CO_AWARENESS_BIN_NAME"]
         let bin = (envBin?.isEmpty == false) ? envBin! : URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
-        print("co-awareness \(AppInfo.version)")
-        print("Usage: \(bin) <preset-name|path-to-gif> [--speed-multiplier <x>] [--display <gif|trace|value>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
-        print("   or: \(bin) set [--keep-awake <dur>] [--keep-awake-pid <pid>] [--battery-threshold <pct>] [--display <gif|trace|value>] [--load-source <src>] [preset]")
-        print("   or: CO_AWARENESS_PATH=<path-to-gif> \(bin) [--speed-multiplier <x>] [--display <gif|trace|value>] [--load-source <\(LoadSource.allCases.map(\.key).joined(separator: "|"))>] [--keep-awake <off|on|duration>] [--keep-awake-pid <pid>] [--battery-threshold <pct|off>] [--show-all-sources] [--no-update-check]")
-        print("Control: set forwards runtime intent to an already running instance without restarting it.")
-        print("Load source: which reader drives animation speed (default cpu). Also via CO_AWARENESS_LOAD_SOURCE; unknown values fall back to cpu.")
-        print("Display: which representation appears in the menu bar: gif (default, animated creature), trace (compact post-modern load chart), or value (compact live telemetry reading). Also via CO_AWARENESS_DISPLAY; switchable from the menu.")
-        print("Show all sources: --show-all-sources (or CO_AWARENESS_SHOW_ALL=1) continuously samples every available reader each tick even when the menu is closed; by default, inactive readers are only sampled while the menu is open.")
-        print("Keep awake: --keep-awake <off|on|30m|2h|1h30m> arms sleep prevention at launch (a unit is required; up to \(Tuning.keepAwakeMaxHours)h). Also via CO_AWARENESS_KEEP_AWAKE. Off by default; switchable from the menu. An armed window is saved and resumed on the next launch — passing this flag (even as off) overrides what was saved.")
-        print("Keep awake bound to a process: --keep-awake-pid <pid> holds sleep prevention until that process exits — the shape that fits an unattended terminal job (`\(bin) --keep-awake-pid $!`), where a fixed window is a guess. Also via CO_AWARENESS_KEEP_AWAKE_PID. Wins over --keep-awake if both are given; a pid that is already gone warns and launches with keep-awake off. Never resumed after a reboot — pids are recycled. From the menu, Keep Awake ▸ \(MenuTitle.keepAwakeUntilProcessExits) takes a pid or a process name.")
-        print("Battery threshold: --battery-threshold <pct|off> sets the charge at or below which Keep Awake releases on battery (default \(Int(Tuning.batteryLowThresholdDefault * Tuning.percentScale))%; off never releases on charge alone). Whole percents only — 20 or 20%, not 0.20. Also via CO_AWARENESS_BATTERY_THRESHOLD. Out-of-range values are clamped to \(Int(Tuning.batteryThresholdMin * Tuning.percentScale))–\(Int(Tuning.batteryThresholdMax * Tuning.percentScale))%, and below \(Int(Tuning.batteryCriticalThreshold * Tuning.percentScale))% on battery the Mac sleeps regardless — that floor is not configurable.")
-        print("Snapshot: --once prints one line of JSON with every reading this machine answers for (physical units; an unavailable source is an absent key) and exits, with no GUI and no state file. Must be the only argument. Takes about \(Int(Tuning.snapshotWindow * Tuning.msPerSecond)) ms — the rate readers need a delta window.")
-        print("Status: --status prints one line of JSON about the process rather than the hardware — whether an instance of this binary is already resident (running, pid) and whether it is holding the Mac awake (keep_awake.active, plus remaining_s for a timed window; absent when the hold is indefinite or bound to a pid) — and exits. Read-only: no GUI, and the state file is never written. Must be the only argument. Exits 0 whether or not an instance is up; for readings use --once.")
-        print("Width: the menu-bar item sizes itself to the GIF's aspect ratio at menu-bar height — not configurable.")
-        print("Default speed: auto (preset-dependent; per-preset ranges defined in gifs/presets.json).")
-        print("Updates: on launch, checks the git origin's release tags for a newer version (network access). Apply is a menu click; disable with --no-update-check or CO_AWARENESS_UPDATE_CHECK=0.")
+        let sources = LoadSource.allCases.map(\.key).joined(separator: "|")
+        let pct = { (fraction: Double) in Int((fraction * Tuning.percentScale).rounded()) }
+        print("""
+        co-awareness \(AppInfo.version) — menu-bar load monitor. Commands print one JSON line; the menu is for people.
+
+        Usage: \(bin) [start] [settings] [launch-only]
+               \(bin) status | snapshot | presets | build
+
+        Commands:
+          start      (default) Start in the menu bar, or apply the settings to the instance already
+                     running. Prints {"action":"started"|"forwarded"|"unchanged","pid":N}
+          status     Is an instance running, and is it holding the Mac awake (pid, keep_awake)
+          snapshot   Every hardware reading, physical units; a reading this Mac lacks is an absent key
+          presets    The built-in presets (key, title) and the default
+          build      Compile if the source is newer than the binary; safe while an instance runs
+
+        Settings (at launch, or live on the running instance):
+          --preset <key|path>          Runner GIF: a key from `presets`, or a .gif path
+          --display <gif|trace|value>  Menu-bar form: animated GIF, load chart, or live reading
+          --load-source <\(sources)>
+                                       Reader that drives the animation (default cpu)
+          --keep-awake <off|on|dur>    Hold the Mac awake: on, or a window like 30m, 2h, 1h30m (max \(Tuning.keepAwakeMaxHours)h)
+          --keep-awake-pid <pid>       Hold the Mac awake until that process exits; wins over --keep-awake
+          --battery-threshold <pct|off>
+                                       Release Keep Awake at this charge on battery (default \(pct(Tuning.batteryLowThresholdDefault)), \(pct(Tuning.batteryThresholdMin))-\(pct(Tuning.batteryThresholdMax)));
+                                       at \(pct(Tuning.batteryCriticalThreshold))% or below it always releases
+          Env: CO_AWARENESS_<FLAG> for each (CO_AWARENESS_PRESET, CO_AWARENESS_DISPLAY, …); a flag wins.
+
+        Launch-only (refused while an instance is running):
+          --speed-multiplier <x>       Fixed animation speed instead of load-driven
+          --show-all-sources           Sample every reader, not only the active one
+          --no-update-check            Skip the release check at launch
+          --foreground                 Stay attached to this shell (default: detached)
+          --extra                      Start another instance even if one is running
+
+        Examples:
+          \(bin)                                     # start with the saved settings
+          \(bin) --preset ~/Pictures/cat.gif --display trace
+          \(bin) --keep-awake 2h                     # arms it now, running or not
+          long-job.sh & \(bin) --keep-awake-pid $!
+          \(bin) status | jq -e .running
+          \(bin) snapshot | jq .temp_c
+        """)
+    }
+}
+
+// `start` against an instance that is already resident (docs/ARCHITECTURE.md § 8.4): validate the
+// request, write it to `intent.json` atomically, and wake the instance with SIGUSR1. The instance
+// applies it through the same setters the menu uses and persists it; this side never writes
+// `state.json`, so the single-writer model stands.
+private enum IntentForwarder {
+    static func residentInstance() -> pid_t? {
+        let ownName = ProcessProbe.name(of: getpid())
+            ?? URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent
+        return ProcessProbe.oldestMatch(ownName)?.pid
+    }
+
+    // Strict where the launch path is forgiving. A launch degrades a bad value to a default because a
+    // value baked into a login item must never cost the user the app; a forward loses nothing by
+    // refusing — the running instance stays exactly as it was — and there is no reply channel from the
+    // instance, so this is the only point at which the caller can still be told.
+    static func intent(
+        preset: String?, display: String?, loadSource: String?,
+        keepAwake: String?, keepAwakePID: String?, batteryThreshold: String?
+    ) -> StateStore.RuntimeIntent? {
+        func refuse(_ message: String) -> StateStore.RuntimeIntent? {
+            fputs("co-awareness: \(message). Nothing was sent to the running instance.\n", stderr)
+            return nil
+        }
+        var intent = StateStore.RuntimeIntent()
+        if let raw = display {
+            guard let mode = DisplayMode.parse(raw) else {
+                return refuse("Invalid --display \"\(raw)\"; expected gif, trace, or value")
+            }
+            intent.displayMode = mode.rawValue
+        }
+        if let raw = loadSource {
+            guard let source = LoadSource.from(key: raw) else {
+                return refuse("Unknown --load-source \"\(raw)\"; expected one of \(LoadSource.allCases.map(\.key).joined(separator: ", "))")
+            }
+            intent.loadSource = source.key
+        }
+        if let raw = keepAwake?.trimmingCharacters(in: .whitespaces) {
+            if ["off", "no", "false", "0"].contains(raw.lowercased()) {
+                intent.keepAwake = "off"
+            } else if KeepAwakeDuration.parse(raw) != nil {
+                intent.keepAwake = raw
+            } else {
+                return refuse("Invalid --keep-awake \"\(raw)\"; expected off, on, or a duration with a unit (e.g. 30m, 2h, 1h30m)")
+            }
+        }
+        if let raw = keepAwakePID?.trimmingCharacters(in: .whitespaces) {
+            guard let pid = pid_t(raw), ProcessProbe.isAlive(pid) else {
+                return refuse("--keep-awake-pid \"\(raw)\" is not a running process")
+            }
+            intent.keepAwakePID = pid
+        }
+        if let raw = batteryThreshold {
+            guard let requested = Config.parseBatteryThreshold(raw),
+                  abs(Tuning.clampedBatteryThreshold(requested) - requested) <= .ulpOfOne else {
+                return refuse("Invalid --battery-threshold \"\(raw)\"; expected off or a whole percent from \(Int(Tuning.batteryThresholdMin * Tuning.percentScale)) to \(Int(Tuning.batteryThresholdMax * Tuning.percentScale))")
+            }
+            intent.batteryThreshold = requested
+        }
+        if let raw = preset {
+            if let entry = PresetRegistry.load().entries.first(where: { $0.key == raw }) {
+                intent.preset = entry.key
+            } else {
+                // A path is made absolute HERE, against the caller's working directory: the resident
+                // process has its own, and a relative path would name a different file to it.
+                let expanded = NSString(string: raw).expandingTildeInPath
+                let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+                let absolute = URL(fileURLWithPath: expanded, relativeTo: cwd).standardizedFileURL.path
+                guard FileManager.default.isReadableFile(atPath: absolute) else {
+                    return refuse("--preset \"\(raw)\" is neither a built-in preset (see `presets`) nor a readable file")
+                }
+                intent.preset = absolute
+            }
+        }
+        return intent
+    }
+
+    // The process exit status. The file goes in before the signal, so an instance woken by it always
+    // finds the request; one that is still booting finds it when it starts listening.
+    static func send(_ intent: StateStore.RuntimeIntent, to pid: pid_t) -> Int32 {
+        guard intent.hasChanges else {
+            print("{\"action\":\"unchanged\",\"pid\":\(pid)}")
+            return 0
+        }
+        var stamped = intent
+        stamped.sentAt = Date()
+        do {
+            try StateStore.spoolIntent(stamped)
+        } catch {
+            fputs("co-awareness: could not spool the request next to the state file: \(error.localizedDescription). Nothing was sent.\n", stderr)
+            return 1
+        }
+        guard kill(pid, SIGUSR1) == 0 else {
+            fputs("co-awareness: instance \(pid) exited before it could be told. Nothing was changed.\n", stderr)
+            return 1
+        }
+        print("{\"action\":\"forwarded\",\"pid\":\(pid)}")
+        return 0
     }
 }
 
@@ -1768,36 +1903,82 @@ private enum StateStore {
                    .appendingPathComponent(fileName)
     }
 
-    static var intentFileURL: URL? {
-        fileURL?.deletingLastPathComponent().appendingPathComponent("intent.json")
+    // The spool a forwarding `start` writes into: one file per request, never a shared one. Concurrent
+    // forwards each own their file, so none can overwrite another's — a single merged file would need
+    // a lock between forwarders, which this unprivileged, daemon-free path does not have. Beside the
+    // state file, so CO_AWARENESS_STATE_FILE moves both together.
+    static var intentDirectoryURL: URL? {
+        fileURL?.deletingLastPathComponent().appendingPathComponent("intents", isDirectory: true)
     }
 
+    // What a forwarding `start` hands the resident instance (IntentForwarder). Every field is a change
+    // the caller asked for, already validated; nil means "leave it as it is". `preset` is a built-in key
+    // or an absolute GIF path. `sentAt` dates the request against the receiving process's start, so a
+    // file left behind by an instance that has exited is never applied to the next one.
     struct RuntimeIntent: Codable {
-        var version: Int? = 1
-        var timestamp: Double?
+        var version: Int? = 2
+        var sentAt: Date?
         var displayMode: String?
         var loadSource: String?
         var keepAwake: String?
         var keepAwakePID: Int32?
         var batteryThreshold: Double?
         var preset: String?
+
+        var hasChanges: Bool {
+            displayMode != nil || loadSource != nil || keepAwake != nil || keepAwakePID != nil
+                || batteryThreshold != nil || preset != nil
+        }
     }
 
-    static func loadIntent() -> RuntimeIntent? {
-        guard let url = intentFileURL, let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(RuntimeIntent.self, from: data)
+    // Whether a pending intent was sent to `pid` — after that process started — rather than left over
+    // from an earlier instance.
+    static func intent(_ intent: RuntimeIntent, isFor pid: pid_t) -> Bool {
+        guard let sentAt = intent.sentAt, let started = ProcessProbe.startTime(of: pid) else { return false }
+        return sentAt >= started
     }
 
-    static func clearIntent() {
-        guard let url = intentFileURL else { return }
-        try? FileManager.default.removeItem(at: url)
+    // Spool one request. Written under a dot-name and renamed in, so the reader never sees half a file.
+    // The name leads with the send time in zero-padded nanoseconds: lexical order is send order.
+    static func spoolIntent(_ intent: RuntimeIntent) throws {
+        guard let dir = intentDirectoryURL, let sentAt = intent.sentAt else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let stamp = String(format: "%020llu", UInt64(sentAt.timeIntervalSince1970 * 1_000_000_000))
+        let name = "\(stamp)-\(getpid()).json"
+        let staging = dir.appendingPathComponent(".\(name)")
+        try JSONEncoder().encode(intent).write(to: staging)
+        guard rename(staging.path, dir.appendingPathComponent(name).path) == 0 else {
+            try? FileManager.default.removeItem(at: staging)
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+
+    // Every spooled request, oldest first, each removed as it is taken. Taking is a rename out of the
+    // spool before the read, so a file is consumed exactly once even if two drains overlap.
+    static func takeIntents() -> [RuntimeIntent] {
+        guard let dir = intentDirectoryURL,
+              let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
+        var taken: [RuntimeIntent] = []
+        for name in names.sorted() where !name.hasPrefix(".") && name.hasSuffix(".json") {
+            let file = dir.appendingPathComponent(name)
+            let claimed = dir.appendingPathComponent(".taken-\(getpid())-\(name)")
+            guard rename(file.path, claimed.path) == 0 else { continue }
+            defer { try? FileManager.default.removeItem(at: claimed) }
+            if let data = try? Data(contentsOf: claimed),
+               let intent = try? JSONDecoder().decode(RuntimeIntent.self, from: data) {
+                taken.append(intent)
+            }
+        }
+        return taken
     }
 
     // One-time silent migration from the directory this app used before it was renamed (R26). The
     // legacy name appears here and nowhere else. Moves only when the CURRENT directory is absent, so
     // a machine that already migrated — or that never had the old name — is never touched twice;
     // failure is silent, like every other StateStore path. Deliberately not part of `fileURL`:
-    // `--status` must stay read-only (§ 8.3), so only the GUI boot path calls this.
+    // `status` must stay read-only (§ 8.3), so only the GUI boot path calls this.
     static func migrateLegacyDirectoryIfNeeded() {
         guard let base = try? FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
@@ -1830,7 +2011,7 @@ private enum StateStore {
     }
 }
 
-// `--status`: the two questions a snapshot structurally cannot answer, because it is stateless and
+// `status`: the two questions a snapshot structurally cannot answer, because it is stateless and
 // knows no other process — is an instance already resident, and is this app holding the Mac awake.
 // Read-only in both directions: it probes the process table and reads the state file, and writes
 // neither. Hand-rolled JSON for the same reasons as TelemetrySnapshot.jsonLine — fixed key order, and
@@ -3480,7 +3661,7 @@ private final class BandwidthLoadMonitor {
 
 // The color ramp direction for the trace chart. For utilization sources high = alert (green→red as
 // the value rises); for the battery fuel gauge low = alert (the ramp inverts).
-// One whole-machine reading in physical units — %, MiB/s, RPM, A, °C, W — as `--once` prints it.
+// One whole-machine reading in physical units — %, MiB/s, RPM, A, °C, W — as `snapshot` prints it.
 // Every reading is optional and a reader that did not answer is ABSENT from the JSON, never `null`
 // and never a zero standing in for "no reading": a consumer that sees a key can trust the number.
 // `v` is the contract version and the only field always present. Adding a field is not a version
@@ -3567,7 +3748,7 @@ private struct TelemetrySnapshot {
 // The nine unprivileged readers behind one owner, plus the two questions every consumer has: can
 // this machine answer for a source, and what does it say. It owns HOW a reading is taken and nothing
 // about what is done with one — no AppKit, no speed mapping, no menu text, no `state.json`. That is
-// what lets the same readers serve a status item that has to be on screen and a `--once` process
+// what lets the same readers serve a status item that has to be on screen and a `snapshot` process
 // that builds no NSApplication.
 //
 // Physical units come out of `snapshot()`; the 0…1 value `sampleSource` returns is the animation's
@@ -4175,6 +4356,91 @@ private enum GifFrames {
     }
 }
 
+// gifs/presets.json, the externalized source of truth for every built-in preset: the Swift code holds
+// no hardcoded preset list. Read by three callers that must agree on it — the GUI's registry, the
+// `presets` command, and the forward path's `--preset` check — so there is one loader, not three.
+// `file` in the manifest is a GIF filename relative to the manifest's directory; `Entry.path` is
+// already resolved against it.
+private enum PresetRegistry {
+    struct Manifest: Decodable {
+        let defaultPreset: String
+        let presets: [ManifestEntry]
+    }
+
+    struct ManifestEntry: Decodable {
+        let key: String
+        let menuTitle: String
+        let file: String
+        let speed: Speed
+    }
+
+    struct Speed: Decodable {
+        let label: String
+        let min: Double
+        let max: Double
+        let responseExponent: Double
+    }
+
+    struct Entry {
+        let key: String
+        let menuTitle: String
+        let path: String
+        let speed: Speed
+    }
+
+    struct Loaded {
+        // Directory holding `gifs/`, which is also the app's git worktree for an installed build.
+        let baseDir: URL
+        let defaultKey: String?
+        let entries: [Entry]
+        // Set when the manifest could not be read or decoded; `entries` is then empty.
+        let error: String?
+    }
+
+    // Resolve the resource base directory (which holds `gifs/`). Prefer the running executable's own
+    // directory: the compiled `CoAwareness` binary sits next to `gifs/`, and the executable path is
+    // absolute and independent of both the current working directory and the path passed to the
+    // compiler. `#filePath` (the source path baked in at compile time) is only correct when the binary
+    // is run from the right CWD *and* was compiled with an absolute path, which is exactly how a
+    // relative-path build broke the launchd login item (CWD=`/` → `/gifs/presets.json`). It is kept as
+    // a fallback for the interpreted `swift <file>` dev path, where there is no standalone executable
+    // beside `gifs/`. The first candidate that actually contains the manifest wins.
+    static func load() -> Loaded {
+        let fileDirURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let candidateBases = [Bundle.main.executableURL?.deletingLastPathComponent(), fileDirURL]
+            .compactMap { $0 }
+        let baseDir = candidateBases.first {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("gifs/presets.json").path)
+        } ?? fileDirURL
+        let manifestURL = baseDir.appendingPathComponent("gifs/presets.json")
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            let manifest = try JSONDecoder().decode(Manifest.self, from: data)
+            let entries = manifest.presets.map {
+                Entry(key: $0.key, menuTitle: $0.menuTitle,
+                      path: baseDir.appendingPathComponent("gifs/\($0.file)").path, speed: $0.speed)
+            }
+            return Loaded(baseDir: baseDir, defaultKey: manifest.defaultPreset, entries: entries, error: nil)
+        } catch {
+            return Loaded(baseDir: baseDir, defaultKey: nil, entries: [],
+                          error: "Could not load preset manifest at \(manifestURL.path): \(error.localizedDescription)")
+        }
+    }
+
+    // The `presets` command's one line: `{"default":"…","presets":[{"key":"…","title":"…"},…]}`, in
+    // manifest order. Sorted keys only order the fields inside each object; the array keeps its order.
+    static func jsonLine(_ loaded: Loaded) -> String? {
+        struct Row: Encodable { let key: String; let title: String }
+        struct Doc: Encodable { let `default`: String; let presets: [Row] }
+        guard loaded.error == nil, let defaultKey = loaded.defaultKey else { return nil }
+        let doc = Doc(default: defaultKey, presets: loaded.entries.map { Row(key: $0.key, title: $0.menuTitle) })
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(doc), let text = String(data: data, encoding: .utf8) else { return nil }
+        return text + "\n"
+    }
+}
+
 @MainActor
 private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private struct SpeedProfile {
@@ -4189,28 +4455,6 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         let menuTitle: String
         let path: String
         let speedProfile: SpeedProfile
-    }
-
-    // Codable mirror of gifs/presets.json — the externalized source of truth for every built-in
-    // preset's profile. Decoded once in init() and mapped into `PresetDescriptor`s; the Swift code
-    // holds no hardcoded preset list. `file` is a GIF filename relative to the manifest's directory.
-    private struct PresetManifest: Decodable {
-        let defaultPreset: String
-        let presets: [Entry]
-
-        struct Entry: Decodable {
-            let key: String
-            let menuTitle: String
-            let file: String
-            let speed: Speed
-        }
-
-        struct Speed: Decodable {
-            let label: String
-            let min: Double
-            let max: Double
-            let responseExponent: Double
-        }
     }
 
     // Last-resort speed profile: used only when there is neither an active preset nor a manifest
@@ -4481,57 +4725,32 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         self.activeLoadSource = config.loadSource
         self.showAllSources = config.showAllSources
 
-        // Resolve the resource base directory (which holds `gifs/`). Prefer the running executable's
-        // own directory: the compiled `CoAwareness` binary sits next to `gifs/`, and the
-        // executable path is absolute and independent of both the current working directory and the
-        // path passed to the compiler. This is the robust anchor — `#filePath` (the source path baked
-        // in at compile time) is only correct when the binary is run from the right CWD *and* was
-        // compiled with an absolute path, which is exactly how a relative-path build broke the launchd
-        // login item (CWD=`/` → `/gifs/presets.json`). `#filePath`'s directory is kept as a fallback
-        // for the interpreted `swift <file>` dev path, where there is no standalone executable beside
-        // `gifs/`. Pick the first candidate that actually contains the manifest.
-        let fileDirURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let candidateBases = [Bundle.main.executableURL?.deletingLastPathComponent(), fileDirURL]
-            .compactMap { $0 }
-        let scriptDirURL = candidateBases.first {
-            FileManager.default.fileExists(atPath: $0.appendingPathComponent("gifs/presets.json").path)
-        } ?? fileDirURL
-        self.scriptDirURL = scriptDirURL
-        let manifestURL = scriptDirURL.appendingPathComponent("gifs/presets.json")
-
-        // Load the externalized preset profiles. On any failure, leave the registry empty and record
-        // a startup error — the app can't offer built-in presets without it (a user-supplied GIF path
-        // still works, falling through to the custom profile).
-        var presets: [PresetDescriptor] = []
-        var manifestDefaultKey: String?
-        var loadError: String?
-        do {
-            let data = try Data(contentsOf: manifestURL)
-            let manifest = try JSONDecoder().decode(PresetManifest.self, from: data)
-            manifestDefaultKey = manifest.defaultPreset
-            presets = manifest.presets.map { entry in
-                PresetDescriptor(
-                    key: entry.key,
-                    menuTitle: entry.menuTitle,
-                    path: scriptDirURL.appendingPathComponent("gifs/\(entry.file)").path,
-                    speedProfile: SpeedProfile(
-                        label: entry.speed.label,
-                        min: entry.speed.min,
-                        max: entry.speed.max,
-                        responseExponent: entry.speed.responseExponent
-                    )
+        // Load the externalized preset profiles. On any failure the registry is empty and the error is
+        // recorded — the app can't offer built-in presets without it (a user-supplied GIF path still
+        // works, falling through to the custom profile).
+        let registry = PresetRegistry.load()
+        self.scriptDirURL = registry.baseDir
+        let manifestDefaultKey = registry.defaultKey
+        let presets = registry.entries.map { entry in
+            PresetDescriptor(
+                key: entry.key,
+                menuTitle: entry.menuTitle,
+                path: entry.path,
+                speedProfile: SpeedProfile(
+                    label: entry.speed.label,
+                    min: entry.speed.min,
+                    max: entry.speed.max,
+                    responseExponent: entry.speed.responseExponent
                 )
-            }
-        } catch {
-            loadError = "Could not load preset manifest at \(manifestURL.path): \(error.localizedDescription)"
+            )
         }
 
         self.allPresets = presets
         self.defaultDescriptor = presets.first { $0.key == manifestDefaultKey }
-        self.startupError = loadError
+        self.startupError = registry.error
 
-        // Resolve the positional arg (a preset keyword or a GIF path). The shell launcher forwards it
-        // verbatim; this is the single place keywords become paths. Empty → saved preset or manifest default.
+        // Resolve --preset (a preset keyword or a GIF path). This is the single place keywords become
+        // paths at launch. Empty → saved preset or manifest default.
         let requested: String
         if !config.presetOrPath.isEmpty {
             requested = config.presetOrPath
@@ -4554,7 +4773,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             // (contains "/" or ends ".gif") is deliberately NOT caught here: if it's missing,
             // loadFrames still surfaces the fatal "GIF file not found", per the QA §4a contract —
             // pointing at a specific file that isn't there is worth telling the user about.
-            fputs("\"\(requested)\" is not a known preset or an existing GIF file; using the default preset \"\(fallback.key)\". Run with --help to list presets.\n", stderr)
+            fputs("\"\(requested)\" is not a known preset or an existing GIF file; using the default preset \"\(fallback.key)\". Run `co-awareness presets` to list them.\n", stderr)
             self.activeGifPath = fallback.path
             self.activePreset = fallback
         } else {
@@ -4569,8 +4788,9 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before anything reads or writes persisted state: the one-time silent move out of the
         // pre-rename directory (R26). GUI-only by construction — the headless paths never get
-        // here, and `--status` must stay read-only (§ 8.3).
+        // here, and `status` must stay read-only (§ 8.3).
         StateStore.migrateLegacyDirectoryIfNeeded()
+        Restarter.migrateLegacyLoginItem(environment: ProcessInfo.processInfo.environment)
 
         NSApp.setActivationPolicy(.accessory)
 
@@ -7132,25 +7352,40 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         signal(SIGUSR1, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         source.setEventHandler { [weak self] in
-            self?.handleRuntimeIntent()
+            self?.drainRuntimeIntents()
         }
         source.resume()
         signalSource = source
+        // A forward that landed before this source existed was sent to us but never heard — the
+        // top-level SIG_IGN kept it from killing the process. Its file is still in the spool.
+        drainRuntimeIntents()
     }
 
-    private func handleRuntimeIntent() {
-        guard let intent = StateStore.loadIntent() else { return }
-        StateStore.clearIntent()
+    // Apply every spooled request in send order. One sent before this process started was meant for
+    // an instance that has since exited, and is discarded rather than applied to its successor.
+    private func drainRuntimeIntents() {
+        let own = getpid()
+        for intent in StateStore.takeIntents() where StateStore.intent(intent, isFor: own) {
+            handleRuntimeIntent(intent)
+        }
+    }
+
+    private func handleRuntimeIntent(_ intent: StateStore.RuntimeIntent) {
+        // Preset first: choosing one switches the bar to gif, so a display mode sent in the same request
+        // has to land after it or it would be overridden by its own companion.
+        if let presetName = intent.preset {
+            switchToPreset(named: presetName)
+        }
         if let modeStr = intent.displayMode, let mode = DisplayMode(rawValue: modeStr) {
             setDisplayMode(mode)
         }
-        if let sourceStr = intent.loadSource,
-           let source = LoadSource.from(key: sourceStr),
-           telemetry.isSourceAvailable(source) {
-            setLoadSource(source)
-        }
-        if let presetName = intent.preset {
-            switchToPreset(named: presetName)
+        if let sourceStr = intent.loadSource, let source = LoadSource.from(key: sourceStr) {
+            // The one thing the forwarder cannot check: only this process knows what this Mac can read.
+            if telemetry.isSourceAvailable(source) {
+                setLoadSource(source)
+            } else {
+                fputs("Forwarded --load-source \(source.key) is unavailable on this Mac; keeping \(activeLoadSource.key).\n", stderr)
+            }
         }
         if let threshold = intent.batteryThreshold {
             let clamped = Tuning.clampedBatteryThreshold(threshold)
@@ -7166,17 +7401,18 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         persistState()
     }
 
-    private func switchToPreset(named keyword: String) {
-        if let matched = allPresets.first(where: { $0.key.lowercased() == keyword.lowercased() || $0.menuTitle.lowercased() == keyword.lowercased() }) {
-            activePreset = matched
-            if displayMode != .gif {
-                displayMode = .gif
-                syncGameLoopRunning()
-            }
-            switchToGif(to: matched.path, descriptor: matched)
-            applySizing()
-            refreshPresetSelectionState()
+    // A built-in key, or the absolute GIF path the forwarder already resolved and checked. A raw path
+    // pointing at a built-in GIF adopts that preset's profile, the same rule as at launch.
+    private func switchToPreset(named keyOrPath: String) {
+        let matched = allPresets.first { $0.key == keyOrPath }
+        let path = matched?.path ?? keyOrPath
+        if displayMode != .gif {
+            displayMode = .gif
+            syncGameLoopRunning()
         }
+        switchToGif(to: path, descriptor: matched ?? allPresets.first { $0.path == path })
+        applySizing()
+        refreshPresetSelectionState()
     }
 
     private func applyKeepAwakeString(_ raw: String) {
@@ -7992,18 +8228,35 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
     }
 }
 
+// First, ahead of anything that could make this process look resident: SIGUSR1 is how a forwarding
+// `start` wakes an instance, and its default action terminates. A process that is still booting, or is
+// not a GUI at all (a `status`, a `snapshot`, another `start`), must survive being picked as the target.
+// The GUI replaces this with a dispatch source once it can listen (setupSignalHandler).
+signal(SIGUSR1, SIG_IGN)
+
 switch Config.parse() {
 case .snapshot:
     // No NSApplication, no status item, no state file, no update check — just the readers. This is
-    // what lets `--once` run beside a live GUI instance, in parallel with itself, or over SSH.
+    // what lets `snapshot` run beside a live GUI instance, in parallel with itself, or over SSH.
     FileHandle.standardOutput.write(Data(TelemetryCore().snapshot().jsonLine.utf8))
     exit(0)
 case .status:
-    // Same headless shape as --once, and read-only on top of it: no NSApplication, no readers, no
+    // Same headless shape as `snapshot`, and read-only on top of it: no NSApplication, no readers, no
     // state write. "Nothing resident" is an answer, not a failure, so this path exits 0 either way —
     // exit 1 is reserved for not having answered at all (the usage error in parse()).
     FileHandle.standardOutput.write(Data(StatusReport.jsonLine.utf8))
     exit(0)
+case .presets:
+    guard let line = PresetRegistry.jsonLine(PresetRegistry.load()) else {
+        fputs("\(PresetRegistry.load().error ?? "Could not encode the preset manifest.")\n", stderr)
+        exit(1)
+    }
+    FileHandle.standardOutput.write(Data(line.utf8))
+    exit(0)
+case .forward(let intent, let pid):
+    exit(IntentForwarder.send(intent, to: pid))
+case .residentGone:
+    exit(3)
 case .config(let config):
     let app = NSApplication.shared
     let delegate = CoAwarenessApp(config: config)

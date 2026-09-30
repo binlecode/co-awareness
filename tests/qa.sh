@@ -3,7 +3,8 @@
 # Run from the repo root:  tests/qa.sh
 #
 # Coverage tiers (the boundary CI is built around — see README "Testing & CI"):
-#   core      §1 build (warning-clean) · §2 CLI parse + version · §2a the `--once` snapshot. Never boots
+#   core      §1 build (warning-clean) · §2 CLI parse + version · §2a `snapshot` · §2b `status` ·
+#             §2c `presets`. Never boots
 #             the GUI, so it is ALWAYS safe on any macOS (incl. a headless CI runner). This is the
 #             required gate — and it is deliberately THIN: every check here drives the real binary,
 #             and the real binary needs a status item for anything more.
@@ -11,11 +12,11 @@
 #   gui       §3 launch lifecycle · §3a Keep Awake battery conditions · §3b settings persistence ·
 #             §3c label slot geometry · §3d other sleep assertions · §3e machine sleep-hold state ·
 #             §3f Keep Awake launch arming · §3g animation driver & display modes · §3h battery diagnostics ·
-#             §3i kernel thermal pressure ·
+#             §3i kernel thermal pressure · §3j `status` live · §3k idempotent `start` ·
 #             §5 reader readouts · §4 error paths. These boot NSApplication + create an NSStatusItem, so
 #             they need an active WindowServer (GUI) session. Fine on a logged-in Mac; best-effort on
 #             hosted runners.
-#   launcher  §6 launcher wrapper: singleton guard, `--precompile`, and the build's safety against a
+#   launcher  §6 launcher wrapper: singleton guard, `build`, and the build's safety against a
 #             live instance. Disruptive: calls `pkill CoAwareness`, so it STOPS any running
 #             instance (incl. a login-item one). Opt-in only.
 #   manual    what no hook can reach: the menu clicks (no agent can drive an NSMenu here) and how the
@@ -79,8 +80,6 @@ $BIN --width 2 >/dev/null 2>&1;                     chk "unknown flag rejected" 
 $BIN --speed-multiplier 0 >/dev/null 2>&1;          chk "--speed-multiplier non-positive" 1 $?
 $BIN --display >/dev/null 2>&1;                     chk "--display no value" 1 $?
 $BIN --display bogus >/dev/null 2>&1;               chk "--display bad value" 1 $?
-$BIN --display value --label value >/dev/null 2>&1; chk "--display and --label collision" 1 $?
-$BIN --label BUILD >/dev/null 2>&1;                 chk "--label custom text rejected" 1 $?
 $BIN --load-source >/dev/null 2>&1;                 chk "--load-source no value" 1 $?
 # A *bad* --keep-awake value is deliberately non-fatal (it warns and launches with keep-awake off),
 # so that case lives in §3f where the absence of a caffeinate child can be observed.
@@ -91,19 +90,47 @@ $BIN --keep-awake-pid >/dev/null 2>&1;              chk "--keep-awake-pid no val
 # this can be baked into a login item), so which value each form resolves to is asserted by behavior
 # in §3a. A bare "rc=0, flag accepted" check here would restate that without observing anything.
 $BIN --battery-threshold >/dev/null 2>&1;           chk "--battery-threshold no value" 1 $?
-$BIN set --bogus >/dev/null 2>&1;                     chk "set unknown flag rejected" 1 $?
-for f in --speed-multiplier --display --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --once --status; do
+$BIN foo bar >/dev/null 2>&1;                       chk "unknown command rejected" 1 $?
+$BIN build >/dev/null 2>&1;                         chk "build refused by the binary (launcher's)" 1 $?
+# Retired spellings: each one refused, and the refusal names its replacement — a bare "unknown flag"
+# would leave a caller of the old grammar with nothing to go on. One row per spelling, because each
+# carries its own pointer. The env pair is refused the same way (an env value is not silently dropped).
+rt(){ want="$1"; shift; err=$("$@" 2>&1 >/dev/null); rc=$?
+  { [ "$rc" = 1 ] && echo "$err" | grep -q -- "$want"; } && { echo "  PASS [retired: $*] -> $want"; pass=$((pass+1)); } \
+    || { echo "  FAIL [retired: $*] rc=$rc <<$err>>"; fail=$((fail+1)); }; }
+rt "start"                  $BIN set --display value
+rt "start"                  $BIN --set --display value
+rt "snapshot"               $BIN --once
+rt "status"                 $BIN --status
+rt "build"                  $BIN --precompile
+rt "--display"              $BIN --label value
+rt "--foreground"           $BIN --no-detach
+rt "default"                $BIN --detach
+rt "--preset horse-white"   $BIN horse-white
+rt "--preset horse-white"   $BIN --display value horse-white
+rt "CO_AWARENESS_PRESET"    env CO_AWARENESS_PATH="$GIF" $BIN
+rt "CO_AWARENESS_DISPLAY"   env CO_AWARENESS_LABEL=value $BIN
+# The launcher's forward-only run with nobody resident answers with the private status 3 and boots
+# nothing — the launcher's cue to take the start path. Deterministic here: the needle is this check
+# build's own name, which no installed instance carries.
+CO_AWARENESS_FORWARD_ONLY=1 $BIN --display value >/dev/null 2>&1; chk "forward-only with nobody resident" 3 $?
+# The one help. Every verb and flag is in it; no preset key is — presets are data, `presets` lists
+# them, and a hand-kept list in the help is the copy that drifted.
+for f in start status snapshot presets build --preset --speed-multiplier --display --load-source --keep-awake --keep-awake-pid --battery-threshold --show-all-sources --no-update-check --foreground --extra; do
   $BIN --help 2>&1 | grep -q -- "$f" && { echo "  PASS --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL --help missing $f"; fail=$((fail+1)); }
 done
-# The launcher's OWN flags, against the launcher's own help — the app binary never sees these and its
-# help correctly omits them, so the loop above can't cover them. Safe in the [core] tier: `--help` is
-# handled before the singleton guard and before any compile, so this neither builds nor touches a
-# running instance. `--precompile` earns a listing like any other: it is in the CHANGELOG's public-API
-# surface, so an undocumented one is a semver-governed flag nobody can find.
-for f in --foreground --no-detach --detach --extra --precompile --once --status; do
-  ./co-awareness --help 2>&1 | grep -q -- "$f" && { echo "  PASS launcher --help lists $f"; pass=$((pass+1)); } || { echo "  FAIL launcher --help missing $f"; fail=$((fail+1)); }
-done
-$BIN foo bar >/dev/null 2>&1;                       chk "extra positional" 1 $?
+leak=$(for k in $(plutil -extract presets json -o - gifs/presets.json | grep -Eo '"key":"[^"]+"' | cut -d'"' -f4); do
+  $BIN --help 2>&1 | grep -qw -- "$k" && printf ' %s' "$k"; done)
+[ -z "$leak" ] && { echo "  PASS --help names no preset key"; pass=$((pass+1)); } || { echo "  FAIL --help names preset keys:$leak"; fail=$((fail+1)); }
+# The launcher keeps no help of its own: it hands --help to the binary before the guard and before any
+# compile, so this neither builds nor touches a running instance. With no binary built yet (a fresh
+# CI checkout) it says so and exits 2 — asserted as whichever of the two this tree is in.
+out=$(./co-awareness --help 2>&1); rc=$?
+if [ -x ./CoAwareness ]; then
+  { [ "$rc" = 0 ] && echo "$out" | grep -q "^Usage:"; } && { echo "  PASS launcher --help is the binary's"; pass=$((pass+1)); } || { echo "  FAIL launcher --help (rc=$rc)"; fail=$((fail+1)); }
+else
+  { [ "$rc" = 2 ] && echo "$out" | grep -q "build"; } && { echo "  PASS launcher --help with no binary exits 2 naming build"; pass=$((pass+1)); } || { echo "  FAIL launcher --help with no binary (rc=$rc: $out)"; fail=$((fail+1)); }
+fi
 # Version consistency. AppInfo.version is the source of truth; every *in-repo* surface that names the
 # version must agree with it, or a release ships a stale one silently. The git
 # tag is the fifth surface and is deliberately NOT checked: qa.sh runs *before* the tag exists, so
@@ -119,19 +146,19 @@ else
 skip "§2 CLI parse paths [core]" "core tier not selected (--gui)"
 fi
 
-# --- §2a `--once` snapshot [core] ------------------------------------------
+# --- §2a `snapshot` [core] -------------------------------------------------
 # R24's contract. It belongs in THIS tier and not the GUI one: the snapshot path builds no
 # NSApplication, so a PASS with no WindowServer behind it is the headless proof itself — the nine
-# readers answering a script, which is the whole point of the flag.
+# readers answering a script, which is the whole point of the command.
 if [ "$RUN_NONGUI" = 1 ]; then
-section "§2a --once snapshot [core — headless proof]"
+section "§2a snapshot [core — headless proof]"
 pass=0; fail=0
 ok(){ [ "$2" = 1 ] && { echo "  PASS $1"; pass=$((pass+1)); } || { echo "  FAIL $1 ($3)"; fail=$((fail+1)); }; }
 J=tmp/qa-once.json; E=tmp/qa-once.err
 
 # One reading, timed. /usr/bin/time -p rather than $SECONDS: the whole budget is sub-second.
 # The rc has to be stashed from INSIDE the braces: the pipeline's own status is awk's, not the app's.
-real=$( { /usr/bin/time -p $BIN --once >"$J"; echo $? >tmp/qa-once.rc; } 2>&1 | awk '/^real/{print $2}' )
+real=$( { /usr/bin/time -p $BIN snapshot >"$J"; echo $? >tmp/qa-once.rc; } 2>&1 | awk '/^real/{print $2}' )
 rc=$(cat tmp/qa-once.rc); rm -f tmp/qa-once.rc
 ok "exit 0" "$([ "$rc" = 0 ] && echo 1 || echo 0)" "rc=$rc"
 ok "stdout is exactly one line" "$([ "$(wc -l <"$J" | tr -d ' ')" = 1 ] && echo 1 || echo 0)" "got $(wc -l <"$J") lines"
@@ -143,19 +170,19 @@ miss=""; for k in '"v":' '"cpu_pct":' '"mem_pct":' '"thermal":'; do grep -q -- "
 ok "carries the always-present keys" "$([ -z "$miss" ] && echo 1 || echo 0)" "missing:$miss"
 ok "under 500 ms wall (${real}s)" "$(awk -v r="$real" 'BEGIN{print (r>0 && r<0.5) ? 1 : 0}')" "real=${real}s"
 
-# Exclusive: every other flag configures a GUI this path never builds. Stdout must stay EMPTY — a
+# Takes nothing: every flag configures a GUI this path never builds. Stdout must stay EMPTY — a
 # consumer pipes this straight into a parser, so a usage block on stdout is worse than no output.
-$BIN --once --display value >"$J" 2>"$E"; rc=$?
-ok "--once with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
+$BIN snapshot --display value >"$J" 2>"$E"; rc=$?
+ok "snapshot with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
 ok "…says why, on stderr, with stdout empty" \
    "$([ ! -s "$J" ] && [ -s "$E" ] && echo 1 || echo 0)" "stdout=$(cat "$J") stderr=$(cat "$E")"
 
 # An unavailable source is an ABSENT key, never a null and never a 0 — asserted through the existing
 # simulator, since every reader really works on this hardware.
-CO_AWARENESS_FORCE_UNAVAILABLE=gpu $BIN --once >"$J" 2>/dev/null; rc=$?
+CO_AWARENESS_FORCE_UNAVAILABLE=gpu $BIN snapshot >"$J" 2>/dev/null; rc=$?
 ok "a forced-unavailable source drops its key" \
    "$([ "$rc" = 0 ] && ! grep -q '"gpu_pct"' "$J" && echo 1 || echo 0)" "got: $(cat "$J")"
-CO_AWARENESS_FORCE_BATTERY=15:battery $BIN --once >"$J" 2>/dev/null
+CO_AWARENESS_FORCE_BATTERY=15:battery $BIN snapshot >"$J" 2>/dev/null
 ok "a forced charge reaches the snapshot" \
    "$(grep -q '"battery_pct":15.0' "$J" && echo 1 || echo 0)" "got: $(cat "$J")"
 
@@ -163,7 +190,7 @@ ok "a forced charge reaches the snapshot" \
 # machine with no AMCC channel no bus histogram — so presence is a NOTE, not a FAIL. What IS
 # unconditional is that a split arrives whole: a row reading "P 75%" with no E beside it, or an
 # `ane_w` with a stray `bw_gbps` of 0.0, is the failure worth an assertion.
-$BIN --once >"$J" 2>/dev/null
+$BIN snapshot >"$J" 2>/dev/null
 for pair in "cpu_p_pct:cpu_e_pct" "gpu_rend_pct:gpu_tiler_pct"; do
   a=${pair%%:*}; b=${pair##*:}
   ha=$(grep -c "\"$a\":" "$J"); hb=$(grep -c "\"$b\":" "$J")
@@ -190,56 +217,81 @@ fi
 # must not so much as open it. (§6 runs the same flag against a real running instance.)
 ST=tmp/qa-once-state.json; printf '{"version":1}' >"$ST"; touch -t 202001010000 "$ST"
 before=$(stat -f '%m %z' "$ST")
-CO_AWARENESS_STATE_FILE="$ST" $BIN --once >/dev/null 2>&1
+CO_AWARENESS_STATE_FILE="$ST" $BIN snapshot >/dev/null 2>&1
 ok "leaves state.json untouched" \
    "$([ "$(stat -f '%m %z' "$ST")" = "$before" ] && echo 1 || echo 0)" "was [$before] now [$(stat -f '%m %z' "$ST")]"
 
 rm -f "$J" "$E" "$ST"
 echo "  snapshot: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 else
-skip "§2a --once snapshot [core]" "core tier not selected (--gui)"
+skip "§2a snapshot [core]" "core tier not selected (--gui)"
 fi
 
-# --- §2b `--status` [core] -------------------------------------------------
+# --- §2b `status` [core] ---------------------------------------------------
 # R25's contract. Core tier for the same reason as §2a: the path builds no NSApplication. What this
 # tier can assert is the no-instance answer and the read-only promise; the live-instance half needs a
 # real process and lives in §3j. Deterministic here despite a developer's own app being up, because
 # $BIN is ./tmp/coaware-check: the probe's needle is the binary's OWN executable name, so a check build
 # answers for check builds and never for the installed CoAwareness.
 if [ "$RUN_NONGUI" = 1 ]; then
-section "§2b --status [core]"
+section "§2b status [core]"
 pass=0; fail=0
 ok(){ [ "$2" = 1 ] && { echo "  PASS $1"; pass=$((pass+1)); } || { echo "  FAIL $1 ($3)"; fail=$((fail+1)); }; }
 J=tmp/qa-status.json; E=tmp/qa-status.err
 
 # Nothing resident is an ANSWER, not a failure: exit 0, and no keep_awake key to report a hold that
 # nothing is holding. Asserted as the exact line, since the whole object is two tokens long.
-$BIN --status >"$J" 2>"$E"; rc=$?
+$BIN status >"$J" 2>"$E"; rc=$?
 ok "exit 0 with nothing resident" "$([ "$rc" = 0 ] && echo 1 || echo 0)" "rc=$rc"
 ok "…and stdout is exactly {\"running\":false}" \
    "$([ "$(cat "$J")" = '{"running":false}' ] && echo 1 || echo 0)" "got: $(cat "$J")"
 
-# Exclusive, like --once, and stdout stays EMPTY for the same reason: a consumer pipes this into a
+# Takes nothing, like snapshot, and stdout stays EMPTY for the same reason: a consumer pipes this into a
 # parser, so a usage block on stdout is worse than no output.
-$BIN --status --display value >"$J" 2>"$E"; rc=$?
-ok "--status with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
+$BIN status --display value >"$J" 2>"$E"; rc=$?
+ok "status with a companion flag exits 1" "$([ "$rc" = 1 ] && echo 1 || echo 0)" "rc=$rc"
 ok "…says why, on stderr, with stdout empty" \
    "$([ ! -s "$J" ] && [ -s "$E" ] && echo 1 || echo 0)" "stdout=$(cat "$J") stderr=$(cat "$E")"
 
-# Read-only. --status reads the state file where --once doesn't open it at all, so the untouched-file
+# Read-only. status reads the state file where snapshot doesn't open it at all, so the untouched-file
 # assertion is the one that matters most here: a status query must never be able to disturb the
 # instance it is asking about.
 ST=tmp/qa-status-state.json
 printf '{"version":1,"keepAwake":{"enabled":true,"tint":2}}' >"$ST"; touch -t 202001010000 "$ST"
 before=$(stat -f '%m %z' "$ST")
-CO_AWARENESS_STATE_FILE="$ST" $BIN --status >/dev/null 2>&1
+CO_AWARENESS_STATE_FILE="$ST" $BIN status >/dev/null 2>&1
 ok "leaves state.json untouched" \
    "$([ "$(stat -f '%m %z' "$ST")" = "$before" ] && echo 1 || echo 0)" "was [$before] now [$(stat -f '%m %z' "$ST")]"
 
 rm -f "$J" "$E" "$ST"
 echo "  status: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 else
-skip "§2b --status [core]" "core tier not selected (--gui)"
+skip "§2b status [core]" "core tier not selected (--gui)"
+fi
+
+# --- §2c `presets` [core] --------------------------------------------------
+# The listing IS the manifest: same keys, same order, same default. Asserted against presets.json
+# itself, so adding a preset needs no edit here — and a listing that drifted from the file fails.
+if [ "$RUN_NONGUI" = 1 ]; then
+section "§2c presets [core]"
+pass=0; fail=0
+ok(){ [ "$2" = 1 ] && { echo "  PASS $1"; pass=$((pass+1)); } || { echo "  FAIL $1 ($3)"; fail=$((fail+1)); }; }
+J=tmp/qa-presets.json; E=tmp/qa-presets.err
+$BIN presets >"$J" 2>"$E"; rc=$?
+ok "exit 0, one line of JSON" \
+   "$([ "$rc" = 0 ] && [ "$(wc -l <"$J" | tr -d ' ')" = 1 ] && plutil -convert json -o - - <"$J" >/dev/null 2>&1 && echo 1 || echo 0)" "rc=$rc got: $(cat "$J")"
+want=$(plutil -extract presets json -o - gifs/presets.json | grep -Eo '"key":"[^"]+"' | tr '\n' ' ')
+got=$(grep -Eo '"key":"[^"]+"' "$J" | tr '\n' ' ')
+ok "keys and order match presets.json" "$([ -n "$want" ] && [ "$want" = "$got" ] && echo 1 || echo 0)" "want [$want] got [$got]"
+dflt=$(plutil -extract defaultPreset raw -o - gifs/presets.json)
+ok "default matches presets.json ($dflt)" "$(grep -q "\"default\":\"$dflt\"" "$J" && echo 1 || echo 0)" "got: $(cat "$J")"
+$BIN presets --json >"$J" 2>"$E"; rc=$?
+ok "presets with a companion flag exits 1, stdout empty" \
+   "$([ "$rc" = 1 ] && [ ! -s "$J" ] && [ -s "$E" ] && echo 1 || echo 0)" "rc=$rc stdout=$(cat "$J")"
+rm -f "$J" "$E"
+echo "  presets: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
+else
+skip "§2c presets [core]" "core tier not selected (--gui)"
 fi
 
 # --- §3 Launch lifecycle [gui] ---------------------------------------------
@@ -277,14 +329,15 @@ run "force-unavail -> cpu"     "unavailable on this machine" env CO_AWARENESS_FO
 run "fixed speed"              "" $BIN --speed-multiplier 1.5
 run "show-all-sources (flag)"  "" $BIN --show-all-sources
 run "show-all-sources (env)"   "" env CO_AWARENESS_SHOW_ALL=1 $BIN --load-source memory
-# No row for --label or --no-update-check: §5 launches every source with --label value and reads the
+# No row for --no-update-check: §5 launches every source with --display value and reads the
 # result back off the bar, §3b launches a custom one and asserts what it persisted, and every §3f arm
 # carries --no-update-check. A clean-launch row for them would only restate those.
 run "display value"             "" $BIN --display value
 run "display trace"             "" $BIN --display trace
-run "custom path + memory"     "" $BIN "$GIF" --load-source memory
+run "preset key"               "" $BIN --preset dog-black
+run "custom path + memory"     "" $BIN --preset "$GIF" --load-source memory
 run "env LOAD_SOURCE"          "" env CO_AWARENESS_LOAD_SOURCE=network $BIN
-run "env PATH=<gif>"           "" env CO_AWARENESS_PATH="$GIF" $BIN --load-source disk
+run "env PRESET=<gif>"         "" env CO_AWARENESS_PRESET="$GIF" $BIN --load-source disk
 echo "  lifecycle: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
 # --- §3c Label slot geometry [gui] -----------------------------------------
@@ -586,7 +639,6 @@ printf '{"version":1,"settings":{"labelMode":"value"}}' > "$SF"
 sp "legacy labelMode value migrated"   value  $BIN
 printf '{"version":1,"settings":{"labelMode":"chart"}}' > "$SF"
 sp "legacy labelMode chart migrated"   trace  $BIN
-sp "deprecated --label value persists as value" value $BIN --label value
 # Invalid env var warns and falls back to gif
 env_err=$(CO_AWARENESS_STATE_FILE="$SF" CO_AWARENESS_EXIT_AFTER=0.4 env CO_AWARENESS_DISPLAY=bogus $BIN 2>&1 >/dev/null)
 echo "$env_err" | grep -q 'Unknown display mode' \
@@ -965,12 +1017,12 @@ tk "forced-unavailable temperature falls back without an orphan annotation" \
 rm -f "$TH_ST"
 echo "  kernel thermal pressure: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
-# --- §3j `--status` against a live instance [gui] --------------------------
+# --- §3j `status` against a live instance [gui] ----------------------------
 # The half §2b cannot reach: whether the flag really reports the PROCESS. The pid is asserted against
 # the one this script started, and the last case runs after that instance is gone with its state file
 # left behind — a state-file-only reading would still say "held awake" there, which is the failure
 # this exists to catch.
-section "§3j --status against a live instance [gui — needs WindowServer]"
+section "§3j status against a live instance [gui — needs WindowServer]"
 pass=0; fail=0
 sk(){ [ "$2" = 1 ] && { echo "  PASS $1"; pass=$((pass+1)); } || { echo "  FAIL $1 ($3)"; fail=$((fail+1)); }; }
 SS="$PWD/tmp/qa-status-live.json"
@@ -979,7 +1031,7 @@ rm -f "$SS"
 CO_AWARENESS_STATE_FILE="$SS" CO_AWARENESS_FORCE_BATTERY=100:ac \
   CO_AWARENESS_EXIT_AFTER=6 $BIN --no-update-check --keep-awake 30m >/dev/null 2>&1 & app=$!
 sleep 2
-out=$(CO_AWARENESS_STATE_FILE="$SS" $BIN --status 2>/dev/null)
+out=$(CO_AWARENESS_STATE_FILE="$SS" $BIN status 2>/dev/null)
 sk "reports the running instance by pid" \
    "$(echo "$out" | grep -q "\"running\":true,\"pid\":$app," && echo 1 || echo 0)" "want pid=$app got: $out"
 rem=$(echo "$out" | sed -n 's/.*"remaining_s":\([0-9]*\).*/\1/p')
@@ -993,23 +1045,73 @@ rm -f "$SS"
 CO_AWARENESS_STATE_FILE="$SS" CO_AWARENESS_FORCE_BATTERY=100:ac \
   CO_AWARENESS_EXIT_AFTER=6 $BIN --no-update-check --keep-awake on >/dev/null 2>&1 & app=$!
 sleep 2
-out=$(CO_AWARENESS_STATE_FILE="$SS" $BIN --status 2>/dev/null)
+out=$(CO_AWARENESS_STATE_FILE="$SS" $BIN status 2>/dev/null)
 sk "an indefinite hold reports active with no remaining_s" \
    "$(echo "$out" | grep -q '"active":true' && ! echo "$out" | grep -q 'remaining_s' && echo 1 || echo 0)" "got: $out"
 wait $app
 
 # The instance is gone; its saved intent is not. Reporting a hold now would be a claim about nothing.
-out=$(CO_AWARENESS_STATE_FILE="$SS" $BIN --status 2>/dev/null)
+out=$(CO_AWARENESS_STATE_FILE="$SS" $BIN status 2>/dev/null)
 sk "a departed instance reports running:false, not its stale intent" \
    "$([ "$out" = '{"running":false}' ] && echo 1 || echo 0)" "state=[$(cat "$SS" 2>/dev/null | tr -d ' \n')] got: $out"
 
 rm -f "$SS"
 echo "  status (live): passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
 
+# --- §3k Idempotent `start` against a live instance [gui] ------------------
+# With an instance up, `start` changes it instead of adding a second one. Asserted on what the
+# instance itself persists (its state file) and on the process table — never on the forwarder's own
+# report, which only says the request was sent. The needle is this check build's name, so the
+# developer's installed app is never the target.
+section "§3k idempotent start against a live instance [gui — needs WindowServer]"
+pass=0; fail=0
+SK="$PWD/tmp/qa-start-live"; rm -rf "$SK"; mkdir -p "$SK"
+export CO_AWARENESS_STATE_FILE="$SK/state.json" CO_AWARENESS_FORCE_BATTERY=100:ac
+setting(){ plutil -extract "$1" raw -o - "$SK/state.json" 2>/dev/null; }
+count(){ pgrep -U "$(id -u)" -f "coaware-check( |$)" | wc -l | tr -d ' '; }
+CO_AWARENESS_EXIT_AFTER=12 $BIN --no-update-check --preset dog-black >/dev/null 2>&1 & app=$!
+sleep 2
+# Expected lines built first: bash 3.2 splits an escaped quote inside "$(…)" into separate words.
+forwarded="{\"action\":\"forwarded\",\"pid\":$app}"; unchanged="{\"action\":\"unchanged\",\"pid\":$app}"
+out=$($BIN --display value 2>/dev/null); rc=$?; sleep 0.6
+sk "a setting reaches the running instance" \
+   "$([ "$rc" = 0 ] && [ "$out" = "$forwarded" ] && [ "$(setting settings.displayMode)" = value ] && echo 1 || echo 0)" \
+   "rc=$rc out=$out displayMode=$(setting settings.displayMode)"
+out=$($BIN 2>/dev/null); rc=$?
+sk "no settings: unchanged, and still one instance" \
+   "$([ "$rc" = 0 ] && [ "$out" = "$unchanged" ] && [ "$(count)" = 1 ] && echo 1 || echo 0)" "rc=$rc out=$out count=$(count)"
+# All or nothing: a launch-only flag is refused, and the setting beside it is not applied either.
+before=$(md5 -q "$SK/state.json")
+$BIN --speed-multiplier 2 --display trace >/dev/null 2>&1; rc=$?; sleep 0.6
+sk "a launch-only flag is refused and nothing changes" \
+   "$([ "$rc" = 1 ] && [ "$(md5 -q "$SK/state.json")" = "$before" ] && echo 1 || echo 0)" "rc=$rc"
+# Strict where a launch degrades: a bad value is refused before anything is spooled or signalled.
+$BIN --load-source bogus >/dev/null 2>&1; rc=$?
+sk "a bad value is refused before anything is sent" \
+   "$([ "$rc" = 1 ] && [ -z "$(ls -A "$SK/intents" 2>/dev/null)" ] && echo 1 || echo 0)" "rc=$rc spool=$(ls -A "$SK/intents" 2>/dev/null)"
+# Three forwards at once: each owns its spool file, so none can overwrite another's.
+$BIN --display trace >/dev/null 2>&1 & f1=$!; $BIN --keep-awake 30m >/dev/null 2>&1 & f2=$!
+$BIN --battery-threshold 30 >/dev/null 2>&1 & f3=$!; wait $f1 $f2 $f3; sleep 0.8
+sk "concurrent forwards all land" \
+   "$([ "$(setting settings.displayMode)" = trace ] && [ "$(setting keepAwake.enabled)" = true ] && awk -v t="$(setting settings.batteryThreshold)" 'BEGIN{exit !(t+0 > 0.299 && t+0 < 0.301)}'  && echo 1 || echo 0)" \
+   "display=$(setting settings.displayMode) keepAwake=$(setting keepAwake.enabled) threshold=$(setting settings.batteryThreshold)"
+wait $app
+# A forward that lands while the instance is still booting — before it can listen — is kept for it,
+# not lost and not fatal (SIGUSR1's default action would kill a process that has no handler yet).
+rm -rf "$SK"; mkdir -p "$SK"
+CO_AWARENESS_EXIT_AFTER=4 $BIN --no-update-check --preset dog-black >/dev/null 2>&1 & app=$!
+sleep 0.05; $BIN --display value >/dev/null 2>&1; sleep 2
+sk "a forward into a booting instance is applied, and it survives" \
+   "$(kill -0 $app 2>/dev/null && [ "$(setting settings.displayMode)" = value ] && echo 1 || echo 0)" "displayMode=$(setting settings.displayMode)"
+wait $app
+unset CO_AWARENESS_STATE_FILE CO_AWARENESS_FORCE_BATTERY
+rm -rf "$SK"
+echo "  start (live): passes=$pass fails=$fail"; total_fail=$((total_fail+fail))
+
 # --- §4 Error paths [gui] --------------------------------------------------
 section "§4 error paths (fast, no modal) [gui — needs WindowServer]"
 err=$(CO_AWARENESS_STATE_FILE="$PWD/tmp/qa-lifecycle-state.json" \
-      CO_AWARENESS_EXIT_AFTER=1 $BIN /no/such/file.gif 2>&1 >/dev/null); rc=$?
+      CO_AWARENESS_EXIT_AFTER=1 $BIN --preset /no/such/file.gif 2>&1 >/dev/null); rc=$?
 { [ "$rc" = 0 ] && echo "$err" | grep -q "GIF file not found"; } && echo "  PASS bad GIF" || { echo "  FAIL bad GIF (rc=$rc)"; total_fail=$((total_fail+1)); }
 mv gifs/presets.json gifs/presets.json.bak
 err=$(CO_AWARENESS_STATE_FILE="$PWD/tmp/qa-lifecycle-state.json" \
@@ -1087,14 +1189,21 @@ if [ "$RUN_LAUNCHER" = 1 ]; then
   pkill -U "$(id -u)" -f 'CoAwareness' 2>/dev/null; sleep 1
   CO_AWARENESS_EXIT_AFTER=3 ./co-awareness --foreground --load-source memory 2>&1 | tail -1
 
-  # --precompile is the in-app updater's build step: it must produce the binary and start NOTHING.
+  # `build` is the in-app updater's build step: it must produce the binary and start NOTHING.
   # (The whole point is that it runs before the app quits, so the restart doesn't pay for the compile.)
   touch CoAwareness.swift
-  ./co-awareness --precompile
+  ./co-awareness build
   { [ CoAwareness -nt CoAwareness.swift ] \
     && ! pgrep -U "$(id -u)" -f "/CoAwareness( |$)" >/dev/null; } \
-    && echo "  PASS --precompile builds and launches nothing" \
-    || { echo "  FAIL --precompile (binary stale, or it started an instance)"; total_fail=$((total_fail+1)); }
+    && echo "  PASS build builds and launches nothing" \
+    || { echo "  FAIL build (binary stale, or it started an instance)"; total_fail=$((total_fail+1)); }
+  # The temporary bridge: an updater from before the verb-first grammar still runs `--precompile`,
+  # and it must still build. Delete with the launcher's legacy_argv shim.
+  touch CoAwareness.swift
+  ./co-awareness --precompile 2>/dev/null
+  [ CoAwareness -nt CoAwareness.swift ] \
+    && echo "  PASS legacy --precompile still builds (bridge)" \
+    || { echo "  FAIL legacy --precompile no longer builds"; total_fail=$((total_fail+1)); }
 
   # Launch the "victim" instance with a generous self-exit window (a long QA run leaves the machine
   # busy, and the rebuild below adds a compile, so a short EXIT_AFTER could fire before the checks
@@ -1103,54 +1212,58 @@ if [ "$RUN_LAUNCHER" = 1 ]; then
   for _ in $(seq 10); do pgrep -U "$(id -u)" -f "/CoAwareness( |$)" >/dev/null && break; sleep 1; done
   victim=$(pgrep -U "$(id -u)" -f "/CoAwareness( |$)" | head -1)
 
-  # The guard runs BEFORE the compile, so a rejected launch costs a pgrep and leaves the binary alone.
-  # Asserted on the binary's mtime with the source deliberately stale: a guard that ran second would
-  # rebuild here, which is how a second swiftc used to be able to race the one already in flight.
+  # The guard runs BEFORE the compile, so a second `start` costs a pgrep and leaves the binary
+  # alone — it forwards to the victim instead of launching. Asserted on the binary's mtime with the
+  # source deliberately stale: a guard that ran second would rebuild here, which is how a second
+  # swiftc used to be able to race the one already in flight.
   touch CoAwareness.swift
   before=$(stat -f %m CoAwareness)
   # Capture into a var, then match without a pipe: under `set -o pipefail`, `… | grep -q` makes the
-  # launcher take SIGPIPE (141) when grep closes the pipe after matching its first line, and pipefail
-  # would report that as a false failure even though the singleton correctly printed "already running".
+  # launcher take SIGPIPE (141) when grep closes the pipe after matching its first line.
   out=$(./co-awareness --load-source cpu 2>&1)
   case "$out" in
-    *"already running"*) echo "  PASS singleton rejects 2nd" ;;
-    *) echo "  FAIL singleton (got: $out)"; total_fail=$((total_fail+1)) ;;
+    *"\"action\":\"forwarded\",\"pid\":$victim}"*) echo "  PASS second start forwards to the running instance" ;;
+    *) echo "  FAIL second start (want forwarded to $victim, got: $out)"; total_fail=$((total_fail+1)) ;;
   esac
   [ "$(stat -f %m CoAwareness)" = "$before" ] \
-    && echo "  PASS rejected launch did not compile" \
-    || { echo "  FAIL rejected launch rebuilt the binary (guard runs after the compile)"; total_fail=$((total_fail+1)); }
+    && echo "  PASS forwarding start did not compile" \
+    || { echo "  FAIL forwarding start rebuilt the binary (guard runs after the compile)"; total_fail=$((total_fail+1)); }
+  out=$(./co-awareness --foreground 2>&1); rc=$?
+  [ "$rc" = 1 ] \
+    && echo "  PASS --foreground refused while an instance runs" \
+    || { echo "  FAIL --foreground beside a live instance (rc=$rc, got: $out)"; total_fail=$((total_fail+1)); }
 
-  # --once on the launcher: it is intercepted ahead of BOTH the singleton guard and the compile, so
-  # it answers beside the live victim (the guard would refuse a launch here) and leaves the stale
-  # binary alone (a compile here would put a swiftc race back in front of the guard). The source is
-  # still stale from the check above, which is what makes the second half assertable.
+  # `snapshot` on the launcher: it goes to the binary ahead of BOTH the singleton guard and the
+  # compile, so it answers beside the live victim and leaves the stale binary alone (a compile here
+  # would put a swiftc race back in front of the guard). The source is still stale from the check
+  # above, which is what makes the second half assertable.
   before=$(stat -f %m CoAwareness)
-  snap=$(./co-awareness --once 2>&1); rc=$?
+  snap=$(./co-awareness snapshot 2>&1); rc=$?
   { [ "$rc" = 0 ] && [ "$(printf '%s' "$snap" | grep -c '"v":1')" = 1 ]; } \
-    && echo "  PASS --once answers beside a live instance" \
-    || { echo "  FAIL --once beside a live instance (rc=$rc, got: $snap)"; total_fail=$((total_fail+1)); }
+    && echo "  PASS snapshot answers beside a live instance" \
+    || { echo "  FAIL snapshot beside a live instance (rc=$rc, got: $snap)"; total_fail=$((total_fail+1)); }
   [ "$(stat -f %m CoAwareness)" = "$before" ] \
-    && echo "  PASS --once compiled nothing" \
-    || { echo "  FAIL --once rebuilt the binary (intercept runs after the compile)"; total_fail=$((total_fail+1)); }
+    && echo "  PASS snapshot compiled nothing" \
+    || { echo "  FAIL snapshot rebuilt the binary (dispatch runs after the compile)"; total_fail=$((total_fail+1)); }
 
   # No binary yet: a snapshot cannot compile one for itself (see above), so it says so and exits 2
   # rather than silently starting a 30s build or a menu bar. Moved aside, never deleted — the victim
   # is running out of this very inode.
   mv CoAwareness tmp/qa-once-binary-aside
-  out=$(./co-awareness --once 2>&1); rc=$?
+  out=$(./co-awareness snapshot 2>&1); rc=$?
   mv tmp/qa-once-binary-aside CoAwareness
   case "$rc:$out" in
-    2:*--precompile*) echo "  PASS --once with no binary exits 2 and names --precompile" ;;
-    *) echo "  FAIL --once with no binary (rc=$rc, got: $out)"; total_fail=$((total_fail+1)) ;;
+    2:*build*) echo "  PASS snapshot with no binary exits 2 and names build" ;;
+    *) echo "  FAIL snapshot with no binary (rc=$rc, got: $out)"; total_fail=$((total_fail+1)) ;;
   esac
 
   # …and the rebuild that the updater performs while an instance is live must not disturb it. The
   # build is renamed into place rather than written over the binary, so the running process keeps its
   # own inode; an in-place overwrite is what kills the victim here. (Also leaves the tree built.)
-  ./co-awareness --precompile
+  ./co-awareness build
   { [ -n "$victim" ] && kill -0 "$victim" 2>/dev/null; } \
     && echo "  PASS live instance survives a rebuild (pid $victim)" \
-    || { echo "  FAIL live instance died during --precompile (pid ${victim:-none})"; total_fail=$((total_fail+1)); }
+    || { echo "  FAIL live instance died during build (pid ${victim:-none})"; total_fail=$((total_fail+1)); }
 
   pkill -U "$(id -u)" -f 'CoAwareness' 2>/dev/null
 else

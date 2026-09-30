@@ -1,7 +1,7 @@
 # CI — runs the tiered QA harness (tests/qa.sh) on a real macOS runner.
 #
 # Coverage boundary (kept 1:1 with tests/qa.sh tiers and the README "Testing & CI" section):
-#   core  (REQUIRED)     §1 build warning-clean · §2 CLI/version · §2a the `--once` snapshot. No GUI —
+#   core  (REQUIRED)     §1 build warning-clean · §2 CLI/version · §2a `snapshot` · §2b `status` · §2c `presets`. No GUI —
 #                        deterministic on any runner. Red = merge blocked. Deliberately thin: every
 #                        behavioral check drives the real binary, which needs a status item, so it
 #                        lives in the gui tier (see AGENTS.md § Testing rules).
