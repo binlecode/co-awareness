@@ -10,7 +10,7 @@ import QuartzCore
 // Human-facing app version (semver). Surfaced in --help and the About dialog, and the anchor for
 // CHANGELOG.md releases. Bump this together with a new CHANGELOG entry and git tag.
 private enum AppInfo {
-    static let version = "2.3.0"
+    static let version = "2.3.1"
     static let name = "co-awareness"
     static let tagline = "An animated GIF in the macOS menu bar, its playback speed driven by live system load."
     static let copyright = "© 2026 Bin Le"
@@ -4590,7 +4590,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         button.imagePosition = .imageOnly
         let animationView = NSView(frame: button.bounds)
         animationView.wantsLayer = true
-        animationView.autoresizingMask = [.width, .height]
+        animationView.autoresizingMask = []
         if let layer = animationView.layer {
             layer.contentsGravity = .resizeAspect
             layer.masksToBounds = true
@@ -6321,8 +6321,10 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         }
         let running = (displayLink != nil || fallbackTimer != nil) ? 1 : 0
         let handoff = (effectiveDisplayMode != displayMode) ? 1 : 0
+        let animW = animationView?.frame.width ?? 0
         fputs("ANIM running=\(running) freeze=\(freeze) frame=\(frameIndex) "
-              + String(format: "speed=%.2f", speedMultiplier) + " labelHandoff=\(handoff)\n", stderr)
+              + String(format: "speed=%.2f", speedMultiplier) + " labelHandoff=\(handoff) "
+              + String(format: "animW=%.1f\n", animW), stderr)
     }
 
     // Debug/test hook: CO_AWARENESS_LOG_THERMAL=1, sibling to LOG_SLOTS/LOG_ANIMATION and there
@@ -6479,6 +6481,9 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
                 statusItem.length = totalW
             }
 
+            let btnH = button.bounds.height > 0 ? button.bounds.height : NSStatusBar.system.thickness
+            animationView?.frame = NSRect(x: 0, y: 0, width: gifW, height: btnH)
+
             if let cd = countdown {
                 if countdownLabel.stringValue != cd { countdownLabel.stringValue = cd }
                 let labelColor = tintColor ?? .labelColor
@@ -6486,15 +6491,13 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
                 let labelHeight = Tuning.countdownLabelHeight
                 countdownLabel.frame = NSRect(
                     x: gifW + gap,
-                    y: (button.bounds.height - labelHeight) / 2,
+                    y: (btnH - labelHeight) / 2,
                     width: cdWidth,
                     height: labelHeight
                 )
                 if countdownLabel.isHidden { countdownLabel.isHidden = false }
-                animationView?.frame = NSRect(x: 0, y: 0, width: gifW, height: button.bounds.height)
             } else {
                 if !countdownLabel.isHidden { countdownLabel.isHidden = true }
-                animationView?.frame = NSRect(x: 0, y: 0, width: gifW, height: button.bounds.height)
             }
             renderCurrentFrame()
             button.needsDisplay = true
@@ -7891,7 +7894,7 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
         }
 
         let availableHeight = max(NSStatusBar.system.thickness - Tuning.renderVerticalInset, 1)
-        let availableWidth = max(statusItem.length - Tuning.renderHorizontalInset, 1)
+        let availableWidth = max(slotLength() - Tuning.renderHorizontalInset, 1)
         // Rasterize at the display's backing scale so the CGImages are crisp on Retina; the
         // layer's contentsScale (set below) must match so CoreAnimation maps pixels 1:1.
         let scale = backingScale()

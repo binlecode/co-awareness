@@ -354,11 +354,14 @@ lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
 gk "indefinite keep-awake shows no countdown on the bar" \
    "$([ -n "$lbl" ] && ! echo "$lbl" | grep -qE '[0-9]{2}:[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
 
-out=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_FORCE_BATTERY=15:battery \
-      CO_AWARENESS_EXIT_AFTER=5 $BIN --keep-awake 3s 2>&1 | grep '^SLOTS' | tail -1)
-lbl=$(echo "$out" | sed -n 's/.*label="\(.*\)".*/\1/p')
+out_collapse=$(CO_AWARENESS_LOG_SLOTS=1 CO_AWARENESS_LOG_ANIMATION=1 CO_AWARENESS_FORCE_BATTERY=15:battery \
+      CO_AWARENESS_EXIT_AFTER=5 $BIN --keep-awake 3s 2>&1)
+lbl=$(echo "$out_collapse" | grep '^SLOTS' | tail -1 | sed -n 's/.*label="\(.*\)".*/\1/p')
+anim_w=$(echo "$out_collapse" | grep '^ANIM' | tail -1 | sed -n 's/.*animW=\([0-9.]*\).*/\1/p')
 gk "elapsed-while-suspended window collapses the countdown slot" \
    "$([ -n "$lbl" ] && ! echo "$lbl" | grep -qE '[0-9]{2}:[0-9]{2}' && echo 1 || echo 0)" "got: $lbl"
+gk "gif animation view retains positive width after countdown collapses" \
+   "$([ -n "$anim_w" ] && awk "BEGIN {exit !($anim_w > 0)}" && echo 1 || echo 0)" "got animW=$anim_w"
 
 rm -f "$SG"
 echo "  slot geometry: passes=$pass fails=$fail"; total_fail=$((total_fail+fail))

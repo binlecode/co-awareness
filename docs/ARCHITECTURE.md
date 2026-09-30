@@ -1299,6 +1299,7 @@ self-restraint — it only ever reads the system, and the only thing it throttle
 | **v2.1.0** — menu bar trace sparkline | `--label chart` / trace display mode | 12-bar mineral sparkline directly on the status bar slot (§ 6) |
 | **v2.2.0** — unified single slot display | `--display <gif\|trace\|value>` | Unified single status item geometry eliminating dual-slot jitter (§ 6) |
 | **v2.3.0** — canonical CLI substrate & ergonomic menu | Runtime intent forwarding (`set`) via POSIX signal + atomic `intent.json`; enriched `--once` snapshot with `power_source`, `memory_pressure`, topology and battery diagnostics; clean 4-tier menu architecture decoupling display modes from character presets and nesting battery safety floor | CLI leads as canonical substrate, GUI projects as ergonomic view; external agents control resident GUI instance without singleton deadlock (§ 8.4); telemetry snapshot parity with menu facts (§ 4.7); eliminated dashboard radio-button misclicks and internal debug leaks (§ 6) |
+| **v2.3.1** — GIF layout collapse hotfix | Disarm Keep Awake with countdown no longer collapses GIF view to zero width; decoupled GIF rasterization from status item width | Cleared legacy autoresizingMask on animationView, unifying internal layout ownership under updateDisplaySlot(); slotLength() strictly bounds frame rasterization (§ 6) |
 
 ---
 

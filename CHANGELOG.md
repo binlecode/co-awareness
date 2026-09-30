@@ -34,6 +34,14 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.3.1] - 2026-09-29
+
+### Fixed
+
+- **Keep Awake off layout collapse**: Fixed an issue where switching from windowed Keep Awake (with countdown displayed) back to Keep Awake off caused the entire status item (both GIF and countdown) to disappear. The GIF host view's legacy `autoresizingMask = [.width, .height]` has been cleared to `[]`, strictly confining internal layout ownership to `updateDisplaySlot()` and preventing AppKit's asynchronous button width reduction from collapsing the GIF view to zero width.
+- **GIF frame rasterization decoupling**: `updateRenderedFrames` now sizes available rasterization width strictly against `slotLength()` instead of composite `statusItem.length`, ensuring character art rasterization remains invariant to the presence or absence of the countdown label.
+- **Status bar button height fallback**: `updateDisplaySlot()` now guards against transient zero-height button bounds at early launch by falling back to `NSStatusBar.system.thickness`.
+
 ## [2.3.0] - 2026-09-29
 
 ### Added
