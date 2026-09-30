@@ -10,7 +10,7 @@ import QuartzCore
 // Human-facing app version (semver). Surfaced in --help and the About dialog, and the anchor for
 // CHANGELOG.md releases. Bump this together with a new CHANGELOG entry and git tag.
 private enum AppInfo {
-    static let version = "2.3.1"
+    static let version = "2.3.2"
     static let name = "co-awareness"
     static let tagline = "An animated GIF in the macOS menu bar, its playback speed driven by live system load."
     static let copyright = "© 2026 Bin Le"
@@ -6120,22 +6120,21 @@ private final class CoAwarenessApp: NSObject, NSApplicationDelegate, NSMenuDeleg
             item.state = (item.tag == activeKeepAwakeColor.rawValue) ? .on : .off
         }
 
-        // Duration group. The armed window's row is marked; a custom length that matches no preset row
-        // marks Custom… instead. With no window armed, "Until turned off" holds the mark — it describes
-        // what turning Keep Awake on from here would do.
-        // A pid binding owns the whole group's mark: it cleared the window, so keepAwakeSelectedDuration
-        // has fallen back to .indefinite and would otherwise leave "Until turned off" ticked — which is
-        // a different promise (no stopping condition) from the one actually armed.
+        // Section 1: Controls & Duration. When Keep Awake is off, only the "Off" row is marked.
+        // When enabled, exactly one duration/target row holds the mark:
+        // - A pid binding marks "Until process exits…"
+        // - A preset window (or indefinite "Until turned off") marks that preset's row
+        // - A non-preset remaining window marks "Custom Duration…"
         let rows = KeepAwakeDuration.presetRows
         let boundLabel = enabled ? keepAwakeBoundProcessLabel : nil
         var matchedPresetRow = false
         for (index, item) in keepAwakeDurationItems.enumerated() where index < rows.count {
-            let selected = boundLabel == nil && rows[index] == keepAwakeSelectedDuration
+            let selected = enabled && boundLabel == nil && rows[index] == keepAwakeSelectedDuration
             if selected { matchedPresetRow = true }
             item.state = selected ? .on : .off
         }
-        keepAwakeCustomDurationItem.state = (boundLabel == nil && !matchedPresetRow) ? .on : .off
-        keepAwakeProcessItem.state = boundLabel == nil ? .off : .on
+        keepAwakeCustomDurationItem.state = (enabled && boundLabel == nil && !matchedPresetRow) ? .on : .off
+        keepAwakeProcessItem.state = (enabled && boundLabel != nil) ? .on : .off
 
         // Status row + parent title. Three things can be true — keep-awake is on, a window is armed,
         // a condition has it paused — so both surfaces are composed rather than branched pairwise.

@@ -34,6 +34,12 @@ co-awareness is a CLI-launched app; the surface that MAJOR / MINOR / PATCH bumps
 Internal implementation details (Swift types, `Tuning` constants, file structure) are **not** part
 of the public API and may change in any release.
 
+## [2.3.2] - 2026-09-29
+
+### Fixed
+
+- **Keep Awake menu selection exclusivity**: Fixed a contradiction in Section 1 (Controls & Duration) of the Keep Awake submenu where "Off" and "Until turned off" were both checked when sleep prevention was disabled. Duration and target rows are now only marked when Keep Awake is enabled, establishing strict mutual exclusion across the entire section.
+
 ## [2.3.1] - 2026-09-29
 
 ### Fixed
