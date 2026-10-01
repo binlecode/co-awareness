@@ -1252,6 +1252,10 @@ The first argument is a verb; omitted, or a flag, means `start`. Settings apply 
 
 *No-arguments invariant:* `status`, `snapshot` and `presets` take nothing; any companion argument is exit 1 with stdout left empty. Retired spellings (`set`, `--once`, `--status`, `--precompile`, `--label`, `--no-detach`, `--detach`, a bare preset word, `CO_AWARENESS_PATH`, `CO_AWARENESS_LABEL`) are exit 1 with the replacement named.
 
+*Retiring a spelling:* a login item's argv lives in two places, the plist on disk and the copy launchd loaded at `bootstrap`. `kickstart` (the self-update relaunch, § 9.2) replays the loaded copy, never the file, so a plist rewritten without a reload changes nothing until logout. A release that starts refusing a spelling therefore has one precondition: on every known install, `launchctl print gui/<uid>/ai.bera.coawareness` shows argv the new grammar accepts. The file and the running process prove nothing, because a hand-started instance can run new-form argv while launchd still holds the old. Login items move to a new grammar only through `scripts/install-login-item.sh`, which always pairs the write with `bootout` + `bootstrap`. The release before the refusal keeps reading the old form, because the new binary has to start from whatever launchd replays.
+
+*Declined: rewriting the login item on every self-update.* It cannot replace that bridge. The process running the update predates the new grammar, so it can only bake in its own spellings, and the new binary still has to parse the old argv to come up at all. It would also turn the login item's argv, which is chosen once at Start at Login, into whatever the menu last held, and the update would have to `bootout` its own job, so a detached helper would have to finish the restart. Reopen if a grammar change has to reach installs that cannot run the installer, or if the login item stops baking settings into argv.
+
 ### 11.3 Environment Variables & Test / Observability Hooks
 
 | Variable Name | Type / Values | Default | Subsystem & Behavioral Role |
